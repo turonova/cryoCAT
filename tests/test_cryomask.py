@@ -6,7 +6,7 @@ from cryocat.core.cryomotl import Motl
 sys.path.append(".")
 import pytest
 from cryocat.core.cryomask import *
-from cryocat.core.cryomap import read
+from cryocat.core.cryomap import read, get_metadata
 from pathlib import Path
 # sys.path.append(".")
 test_data = str(Path(__file__).parent / "test_data")
@@ -129,41 +129,12 @@ def test_shrink_full_mask(ref_masks, mask, factor):
     assert np.allclose(actual, expected, atol=1e-8)
 
 
-def test_rotate(ref_masks):
+@pytest.mark.parametrize("angles", [[0.3, 0.2, 0.1], (0.3, 0.2, 0.1), np.asarray([0.3, 0.2, 0.1])])
+def test_rotate(ref_masks, angles):
     mask = spherical_mask([4, 6, 8], 2, [1, 3, 3], 0.5, False)
-    actual = rotate(mask, [0.3, 0.2, 0.1])
+    actual = rotate(mask, angles)
     expected = ref_masks["sm50r302010.em"]
     assert np.allclose(actual, expected, atol=1e-8)
-
-
-@pytest.mark.parametrize(
-    "input_value, reference_size, expected",
-    [
-        ([1, 2, 3], None, np.array([1, 2, 3])),
-        ([1, 2], None, None),
-        (
-            [
-                1,
-            ],
-            None,
-            np.array([1, 1, 1]),
-        ),
-        (1, None, np.array([1, 1, 1])),
-        ((1, 2, 3), None, np.array([1, 2, 3])),
-        ((1, 2), None, None),
-        ((1,), None, np.array([1, 1, 1])),
-        ((1), None, np.array([1, 1, 1])),
-        ((1.5, 5.3, 3), None, np.array([1, 5, 3])),
-        (np.array([1, 5, 3]), None, np.array([1, 5, 3])),
-        (np.array([1.5, 5.3, 3]), None, np.array([1, 5, 3])),
-    ],
-)
-def test_get_correct_format(input_value, reference_size, expected):
-    if expected is None:
-        with pytest.raises(ValueError):
-            get_correct_format(input_value, reference_size)
-    else:
-        assert np.array_equal(get_correct_format(input_value, reference_size), expected)
 
 
 def test_add_gaussian(ref_masks):
@@ -298,6 +269,7 @@ def test_parse_shape_string():
     assert parse_shape_string("s_shell_r15_s3") == ("s_shell", [15, 3])
     assert parse_shape_string("ellipsoid_rx4_ry5_rz6") == ("ellipsoid", [4, 5, 6])
     assert parse_shape_string("e_shell_rx8_ry9_rz10_s2") == ("e_shell", [8, 9, 10, 2])
+    assert parse_shape_string("icosahedral_r8") == ("icosahedral", [8])
 
     # Invalid cases
     with pytest.raises(ValueError):
@@ -319,9 +291,10 @@ def test_parse_shape_string():
         (f"sphere_r5", 20, (5,)),  # Sphere with radius 5
         (f"cylinder_r5_h10", 20, (5, 10)),  # Cylinder with radius 5, height 10
         (f"ellipsoid_rx5_ry8_rz10", 20, (5, 8, 10)),  # Ellipsoid with radii 5, 8, 10
+        (f"icosahedral_r7", 20, (7,)),  # Icosahedral with radius 5
     ],
 )
-def test_generate_mask(shape_string, mask_size, expected_radii):
+def test_generate_mask_shape_and_values(shape_string, mask_size, expected_radii):
 
     mask = generate_mask(shape_string, mask_size=mask_size)
 
@@ -331,6 +304,17 @@ def test_generate_mask(shape_string, mask_size, expected_radii):
     # Ensure the mask contains only 0s and 1s
     assert np.unique(mask).tolist() == [0, 1], "Mask should contain only 0s and 1s"
 
+
+@pytest.mark.parametrize(
+    "shape_string, mask_size, expected_radii",
+    [
+        (f"sphere_r5", 20, (5,)),  # Sphere with radius 5
+        (f"cylinder_r5_h10", 20, (5, 10)),  # Cylinder with radius 5, height 10
+        (f"ellipsoid_rx5_ry8_rz10", 20, (5, 8, 10)),  # Ellipsoid with radii 5, 8, 10
+    ],
+)
+def test_generate_mask_check_values(shape_string, mask_size, expected_radii):
+    mask = generate_mask(shape_string, mask_size=mask_size)
     # Get center of the mask
     center = mask_size // 2
     cx, cy, cz = center, center, center  # Center coordinates
@@ -709,10 +693,10 @@ def test_fill_hollow_mask(tmp_path):
 
     # 5. Output File
     hollow_cube_file = create_sample_map_file(tmp_path, hollow_cube, "hollow_cube.em")
-    output_file = tmp_path / "filled_cube.em"
-    fill_hollow_mask(hollow_cube_file, output_path=str(output_file))
-    assert os.path.exists(output_file), "Output file was not created"
-    filled_cube_from_file = cryomap.read(str(output_file))
+    output_path = tmp_path / "filled_cube.em"
+    fill_hollow_mask(hollow_cube_file, output_path=str(output_path))
+    assert os.path.exists(output_path), "Output file was not created"
+    filled_cube_from_file = cryomap.read(str(output_path))
     assert np.array_equal(filled_cube_from_file, expected_filled_cube), "Output file content is incorrect"
 
     # 6. input from file
@@ -769,3 +753,20 @@ def test_tomogram_shell_mask(tmp_path, sample_motl):
     )
 
     assert tomo_mask is None
+
+
+def test_spherical_mask_output_kwargs_forwarded(tmp_path):
+    out = str(tmp_path / "mask.mrc")
+    spherical_mask(16, output_path=out, pixel_size=2.5)
+    _, ps, _ = get_metadata(out)
+    assert abs(ps - 2.5) < 0.01
+
+
+def test_spherical_mask_raises_without_output_path():
+    with pytest.raises(ValueError, match="output_path"):
+        spherical_mask(16, pixel_size=2.7)
+
+
+def test_spherical_mask_no_output_no_kwargs():
+    mask = spherical_mask(16)
+    assert mask.shape == (16, 16, 16)

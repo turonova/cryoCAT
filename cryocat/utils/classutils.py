@@ -1,13 +1,36 @@
+"""Class/introspection utilities + the annotation-driven type system.
+
+This module is the single type authority shared by the Dash form generator
+(``cryocat.app.formgen``) and the CLI (``cryocat.cli``):
+
+* :func:`gui_exposed` — decorator marking a method as GUI-exposable and
+  carrying presentation metadata.
+* :func:`resolve_param_type` — maps a parameter *annotation* to a handler tag.
+* :data:`TYPE_HANDLERS` — central table: tag -> {widget descriptor, GUI value
+  parser, argparse spec}. ``widget`` values are plain string descriptors; the
+  app realizes them into Dash components. **Nothing here imports Dash.**
+"""
+
 import importlib
 import inspect
 import sys
-import types
-import re
-import numpy as np
+import typing
+import types as _stdtypes
+from collections.abc import Callable
+from dataclasses import dataclass, field as _field
+from enum import StrEnum
+from typing import Any, Literal
+
 from numpydoc.docscrape import NumpyDocString
 
+from cryocat._types import ListLike
 
-def filter_strings(input_list, filter_contains=None, filter_exclude=None):
+
+def filter_strings(
+    input_list: list[str],
+    filter_contains: str | list[str] | None = None,
+    filter_exclude: str | list[str] | None = None,
+) -> list[str]:
     """Filter a list of strings based on inclusion and exclusion criteria.
 
     Parameters
@@ -48,7 +71,12 @@ def filter_strings(input_list, filter_contains=None, filter_exclude=None):
     return filtered
 
 
-def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_contains=None, filter_exclude=None):
+def get_class_names_by_parent(
+    parent_class_name: str,
+    module_name: str,
+    filter_contains: str | list[str] | None = None,
+    filter_exclude: str | list[str] | None = None,
+) -> list[str]:
     """Get class names that are subclasses of a specified parent class in a given module.
 
     Parameters
@@ -57,6 +85,12 @@ def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_c
         Name of the parent class to check against for subclasses.
     module_name : str
         Name of the module to inspect (e.g., 'my_module.submodule').
+    filter_contains : str or list of str, optional
+        Substrings that must be present in a class name to be included.
+        If ``None``, no inclusion filtering is applied.
+    filter_exclude : str or list of str, optional
+        Substrings that must be absent from a class name to be included.
+        If ``None``, no exclusion filtering is applied.
 
     Returns
     -------
@@ -64,6 +98,11 @@ def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_c
         A list of class names that are subclasses of the specified parent class,
         excluding the parent class itself and only including classes defined in
         the specified module.
+
+    Raises
+    ------
+    ValueError
+        If ``parent_class_name`` is not a valid class in the given module.
     """
     module = sys.modules.get(module_name)
     if module is None:
@@ -84,7 +123,10 @@ def get_class_names_by_parent(parent_class_name: str, module_name: str, filter_c
     return class_names
 
 
-def get_classes_from_names(class_names, module_name):
+def get_classes_from_names(
+    class_names: str | type | list[str | type],
+    module_name: str,
+) -> type | list[type]:
     """Convert class names to actual class objects from a specified module.
 
     Parameters
@@ -107,7 +149,7 @@ def get_classes_from_names(class_names, module_name):
         else:
             return class_names
 
-    if all(isinstance(name, type) for name in class_names): #list case
+    if all(isinstance(name, type) for name in class_names):  # list case
         # All items are already class objects
         return class_names
     else:
@@ -115,7 +157,7 @@ def get_classes_from_names(class_names, module_name):
         return [getattr(module, name) for name in class_names]
 
 
-def get_class_names_by_prefix(prefix):
+def get_class_names_by_prefix(prefix: str) -> list[str]:
     """Get class names in the current module that start with a specified prefix.
 
     Parameters
@@ -143,202 +185,699 @@ def get_class_names_by_prefix(prefix):
     return class_names
 
 
-def parse_allowed_types(input_string):
-    """Parse a string of type descriptions into a list of allowed types.
+# ===========================================================================
+# GuiCategory / GuiEntry — unified GUI registry types (Phase 4 / doc 4)
+# ===========================================================================
+
+class GuiCategory(StrEnum):
+    """Closed set of GUI tiers.  Extend only when a third tier is genuinely needed."""
+    MOTL_OP = "motl-op"
+    BUILDER  = "builder"
+    READER      = "reader"       # file-reading callables surfaced in the data pool
+    SURFACE_OP  = "surface-op"   # operations on existing Mesh / OPC surfaces
+    SURFACE_LOAD = "surface-load" # loaders that create a new surface from disk / motl
+    PLEOMORPHIC_OP = "pleomorphic-op"  # operations on PleomorphicSurface assemblies
+
+
+@dataclass(frozen=True)
+class GuiEntry:
+    """Immutable descriptor for one ``@gui_exposed`` callable.
+
+    The ``key`` is the stable registry identifier derived from owner + name
+    (e.g. ``"Motl.clean_by_distance"``, ``"geom.generate_angles"``).
+    ``fn`` and ``motls`` are excluded from ``__hash__`` so the entry can be
+    stored in sets/dict-keys even though ``fn`` is a callable and ``motls``
+    is a mutable dict.
+    """
+    key:      str
+    fn:       Callable        = _field(hash=False)
+    label:    str             = ""
+    category: GuiCategory     = GuiCategory.MOTL_OP
+    owner:    str             = ""
+    kind:     str             = "function"
+    group:    str             = ""
+    order:    int             = 100
+    hide:     frozenset[str]  = _field(default_factory=frozenset)
+    output:   str | None      = None
+    motls:    dict | None     = _field(default=None, hash=False)
+    standalone: bool          = False
+    preview:  str | None      = None
+    returns:  str | None      = None
+    path_arg:   str             = ""           # name of the path parameter (hidden from form)
+    extensions: tuple[str, ...] = ()           # accepted file extensions for the path field
+
+
+GUI_REGISTRY: dict[str, GuiEntry] = {}
+"""Single source of truth for every ``@gui_exposed`` callable.
+
+Populated at decoration time as each annotated module is imported.
+Read via :mod:`cryocat.app.discovery` — never walk ``inspect.getmembers``
+or read this dict directly in app code.
+"""
+
+_VALID_MOTLS_KEYS: frozenset[str] = frozenset({"arity", "ordered", "main_first", "param"})
+
+
+# ===========================================================================
+# @gui_exposed — mark a method as GUI-exposable + carry presentation metadata
+# ===========================================================================
+
+
+def _infer_returns(fn: Callable) -> str | None:
+    """Infer the 'returns' dispatch kind from the return-type annotation.
+
+    Returns ``None`` when the annotation is absent or ambiguous (e.g. a tuple
+    or ndarray) — the caller must supply an explicit ``returns=`` override.
+    """
+    try:
+        sig = inspect.signature(fn)
+        ret = sig.return_annotation
+    except Exception:
+        return None
+    if ret is inspect.Parameter.empty:
+        return None
+    if ret is None or ret is type(None):
+        return "none"
+    # Forward-reference string (e.g. "cryomotl.Motl")
+    if isinstance(ret, str):
+        if ret in ("None", "none"):
+            return "none"
+        if "Motl" in ret:
+            return "motl"
+        if "DataFrame" in ret:
+            return "dataframe"
+        return None
+    # list[Motl] or list["Motl"] -> "motl_group"
+    import types as _types
+    origin = typing.get_origin(ret)
+    if origin is list:
+        args = typing.get_args(ret)
+        if args:
+            arg_str = str(args[0])
+            if "Motl" in arg_str:
+                return "motl_group"
+    # Actual type object
+    name = getattr(ret, "__name__", "")
+    if name in ("Motl", "EmMotl", "RelionMotl", "RelionMotlv5",
+                "RelionMotlv5_1", "StopgapMotl", "DynamoMotl", "ModMotl"):
+        return "motl"
+    if name == "DataFrame":
+        return "dataframe"
+    # Fallback: string representation for e.g. union types
+    ret_str = str(ret)
+    if "Motl" in ret_str and "tuple" not in ret_str and "list" not in ret_str:
+        return "motl"
+    return None
+
+
+def gui_exposed(
+    _fn: Callable | None = None,
+    *,
+    label: str | None = None,
+    category: str | None = None,
+    group: str = "",
+    order: int = 100,
+    hide: tuple[str, ...] = (),
+    output: str | None = None,
+    motls: dict | None = None,
+    standalone: bool = False,
+    preview: str | None = None,
+    returns: str | None = None,
+    path_arg: str = "",
+    extensions: tuple[str, ...] = (),
+):
+    """Mark a callable as GUI-exposable and register it in :data:`GUI_REGISTRY`.
 
     Parameters
     ----------
-    input_string : str
-        String containing type descriptions, typically from documentation.
-        Can be comma-separated or use 'and'/'or' conjunctions.
+    label : str, optional
+        Display name in the operation dropdown. Defaults to the function name.
+    category : str, optional
+        Grouping for the dropdown (e.g. ``"Cleaning"``, ``"Geometry"``).
+        Use ``"builder"`` for standalone value-producing functions.
+        ``None`` = ungrouped motl-op.
+    hide : tuple of str, optional
+        Parameter names the GUI/CLI should NOT surface (beyond ``self`` /
+        ``cls``, which are always hidden).
+    output : str or None, optional
+        What the callable returns — ``"motl"``, ``"figure"``,
+        ``"dataframe"``, ``"map"``, etc.  Used by the GUI to route the result.
+    motls : dict, optional
+        Marks a MULTI-motl operation.  Required key ``"arity"``:
+        ``"pair"`` (exactly 2) or ``"list"`` (N >= 2).  Optional keys:
+        ``"ordered"``, ``"main_first"``, ``"param"``.
+        ``None`` (default) => single-motl operation.
+    standalone : bool, default ``False``
+        When ``True`` and ``category="builder"``, the function is listed on
+        the Utilities page as its own panel.
+    preview : str, optional
+        Preview plot style string interpreted by the builder panel component.
 
-    Returns
-    -------
-    list of str
-        Sorted list of allowed type names, with unsupported types filtered out.
+    Notes
+    -----
+    Malformed metadata (bad motls spec, empty label) raises :exc:`ValueError`
+    **at decoration time**, naming the offending callable.
 
+    A bare ``@gui_exposed`` (no parentheses) is accepted.  Stack
+    ``@classmethod`` **below** so ``_gui`` lands on the underlying function
+    and the collector can read it through ``__func__``.
+
+    Re-decorating the same key with identical essential metadata is a no-op
+    (safe for hot-reload / module reimport).  Conflicting metadata raises
+    :exc:`RuntimeError`.
     """
-    # Define the words to filter out because they cannot be passed on command line
-    unsupported_types = {"pandas", "dataframe", "pandas.dataframe"}
 
-    # Split the input string by commas, "and", or "or"
-    input_types = re.split(r",| and | or ", input_string)
+    def wrap(fn):
+        # Unwrap classmethod/staticmethod so we can read qualname/module.
+        if isinstance(fn, classmethod):
+            target = fn.__func__
+            kind = "classmethod"
+        elif isinstance(fn, staticmethod):
+            target = fn.__func__
+            kind = "staticmethod"
+        else:
+            target = fn
+            params_list = list(inspect.signature(target).parameters.keys())
+            if params_list and params_list[0] == "self":
+                kind = "method"
+            elif params_list and params_list[0] == "cls":
+                kind = "classmethod"
+            else:
+                kind = "function"
 
-    # Remove leading and trailing whitespace from each word
-    input_types = [word.strip() for word in input_types]
+        gui_label = label or target.__name__.replace("_", " ").capitalize()
+        if not gui_label:
+            raise ValueError(
+                f"@gui_exposed on {target.__qualname__!r}: label must be non-empty"
+            )
 
-    # Filter out empty strings and forbidden words
-    input_types = [word for word in input_types if word and word.lower() not in unsupported_types]
+        # Validate motls spec eagerly.
+        if motls is not None:
+            if "arity" not in motls:
+                raise ValueError(
+                    f"@gui_exposed on {target.__qualname__!r}: motls spec missing 'arity'"
+                )
+            if motls["arity"] not in ("pair", "list"):
+                raise ValueError(
+                    f"@gui_exposed on {target.__qualname__!r}: "
+                    f"motls['arity'] must be 'pair' or 'list', got {motls['arity']!r}"
+                )
+            unknown = set(motls) - _VALID_MOTLS_KEYS
+            if unknown:
+                raise ValueError(
+                    f"@gui_exposed on {target.__qualname__!r}: "
+                    f"unknown motls keys {unknown}"
+                )
 
-    return sorted(input_types)
+        # Derive tier and display group.
+        # `group` (explicit) takes precedence; fall back to `category` for legacy callers.
+        if category == "builder":
+            gui_category = GuiCategory.BUILDER
+            gui_group: str = group  # explicit group name, or "" for ungrouped
+        elif category == "reader":
+            gui_category = GuiCategory.READER
+            gui_group = group
+        elif category == "surface-op":
+            gui_category = GuiCategory.SURFACE_OP
+            gui_group = group
+        elif category == "surface-load":
+            gui_category = GuiCategory.SURFACE_LOAD
+            gui_group = group
+        else:
+            gui_category = GuiCategory.MOTL_OP
+            gui_group = group or (category or "")
+
+        # Derive stable key and owner from qualname / module.
+        qualname = target.__qualname__
+        module   = target.__module__ or ""
+        if "<locals>" in qualname:
+            # Nested / closure functions (test helpers, lambdas).
+            # Use the sanitized full qualname so every such function is unique.
+            sanitized = qualname.replace("<locals>.", "").replace("<locals>", "")
+            mod_short = module.rsplit(".", 1)[-1] if module else ""
+            owner_str = module
+            reg_key   = f"{mod_short}.{sanitized}" if mod_short else sanitized
+        elif "." in qualname:
+            class_part  = qualname.rsplit(".", 1)[0]
+            short_class = class_part.split(".")[-1]
+            owner_str   = f"{module}.{class_part}" if module else class_part
+            reg_key     = f"{short_class}.{target.__name__}"
+        else:
+            mod_short = module.rsplit(".", 1)[-1] if module else ""
+            owner_str = module
+            reg_key   = f"{mod_short}.{target.__name__}" if mod_short else target.__name__
+
+        returns_val = returns if returns is not None else _infer_returns(target)
+
+        entry = GuiEntry(
+            key=reg_key,
+            fn=target,
+            label=gui_label,
+            category=gui_category,
+            owner=owner_str,
+            kind=kind,
+            group=gui_group,
+            order=order,
+            hide=frozenset(hide),
+            output=output,
+            motls=motls,
+            standalone=standalone,
+            preview=preview,
+            returns=returns_val,
+            path_arg=path_arg,
+            extensions=tuple(extensions),
+        )
+
+        existing = GUI_REGISTRY.get(reg_key)
+        if existing is not None:
+            if existing.label != gui_label or existing.category != gui_category:
+                raise RuntimeError(
+                    f"@gui_exposed: conflicting registration for {reg_key!r}; "
+                    f"existing label={existing.label!r} category={existing.category!r}, "
+                    f"new label={gui_label!r} category={gui_category!r}"
+                )
+        else:
+            GUI_REGISTRY[reg_key] = entry
+
+        # Keep fn._gui for backward compatibility (formgen.build_form reads it).
+        target._gui = {
+            "label": gui_label,
+            "category": category,
+            "hide": set(hide) | {"self", "cls"},
+            "output": output,
+            "motls": motls,
+            "standalone": standalone,
+            "preview": preview,
+        }
+        return fn
+
+    return wrap(_fn) if _fn is not None else wrap
 
 
-def parse_string_into_array(s):
-    """Parse a comma-separated string into a numpy array with automatic type detection.
+# ===========================================================================
+# Annotation -> handler-tag resolver
+# ===========================================================================
+
+# PEP-695 ``type X = ...`` aliases handled directly by tag (== alias name).
+_ALIAS_TAGS = {
+    "MapSource", "DataSource", "DataPoolEntry", "MotlSource", "TiltStack", "TomoList", "TomoDimensions",
+    "TripletLike", "EulerAngles", "ListLike", "Symmetry", "ArrayLike",
+    "RotationLike", "PathOrStr",
+}
+# PEP-695 aliases whose value is a Literal[...] — resolved to ("Literal", choices).
+_LITERAL_ALIASES = {
+    "MotlType", "MotlColumn", "BoundaryType", "CTFFileType", "NNType",
+    "RotationDistanceType", "ProjectionType", "WedgeMaskMethod",
+}
+
+
+def resolve_param_type(annotation: Any) -> tuple[str, dict]:
+    """Map a parameter annotation to a handler tag + extras.
 
     Parameters
     ----------
-    s : str
-        Comma-separated string of values.
+    annotation : Any
+        Python type annotation (a class, a PEP-695 ``type X = ...`` alias, a
+        ``Literal[...]``, an ``X | None`` / ``X | None`` union, or
+        :data:`inspect.Parameter.empty` for an unannotated parameter).
 
     Returns
     -------
-    numpy.ndarray
-        Array of values with automatically detected data type (int, float, or str).
-    """
-    # Split the input string by commas
-    values = s.split(",")
+    tuple of (str, dict)
+        ``(tag, extra)``; ``extra`` carries e.g. ``{"choices": [...]}`` for
+        Literals or ``{"length": int, "elem": str}`` for fixed-length numeric
+        tuples.
 
-    # Try to convert the first value to different types until successful
-    for dtype in (int, float, str):
+    Notes
+    -----
+    Resolution rules:
+
+    * ``None`` / empty annotation        -> ``("str", {})``
+    * ``X | None`` / ``X | None``     -> unwrap to ``X``, then resolve
+    * ``Literal[...]``                   -> ``("Literal", {"choices": [...]})``
+    * a PEP-695 alias in the known set   -> ``(alias name, {})``
+    * bare ``bool``/``int``/``float``/``str`` -> ``(name, {})``
+    * anything else                      -> ``("str", {})``
+    """
+    if annotation is inspect.Parameter.empty or annotation is None:
+        return ("str", {})
+
+    origin = typing.get_origin(annotation)
+
+    # X | None / X | None — unwrap NoneType and resolve the remainder.
+    if origin is typing.Union or origin is _stdtypes.UnionType:
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            return resolve_param_type(args[0])
+        for a in args:  # several non-None members: take the first recognised one
+            tag, extra = resolve_param_type(a)
+            if tag != "str":
+                return (tag, extra)
+        return ("str", {})
+
+    # Literal[...] used directly.
+    if origin is typing.Literal:
+        return ("Literal", {"choices": list(typing.get_args(annotation))})
+
+    # tuple[float, ...] / tuple[float, float] / tuple[int, int] — fixed-length
+    # numeric tuple. We surface this as a composite "Tuple" widget so the form
+    # renders one number field per slot and the parser builds a python tuple.
+    # The element type and length come from the annotation's args.
+    if origin in (tuple,):
+        args = list(typing.get_args(annotation))
+        # Reject heterogeneous / Ellipsis tuples — they'd need a different
+        # widget. Fall through to str for now (so behavior is unchanged for
+        # anything we don't explicitly support).
+        if args and Ellipsis not in args and len(set(args)) == 1 and args[0] in (int, float):
+            return ("Tuple", {"length": len(args), "elem": args[0].__name__})
+
+    # Subscripted PEP-695 alias, e.g. ListLike[int] — origin is the alias itself.
+    if isinstance(origin, typing.TypeAliasType) and origin.__name__ in _ALIAS_TAGS:
+        alias_name = origin.__name__
+        if alias_name == "ListLike":
+            # Carry the element type tag so the widget factory can branch.
+            args = typing.get_args(annotation)
+            if args:
+                elem_tag, _ = resolve_param_type(args[0])
+            else:
+                elem_tag = "str"
+            return ("ListLike", {"elem_tag": elem_tag})
+        return (alias_name, {})
+
+    # Bare PEP-695 alias, e.g. MapSource / Symmetry / MotlType.
+    if isinstance(annotation, typing.TypeAliasType):
+        name = annotation.__name__
+        if name in _ALIAS_TAGS:
+            return (name, {})
+        if name in _LITERAL_ALIASES:
+            choices = list(typing.get_args(annotation.__value__))
+            return ("Literal", {"choices": choices})
+        # Unknown alias — fall back to resolving its underlying value.
+        return resolve_param_type(annotation.__value__)
+
+    # list[MotlSource] → multi-select pool-motl picker.
+    if origin is list:
+        args = typing.get_args(annotation)
+        if args and isinstance(args[0], typing.TypeAliasType) and args[0].__name__ == "MotlSource":
+            return ("MotlSource", {"multi": True})
+
+    # Bare builtins.
+    if annotation in (bool, int, float, str):
+        return (annotation.__name__, {})
+
+    return ("str", {})
+
+
+# ===========================================================================
+# Value parsers (GUI value -> python) and argparse helpers (CLI str -> python)
+# ===========================================================================
+
+def _coerce_scalar(x: str) -> int | float | str:
+    """Best-effort int -> float -> str coercion of a single token."""
+    x = x.strip()
+    try:
+        return int(x)
+    except ValueError:
+        pass
+    try:
+        return float(x)
+    except ValueError:
+        return x
+
+
+def _parse_number_list(v: Any) -> Any:
+    """``"1,2,3"`` -> ``[1, 2, 3]`` (per-element int/float autodetect);
+    a single token -> a scalar. Non-string input is returned unchanged."""
+    if v is None or v == "":
+        return None
+    if not isinstance(v, str):
+        return v
+    parts = [p for p in (tok.strip() for tok in v.split(",")) if p != ""]
+    if not parts:
+        return None
+    vals = [_coerce_scalar(p) for p in parts]
+    return vals[0] if len(vals) == 1 else vals
+
+
+def _parse_path(v: Any) -> str | None:
+    return v or None
+
+
+def _parse_bool(v: Any) -> bool:
+    return v in (True, "True", "true", "1", 1)
+
+
+def _parse_int(v: Any) -> int | None:
+    """GUI number field -> int. Empty/None -> None; floats and numeric strings
+    are coerced via float() to tolerate things like ``"33.0"``."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return None
+    return int(float(v))
+
+
+def _parse_float(v: Any) -> float | None:
+    """GUI number field -> float, with empty/None tolerated."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            return None
+    return float(v)
+
+
+def _parse_triplet(v: Any) -> Any:
+    """A GUI triplet field (``"64,64,64"`` or ``"64"``). The receiving function
+    normalizes with :func:`cryocat.utils.geom.as_triplet`."""
+    return _parse_number_list(v)
+
+
+def _parse_listlike(v: Any) -> Any:
+    """A GUI csv/text field (``"1,2,3"``). The receiving function normalizes
+    with :func:`cryocat.utils.classutils.as_list`."""
+    return _parse_number_list(v)
+
+
+def _parse_literal(v: Any, choices: list | None = None) -> Any:
+    """A GUI dropdown value. If the matching choice is non-string typed,
+    coerce ``v`` to that choice's type."""
+    if v is None or not choices:
+        return v
+    for c in choices:
+        if str(c) == str(v):
+            return c
+    return v
+
+
+def _parse_tuple(v: Any, elem: str = "float") -> tuple | None:
+    """Composite fixed-length numeric tuple field.
+
+    The formgen widget renders one number input per slot and stores the slots
+    as a list under a single id (see :func:`cryocat.app.formgen._tuple_field`).
+    This parser coerces that list to a Python tuple with the requested element
+    type. ``None`` / empty / mismatched-length payloads return ``None`` so the
+    function falls back to its default.
+    """
+    if v is None or v == "":
+        return None
+    if not isinstance(v, (list, tuple)) or len(v) == 0:
+        return None
+    coerced = []
+    cast = float if elem == "float" else int
+    for item in v:
+        if item is None or item == "":
+            return None
         try:
-            # Convert the values to the determined data type
-            values = np.array([dtype(x) for x in values])
-            break
-        except ValueError:
-            pass
-
-    return values
+            coerced.append(cast(item))
+        except (TypeError, ValueError):
+            return None
+    return tuple(coerced)
 
 
-def parse_choices(input_string):
-    """Parse a choice specification from documentation into a list of possible values.
+# argparse ``type=`` helpers (CLI string -> python value).
+def _parse_str(v: Any) -> str | None:
+    """GUI text field -> str. None or empty string stays None."""
+    if v is None or v == "":
+        return None
+    return str(v)
+
+
+def _parse_symmetry(v: Any) -> str | int | None:
+    """GUI text field -> Symmetry (int or str).
+    Int-coercible inputs (e.g. '1', 5) return as int; otherwise kept as str."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, int):
+        return v
+    s = str(v).strip()
+    try:
+        return int(s)
+    except ValueError:
+        return s
+
+
+def _parse_data_pool_entry(value: Any):
+    """Pool-table picker value (data_id string) -> server-side DataFrame payload.
+
+    The lazy import means this function is only reachable after the GUI app has
+    started; calling it from a pure-library context returns None.
+    """
+    if not value:
+        return None
+    try:
+        from cryocat.app.datapool import get_payload as _get_payload
+        return _get_payload(str(value))
+    except Exception:
+        return None
+
+
+def _parse_motl_source(value: Any):
+    """Pool-motl picker value (motl_id string or list of ids) -> Motl or list[Motl].
+
+    The lazy import means this function is only reachable after the GUI app has
+    started; calling it from a pure-library context returns None.
+    """
+    if not value:
+        return None
+    if isinstance(value, list):
+        try:
+            from cryocat.app.pool import get_rows as _get_rows
+            from cryocat.core.cryomotl import EmMotl
+            result = [EmMotl(_get_rows(str(v))) for v in value if v]
+            return result if result else None
+        except Exception:
+            return None
+    try:
+        from cryocat.app.pool import get_rows as _get_rows
+        from cryocat.core.cryomotl import EmMotl
+        return EmMotl(_get_rows(str(value)))
+    except Exception:
+        return None
+
+
+def _arg_bool(s: str) -> bool:
+    return _parse_bool(s)
+
+
+def _arg_triplet(s: str) -> Any:
+    return _parse_number_list(s)
+
+
+def _arg_listlike(s: str) -> Any:
+    return _parse_number_list(s)
+
+
+# ===========================================================================
+# The central type -> handler table
+# ===========================================================================
+# Each entry: widget descriptor (string, never a Dash object) | GUI value parser
+# | argparse spec for add_argument. The app's formgen maps the widget string to
+# an actual component; render and parse both read this one table so they cannot
+# drift.
+TYPE_HANDLERS = {
+    # tag             widget        parse (GUI value -> py)   argparse spec
+    "MapSource":      {"widget": "path",       "parse": _parse_path,            "argparse": {"type": str}},
+    "DataSource":     {"widget": "path",       "parse": _parse_path,            "argparse": {"type": str}},
+    "DataPoolEntry":  {"widget": "pool_table", "parse": _parse_data_pool_entry, "argparse": {"type": str}},
+    "MotlSource":     {"widget": "pool_motl",  "parse": _parse_motl_source,     "argparse": {"type": str}},
+    "TiltStack":      {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
+    "TomoDimensions": {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
+    "TomoList":       {"widget": "text",     "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
+    "ArrayLike":      {"widget": "csv_text", "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
+    "TripletLike":    {"widget": "triplet",  "parse": _parse_triplet,  "argparse": {"type": _arg_triplet}},
+    "EulerAngles":    {"widget": "triplet",  "parse": _parse_triplet,  "argparse": {"type": _arg_triplet}},
+    "ListLike":       {"widget": "listlike", "parse": _parse_listlike, "argparse": {"type": _arg_listlike}},
+    "PathOrStr":      {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
+    # Normalized tag used by formgen.build_form for all path-widget params.
+    "path":           {"widget": "path",     "parse": _parse_path,     "argparse": {"type": str}},
+    "Symmetry":       {"widget": "text",     "parse": _parse_symmetry, "argparse": {"type": str}},
+    "RotationLike":   {"widget": "rotation", "parse": _parse_str,      "argparse": {"type": str}},
+    "Literal":        {"widget": "dropdown", "parse": _parse_literal,  "argparse": {"type": str}},
+    "Tuple":          {"widget": "tuple",    "parse": _parse_tuple,    "argparse": {"type": _arg_listlike}},
+    "bool":           {"widget": "bool",     "parse": _parse_bool,     "argparse": {"type": _arg_bool}},
+    "int":            {"widget": "number",   "parse": _parse_int,      "argparse": {"type": int}},
+    "float":          {"widget": "number",   "parse": _parse_float,    "argparse": {"type": float}},
+    "str":            {"widget": "text",     "parse": _parse_str,      "argparse": {"type": str}},
+}
+
+
+# ===========================================================================
+# Docstring -> parameter descriptions (help text / tooltips only)
+# ===========================================================================
+
+def _clean_desc(text: str) -> str:
+    """Strip reST cross-reference role markers from help text."""
+    for role in (":meth:", ":func:", ":class:", ":data:", ":attr:", ":mod:"):
+        text = text.replace(role, "")
+    return text.strip()
+
+
+def process_method_docstring(
+    path_to_method: Any,
+    method_name: str | None = None,
+) -> dict[str, str]:
+    """Extract parameter *descriptions* from a method's numpy-style docstring.
+
+    Types, required/default, and choices are NOT taken from the docstring any
+    more — those come from the function signature + :func:`resolve_param_type`.
+    This supplies help text / tooltips only.
 
     Parameters
     ----------
-    input_string : str
-        String containing choice specification, typically in curly braces.
-        Example: '{1, 2, 3}' or '{"a", "b", "c"}'
+    path_to_method : module, class, or callable
+        Either a module/class containing the method (then pass ``method_name``),
+        or the callable itself (then leave ``method_name`` as None).
+    method_name : str, optional
+        Name of the method to process. When None, ``path_to_method`` is treated
+        as the callable directly.
 
     Returns
     -------
-    list
-        List of possible values with appropriate data type (int, float, or str).
-
+    dict of str -> str
+        ``{param_name: description}``. Empty when the docstring has no
+        Parameters section.
     """
-    # Remove curly braces and split the string by comma
-    s = input_string.strip("{}")
-    elements = s.split(",")
-
-    # Determine the type of the first element
-    first_element = elements[0].strip()
-    if first_element.isdigit():
-        return [int(e.strip()) for e in elements]
-    elif first_element.replace(".", "").isdigit():
-        return [float(e.strip()) for e in elements]
+    if method_name is None:
+        method_obj = path_to_method
     else:
-        return [str(e.strip().strip('"')) for e in elements]
-
-
-def parse_doc_param(doc_param, add_prefix=""):
-    """Parse a parameter from numpy-style documentation into a structured format.
-
-    Parameters
-    ----------
-    doc_param : tuple
-        Parameter tuple from NumpyDocString, typically (name, type_desc, description).
-    add_prefix : str, optional
-        Prefix to add to the parameter name.
-
-    Returns
-    -------
-    tuple
-        (param_name, help_desc, required_param, param_types, default_value, choices)
-
-    """
-    param_name = add_prefix + doc_param[0]
-    help_desc = " ".join(doc_param[2])
-    help_desc = replace_cross_references(help_desc)
-
-    default_value = None
-    required_param = False
-    choices = []
-
-    if "optional" in doc_param[1]:
-        param_types = parse_allowed_types(doc_param[1].split("optional")[0].strip()[:-1])
-    elif "default=" in doc_param[1]:
-        param_types = parse_allowed_types(doc_param[1].split("default=")[0].strip()[:-1])
-        default_value = eval(doc_param[1].split("default=")[1].strip())
-    elif "{" in doc_param[1]:
-        choices = parse_choices(doc_param[1].split("{")[1])
-        param_types = type(choices[0])
-        default_value = choices[0]
-    else:
-        required_param = True
-        param_types = parse_allowed_types(doc_param[1])
-
-    # if not isinstance(list, param_types):
-    #    param_types = [param_types]
-
-    return param_name, help_desc, required_param, param_types, default_value, choices
-
-
-def replace_cross_references(input_string):
-    """Remove or replace cross-reference markers from documentation strings.
-
-    Parameters
-    ----------
-    input_string : str
-        Input string potentially containing cross-reference markers.
-
-    Returns
-    -------
-    str
-        String with cross-reference markers processed or removed.
-
-    """
-    if ":meth:" in input_string:
-        input_string = input_string.replace(":meth:", "")
-
-    return input_string
-
-
-def process_method_docstring(path_to_method, method_name, pretty_print=False):
-    """Process a method's docstring and extract parameter information in structured format.
-
-    Parameters
-    ----------
-    path_to_method : module or class
-        The module or class containing the method.
-    method_name : str
-        Name of the method to process.
-    pretty_print : bool, optional
-        Whether to format parameter names for display (capitalize and replace underscores).
-
-    Returns
-    -------
-    dict
-        Dictionary mapping parameter names to their metadata. Each parameter's metadata
-        includes:
-        - desc: str - Parameter description
-        - required: bool - Whether the parameter is required
-        - types: list - Allowed parameter types
-        - default: any - Default value
-        - options: list - Available choices
-        - name: str - Original parameter name
-    """
-    method_obj = inspect.getattr_static(path_to_method, method_name)
+        method_obj = inspect.getattr_static(path_to_method, method_name)
     docstring = inspect.getdoc(method_obj)
-
-    if not docstring: #if the docstring is empty
+    if not docstring:
         return {}
 
     np_doc = NumpyDocString(docstring)
-
-    params_dict = {}
+    descriptions = {}
     for p in np_doc["Parameters"]:
-        param_name, help_desc, required_param, param_types, default_value, choices = parse_doc_param(p)
-        original_name = param_name
-        if pretty_print:
-            param_name = param_name.capitalize().replace("_", " ")
+        # NumpyDocString param: (name, type_desc, description_lines). The name
+        # field can be "name : type" or "name: type"; keep only the name.
+        raw_name = p[0].split(":")[0].strip()
+        descriptions[raw_name] = _clean_desc(" ".join(p[2]))
+    return descriptions
 
-        params_dict[param_name] = {
-            "desc": help_desc,
-            "required": required_param,
-            "types": param_types,
-            "default": default_value,
-            "options": choices,
-            "name": original_name,
-        }
 
-    return params_dict
+def as_list[T](x: ListLike[T]) -> list[T]:
+    """Wrap a scalar in a list, or convert a sequence to a list.
+
+    Strings and bytes are treated as scalars (wrapped, not iterated).
+    Existing lists are returned without copying.
+
+    Examples
+    --------
+    >>> as_list(5)
+    [5]
+    >>> as_list([1, 2, 3])
+    [1, 2, 3]
+    >>> as_list("hello")
+    ['hello']
+    >>> as_list((1, 2, 3))
+    [1, 2, 3]
+    """
+    if isinstance(x, list):
+        return x
+    if isinstance(x, (str, bytes)) or not hasattr(x, "__iter__"):
+        return [x]
+    return list(x)

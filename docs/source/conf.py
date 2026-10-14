@@ -21,7 +21,6 @@ sys.path.insert(0, os.path.abspath("sphinxext"))
 
 from bs4 import BeautifulSoup
 
-
 for f in os.listdir("./generated/"):
     if f.endswith(".rst"):
         os.remove("./generated/" + f)
@@ -31,7 +30,7 @@ for f in os.listdir("./generated/"):
 project = "cryoCAT"
 copyright = f'2022-{time.strftime("%Y")}'
 author = "Beata Turonova"
-version = release = "0.2.2"  # cryocat.__version__
+version = release = "v1.0.0rc1"  # cryocat.__version__
 
 
 # -- General configuration ---------------------------------------------------
@@ -92,6 +91,7 @@ exclude_patterns = ["_build", "docstrings", "nextgen", "Thumbs.db", ".DS_Store"]
 default_role = "literal"
 
 # Generate the API documentation when building
+autodoc_mock_imports = ["open3d"]
 autosummary_generate = True
 numpydoc_show_class_members = False
 
@@ -242,6 +242,10 @@ def _setup_navbar_side_toctree(app: Any):
             if matches is None or len(matches) == 0:
                 return ""
             items = []
+            # Only API object entries (dt with an id) count; docstrings can contain plain definition lists
+            matches = [m for m in matches if m.find("dt") is not None and m.find("dt").get("id") is not None]
+            if len(matches) == 0:
+                return ""
             deeper_depth = matches[0].find("dt").get("id").count(".")
             for match in matches:
                 match_dt = match.find("dt")

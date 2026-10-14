@@ -1,8 +1,11 @@
-import numpy as np
+from __future__ import annotations
+
 import math
 
+import numpy as np
 
-def compute_rmse(array1, array2):
+
+def compute_rmse(array1: np.ndarray, array2: np.ndarray) -> np.ndarray:
     """Compute the Root Mean Square Error (RMSE) between two arrays along each column.
 
     Parameters
@@ -18,7 +21,7 @@ def compute_rmse(array1, array2):
         An array containing the RMSE computed for each column of the input arrays.
 
     Raises
-    -------
+    ------
     ValueError
         If input arrays are not nparray type or if they don't contain numbers.
 
@@ -59,21 +62,21 @@ def compute_rmse(array1, array2):
     return rmse
 
 
-def get_all_pairs(input_numbers):
+def get_all_pairs(input_numbers: list[int | float]) -> list[tuple[int | float, int | float]]:
     """Generate all possible unique pairs from a list of numbers.
 
     Parameters
     ----------
-    input_numbers : list
+    input_numbers : list of int or float
         List of integers or floats from which pairs are to be generated.
 
     Returns
     -------
-    list
+    list of tuple
         A list of tuples, each containing a pair of numbers from the input list.
 
     Raises
-    -------
+    ------
     ValueError
         If input isn't a list or the list doesn't contain only integers and floats
 
@@ -92,62 +95,7 @@ def get_all_pairs(input_numbers):
     return pairs
 
 
-def otsu_threshold(input_values):
-    """Calculate the Otsu threshold for binarization based on the histogram of input values.
-
-    Parameters
-    ----------
-    input_values : ndarray
-        An array of input values for which the histogram and threshold need to be computed.
-
-    Returns
-    -------
-    float
-        The computed threshold value according to Otsu's method.
-
-    Notes
-    -----
-    Otsu's method is used to automatically perform histogram shape-based image thresholding.
-    The algorithm assumes that the data contains two classes of values following a bimodal
-    histogram, it then calculates the optimum threshold separating the two classes so that their combined spread
-    (intra-class variance) is minimal.
-
-    References
-    ----------
-    Taken from: https://www.kdnuggets.com/2018/10/basic-image-analysis-python-p4.html
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> input_values = np.random.randint(0, 256, 1000)
-    >>> threshold = otsu_threshold(input_values)
-    >>> print("Otsu's threshold:", threshold)
-    """
-
-    # Taken from: https://www.kdnuggets.com/2018/10/basic-image-analysis-python-p4.html
-
-    stats_bins = np.histogram(input_values, bins=input_values.shape[0])
-    bin_counts = stats_bins[0]
-    s_max = (0, 0)
-
-    for threshold in range(len(bin_counts)):
-        # update
-        w_0 = sum(bin_counts[:threshold])
-        w_1 = sum(bin_counts[threshold:])
-
-        mu_0 = sum([i * bin_counts[i] for i in range(0, threshold)]) / w_0 if w_0 > 0 else 0
-        mu_1 = sum([i * bin_counts[i] for i in range(threshold, len(bin_counts))]) / w_1 if w_1 > 0 else 0
-
-        # calculate - inter class variance
-        s = w_0 * w_1 * (mu_0 - mu_1) ** 2
-
-        if s > s_max[1]:
-            s_max = (threshold, s)
-
-    return stats_bins[1][s_max[0]]
-
-
-def get_number_of_digits(input_number):
+def get_number_of_digits(input_number: int | float) -> int:
     """Return the number of digits in the given input number.
 
     Parameters
@@ -177,14 +125,14 @@ def get_number_of_digits(input_number):
     return digit_length
 
 
-def get_similar_size_factors(number, order="ascending"):
+def get_similar_size_factors(number: int, order: str = "ascending") -> tuple[int, int]:
     """Return two factors of a number that are closest in size - either in ascending or descending order.
 
     Parameters
     ----------
-    number: int
+    number : int
         The number for which to find factors.
-    order: str, default="ascending"
+    order : str, default="ascending"
         Order in which the numbers should be returned.
 
     Returns
@@ -194,7 +142,7 @@ def get_similar_size_factors(number, order="ascending"):
         If no factors are found, returns the number itself and 1 (also sorted based on the specified order).
 
     Raises
-    -------
+    ------
     ValueError
         If input number is not an integer.
     """
@@ -218,61 +166,3 @@ def get_similar_size_factors(number, order="ascending"):
     return sort(number, 1)
 
 
-def compute_frequency_array(shape, pixel_size):
-    """Compute the frequency array for a given shape and pixel size.
-
-    Parameters
-    ----------
-    shape : tuple of int
-        The shape of the array for which the frequency array is computed.
-    pixel_size : float
-        The size of each pixel in the spatial domain.
-
-    Returns
-    -------
-    numpy.ndarray
-        An array representing the frequency magnitudes corresponding to the input shape.
-
-    Notes
-    -----
-    The function uses the Fast Fourier Transform (FFT) to compute the frequency bins and then calculates the magnitude
-    of the frequency vector for each point in the frequency domain.
-    """
-
-    freqs = np.array(
-        np.meshgrid(
-            *[np.fft.fftshift(np.fft.fftfreq(n, pixel_size)) for n in shape],
-            indexing="ij",
-        )
-    )
-    return np.sqrt(np.sum(freqs**2, axis=0))
-
-
-def randomize_phases(vol, fourier_cutoff):
-    """Return a real-space map with phases randomized beyond fourier_cutoff Fourier pixels.
-
-    Phases of the input volume's Fourier transform are replaced by a random
-    permutation of the original phases at all shells with radial pixel distance
-    >= *fourier_cutoff*.  Amplitudes are preserved exactly.
-
-    Parameters
-    ----------
-    vol : ndarray
-        3-D real-space volume.
-    fourier_cutoff : int
-        Radial threshold in Fourier pixels.  Phases at shells with distance
-        >= this value are randomly permuted.
-
-    Returns
-    -------
-    ndarray
-        Real-space volume (float64) with randomized high-frequency phases.
-    """
-    ft = np.fft.fftshift(np.fft.fftn(vol))
-    amp = np.abs(ft)
-    phase = np.angle(ft)
-    dist = compute_frequency_array(vol.shape, 1) * vol.shape[0]
-    pr_phase = phase.copy()
-    idx = np.where(dist >= fourier_cutoff)
-    pr_phase[idx] = np.random.permutation(phase[idx])
-    return np.fft.ifftn(np.fft.ifftshift(amp * np.exp(1j * pr_phase))).real

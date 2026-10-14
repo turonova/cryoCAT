@@ -1,0 +1,609 @@
+from cryocat.core.cryowedge import *
+from cryocat.utils.ioutils import *
+from cryocat.core import cryomap
+import numpy as np
+import pytest
+from pathlib import Path
+import os
+import emfile
+
+
+@pytest.mark.parametrize("data1, data2, type1, type2", [
+    (np.asarray([1, 2, 3]), np.asarray([4, 5, 6]), "int", "int"),
+    (np.asarray([1, 2, 3]), np.asarray([1.1, 2.1, 3.1]), "int", "float"),
+])
+def test_check_data_consistency_valid(data1, data2, type1, type2):
+    check_data_consistency(data1, data2, type1, type2)  # should not raise
+
+
+@pytest.mark.parametrize("data1, data2, type1, type2, exc_type", [
+    (np.asarray([[1, 2], [3, 4]]), np.asarray([[5, 6, 7], [8, 9, 10]]), "int", "int", ValueError),
+    ([1, 2, 3], np.asarray([1, 2, 3]), "int", "int", TypeError),
+])
+def test_check_data_consistency_invalid(data1, data2, type1, type2, exc_type):
+    with pytest.raises(exc_type):
+        check_data_consistency(data1, data2, type1, type2)
+
+
+# kept for backwards compatibility — empty case5 placeholder removed
+
+def compare_star_files(file1, file2):
+    try:
+        if isinstance(file1, str):
+            df1 = sf.Starfile.read(file1, data_id=0)[0]
+        if isinstance(file2, str):
+            df2 = sf.Starfile.read(file2, data_id=0)[0]
+        return df1.equals(df2)
+    except Exception as e:
+        return False
+def compare_pd_and_star(df1, file1):
+    try:
+        df1 = df1
+        df2 = sf.Starfile.read(file1, data_id=0)[0]
+        for col in df1.columns:
+            if not np.allclose(df1[col].astype(float), df2[col].astype(float), rtol=1e-5, atol=1e-8, equal_nan=True):
+                return False
+        return True
+
+    except Exception as e:
+        return False
+
+def test_create_wedge_list_sg():
+    directory = Path(__file__).parent / "test_data"
+    ts_017 = directory / "TS_017"
+    ts_018 = directory / "TS_018"
+    wedge_output = directory / "cryowedge_data"
+
+    pixel_size = 2.4
+    #Case1: tomo17, TILT.COM, TLT, GCTF, no DOSE_FILE
+
+    tomo_id = 17
+    tomo_dim = dimensions_load(str(ts_017 / "tilt.com"))
+    tlt_file = str(ts_017 / "017.tlt")
+    ctf_file = str(ts_017 / "017_gctf.star")
+    #dose_file = str(ts_017 / "017_corrected_dose.txt")
+    df_17 = create_wedge_list_sg(
+        tomo_id = tomo_id,
+        tomo_dim = tomo_dim,
+        pixel_size = pixel_size,
+        tlt_file = tlt_file,
+        ctf_file = ctf_file,
+        output_path= str(wedge_output / "wedge_list_017_1.star")
+    )
+    #check if output file and given file are equal
+    # tlt_angle column from dataframe is float32, but in output file type is float64
+    assert compare_star_files(str(wedge_output / "wedge_list_017_1.star"), str(wedge_output / "wedge_list_017.star"))
+    #check if returned pd is equal to given file
+    assert compare_pd_and_star(df_17, str(wedge_output / "wedge_list_017.star"))
+    if os.path.exists(str(wedge_output / "wedge_list_017_1.star")):
+        os.remove(str(wedge_output / "wedge_list_017_1.star"))
+
+    #Case2: tomo18, TILT.COM, TLT, GCTF, no DOSE_FILE
+    tomo_id = 18
+    tomo_dim = dimensions_load(str(ts_018 / "tilt.com"))
+    tlt_file = str(ts_018 / "018.tlt")
+    ctf_file = str(ts_018 / "018_gctf.star")
+    #dose_file = str(ts_018 / "018_corrected_dose.txt")
+    df_18 = create_wedge_list_sg(
+        tomo_id = tomo_id,
+        tomo_dim = tomo_dim,
+        pixel_size = pixel_size,
+        tlt_file = tlt_file,
+        ctf_file = ctf_file,
+        z_shift = 100.0,
+        output_path= str(wedge_output / "wedge_list_018_1.star")
+    )
+    # check if given em file and output are the same
+    assert compare_star_files(str(wedge_output / "wedge_list_018_1.star"), str(wedge_output / "wedge_list_018.star"))
+    #check if returned pd is equal to given file
+    assert compare_pd_and_star(df_18, str(wedge_output / "wedge_list_018.star"))
+    if os.path.exists(str(wedge_output / "wedge_list_018_1.star")):
+        os.remove(str(wedge_output / "wedge_list_018_1.star"))
+
+
+
+def test_create_wedge_list_sg_batch():
+    directory = Path(__file__).parent / "test_data"
+    cryowedge_datad = directory / "cryowedge_data"
+    pixel_size = 2.4
+    tomo_list = cryowedge_datad / "tomo_list.txt"
+    tlt_file_format = directory / "TS_$xxx" / "$xxx.tlt"
+    tomo_dim_file_format = directory / "TS_$xxx" / "tilt.com"
+    z_shift_file_format = directory / "TS_$xxx" / "tilt.com"
+    ctf_file_format = directory / "TS_$xxx" / "$xxx_gctf.star"
+    output_path = directory / "cryowedge_data" / "wedge_list_1.star"
+    df17_18 = create_wedge_list_sg_batch(
+        tomo_list = str(tomo_list),
+        pixel_size = pixel_size,
+        tlt_file_format = str(tlt_file_format),
+        tomo_dim_file_format = str(tomo_dim_file_format),
+        z_shift_file_format = str(z_shift_file_format),
+        ctf_file_format = str(ctf_file_format),
+        output_path = str(output_path)
+    )
+    assert compare_star_files(str(output_path), str(cryowedge_datad / "wedge_list.star"))
+    # check if returned pd is equal to given file
+    assert compare_pd_and_star(df17_18, str(cryowedge_datad / "wedge_list.star"))
+    if os.path.exists(str(output_path)):
+        os.remove(str(output_path))
+
+    #case2: testing if not passing either tomo_dim_file_format / tomo_dim raises and exception
+    with pytest.raises(ValueError):
+        df17_18_1 = create_wedge_list_sg_batch(
+            tomo_list = str(tomo_list),
+            pixel_size = pixel_size,
+            tlt_file_format = str(tlt_file_format),
+            z_shift_file_format = str(z_shift_file_format),
+            ctf_file_format = str(ctf_file_format)
+        )
+    #case3: passing a tomo_list of only 1 tomogram
+    df17_18_2 = create_wedge_list_sg_batch(
+        tomo_list = np.asarray(["018"]),
+        pixel_size = pixel_size,
+        tlt_file_format = str(tlt_file_format),
+        tomo_dim_file_format = str(tomo_dim_file_format),
+        z_shift_file_format = str(z_shift_file_format),
+        ctf_file_format = str(ctf_file_format)
+    )
+    assert compare_pd_and_star(df17_18_2, str(cryowedge_datad / "wedge_list_018.star"))
+
+    #case4: passing empty tomo_list :
+    #ioutils tlt_load has to be changed, to check that input isn't an empty list or an empty nparray
+    #otherwise an empty df is created
+    with pytest.raises(ValueError):
+        df17_18_3 = create_wedge_list_sg_batch(
+            tomo_list=np.asarray([]),
+            pixel_size=pixel_size,
+            tlt_file_format=str(tlt_file_format),
+            tomo_dim_file_format=str(tomo_dim_file_format),
+            z_shift_file_format=str(z_shift_file_format),
+            ctf_file_format=str(ctf_file_format)
+        )
+
+
+    #case5: not passing either z_shift either z_shift_file_format results into df with Default z_shift = 0 value for all entries
+    df17_18_4 = create_wedge_list_sg_batch(
+        tomo_list = np.asarray(["017", "018"]),
+        pixel_size = pixel_size,
+        tlt_file_format = str(tlt_file_format),
+        tomo_dim_file_format = str(tomo_dim_file_format),
+        ctf_file_format = str(ctf_file_format),
+    )
+    assert df17_18_4["z_shift"].all() == 0
+
+    #case5: not passing tomo_dim_file_format, but passing tomo_dim as dataframe
+    tomo_dim_df = pd.DataFrame([[int("017"),4096.0,4096.0,1500.0],[int("018"),4096.0,4096.0,1800.0]])
+    df_17_18_5 = create_wedge_list_sg_batch(
+        tomo_list = str(tomo_list),
+        pixel_size = pixel_size,
+        z_shift_file_format=str(z_shift_file_format),
+        tlt_file_format = str(tlt_file_format),
+        tomo_dim = tomo_dim_df,
+        ctf_file_format= str(ctf_file_format)
+    )
+    pd.testing.assert_frame_equal(df_17_18_5, df17_18)
+
+
+
+def test_create_wedge_list_em_batch():
+    directory = Path(__file__).parent / "test_data"
+    cryowedge_datad = directory / "cryowedge_data"
+
+    #case1: correct input to test given em file
+    tomograms = cryowedge_datad / "tomo_list.txt"
+    tlt_file_format = str(directory / "TS_$xxx" / "$xxx.tlt")
+    df_17 = create_wedge_list_em_batch(
+        tomo_list=str(tomograms),
+        tlt_file_format=tlt_file_format,
+        output_path=str(cryowedge_datad / "wedge_list_1.em")
+    )
+    emfile1 = emfile.read(str(cryowedge_datad / "wedge_list_1.em"))[1]  # Get the data part
+    emfile2 = emfile.read(str(cryowedge_datad / "wedge_list.em"))[1]
+    #assert output em file is the same as test em file
+    np.testing.assert_equal(emfile1, emfile.read(str(cryowedge_datad / "wedge_list.em"))[1])
+    #assert dataframe returned is the same as what is written in output file
+    assert np.allclose(df_17.to_numpy(), emfile1.squeeze(), rtol=1e-5, atol=1e-8)
+    #assert dataframe returned is the same as test em file
+    assert np.allclose(df_17.to_numpy(), emfile2.squeeze(), rtol=1e-5, atol=1e-8)
+    if os.path.exists(str(cryowedge_datad / "wedge_list_1.em")):
+        os.remove(str(cryowedge_datad / "wedge_list_1.em"))
+
+
+def test_load_wedge_list_sg_from_file():
+    filename = str(Path(__file__).parent / "test_data" / "TS_017" / "017_gctf.star")
+    result = load_wedge_list_sg(filename)
+    assert isinstance(result, pd.DataFrame)
+    assert not result.empty
+
+
+def test_load_wedge_list_sg_from_dataframe():
+    input_df = pd.DataFrame({"col1": [10, 20], "col2": [30, 40]})
+    result = load_wedge_list_sg(input_df)
+    assert result.equals(input_df)
+
+
+def test_load_wedge_list_sg_invalid_type_raises():
+    with pytest.raises(ValueError):
+        load_wedge_list_sg(123)
+
+
+
+def test_load_wedge_list_em():
+    directory = Path(__file__).parent / "test_data"
+    cryowedge_datad = directory / "cryowedge_data"
+    wedge_listem = cryowedge_datad / "wedge_list.em"
+
+    # Test loading from file
+    df_file = load_wedge_list_em(str(wedge_listem))
+    assert isinstance(df_file, pd.DataFrame)
+    assert list(df_file.columns) == ["tomo_id", "min_tilt_angle", "max_tilt_angle"]
+
+    # Test loading from valid numpy array
+    valid_array = np.array([[1, -60, 60], [2, -50, 50]])
+    df_numpy = load_wedge_list_em(valid_array)
+    assert isinstance(df_numpy, pd.DataFrame)
+    assert df_numpy.shape == (2, 3)
+
+    # Test loading from invalid numpy array
+    invalid_array = np.array([[1, -60], [2, -50]])  # Wrong shape
+    with pytest.raises(ValueError, match="correct shape"):
+        load_wedge_list_em(invalid_array)
+
+    # Test loading from valid DataFrame
+    valid_df = pd.DataFrame({"tomo_id": [1, 2], "min_tilt_angle": [-60, -50], "max_tilt_angle": [60, 50]})
+    df_dataframe = load_wedge_list_em(valid_df)
+    assert isinstance(df_dataframe, pd.DataFrame)
+    assert df_dataframe.shape == (2, 3)
+
+    """# Test loading from invalid DataFrame (wrong column names)
+    invalid_df = pd.DataFrame({"A": [1, 2], "B": [-60, -50], "C": [60, 50]})
+    with pytest.raises(ValueError, match="correct shape"):
+        load_wedge_list_em(invalid_df)"""
+
+    # Test invalid input type
+    with pytest.raises(ValueError, match="Invalid input"):
+        load_wedge_list_em(12345)
+
+
+def test_create_wg_mask(tmp_path):
+    #print(sample_wedge_list)
+    sample_wedge_list = str(Path(__file__).parent / "test_data" / "cryowedge_data" / "wedge_list.star")
+    sample_wedge_list = load_wedge_list_sg(sample_wedge_list)
+    #sample_tomo_list = str(Path(__file__).parent / "test_data" / "cryowedge_data" / "tomo_list.txt")
+    sample_tomo_list = np.asarray([17,18])
+    box_size = 64
+    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size)
+
+    assert isinstance(mask, np.ndarray)
+    assert mask.shape == (box_size, box_size, box_size)
+
+    box_size_array = np.array([64, 64, 64])
+    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size_array)
+    assert mask.shape == tuple(box_size_array), f"Forma errata: {mask.shape}"
+
+    output_path = str(tmp_path / "wedge_mask.em")
+    mask = create_wg_mask(sample_wedge_list, sample_tomo_list, box_size, output_path=output_path)
+    assert os.path.exists(output_path)
+
+    with pytest.raises(ValueError):
+        create_wg_mask(12345, sample_tomo_list, box_size)
+
+    with pytest.raises(ValueError):
+        create_wg_mask(sample_wedge_list, "wrong_tomo_list.txt", box_size)
+
+    with pytest.raises(ValueError):
+        create_wg_mask(sample_wedge_list, sample_tomo_list, [64, 64])
+
+
+def create_sample_map_file(tmp_path, data, filename):
+    file_path = tmp_path / filename
+    cryomap.write(data, str(file_path), transpose=True, data_type=np.single)
+    return str(file_path)
+
+def test_apply_wedge_mask(tmp_path):
+    wedge_mask_data = np.ones((10, 10, 10))
+    in_map_data = np.random.rand(10, 10, 10)
+    wedge_mask_path = create_sample_map_file(tmp_path, wedge_mask_data, "wedge_mask.em")
+    in_map_path = create_sample_map_file(tmp_path, in_map_data, "in_map.em")
+
+    result_map = apply_wedge_mask(wedge_mask_path, in_map_path)
+
+    assert isinstance(result_map, np.ndarray), "Output is not a numpy array"
+    assert result_map.shape == in_map_data.shape, f"Expected shape {in_map_data.shape}, but got {result_map.shape}"
+
+    rotation = [30, 0, 0]
+    result_map_rot = apply_wedge_mask(wedge_mask_path, in_map_path, rotation_zxz=rotation)
+
+    assert isinstance(result_map_rot, np.ndarray), "Rotated map is not a numpy array"
+    assert result_map_rot.shape == in_map_data.shape, f"Expected rotated map shape {in_map_data.shape}, but got {result_map_rot.shape}"
+
+    output_path = tmp_path / "output_map.em"
+    result_map_with_output = apply_wedge_mask(wedge_mask_path, in_map_path, output_path=str(output_path))
+
+    assert os.path.exists(output_path), f"Output file {output_path} was not created"
+
+    output_map = cryomap.read(str(output_path))
+    assert isinstance(output_map, np.ndarray), "Output file does not contain a valid numpy array"
+
+    with pytest.raises(FileNotFoundError):
+        apply_wedge_mask("invalid_mask.em", in_map_path, rotation_zxz=rotation)
+
+    with pytest.raises(ValueError): # changed line
+        apply_wedge_mask(wedge_mask_path, "invalid_map_path", rotation_zxz=rotation)
+
+def create_sample_star_file(tmp_path):
+    data = {
+        "tomo_num": [1, 1, 1, 2, 2, 2, 3, 3],
+        "tilt_angle": [-60, -30, 0, -45, 0, 45, -20, 20],
+    }
+    df = pd.DataFrame(data)
+    star_file_path = tmp_path / "sample_wedge_list.star"
+    starfileio.Starfile.write([df], star_file_path, specifiers=["data_stopgap_wedgelist"])
+    return str(star_file_path)
+
+def test_wedge_list_sg_to_em_basic(tmp_path):
+    star_file_path = create_sample_star_file(tmp_path)
+    em_file_path = tmp_path / "output_wedge_list.em"
+    result_df = wedge_list_sg_to_em(star_file_path, em_file_path, write_out=False)
+
+    expected_data = {
+        "tomo_id": [1, 2, 3],
+        "min_tilt_angle": [-60, -45, -20],
+        "max_tilt_angle": [0, 45, 20],
+    }
+    expected_df = pd.DataFrame(expected_data)
+    expected_df['min_tilt_angle'] = expected_df['min_tilt_angle'].astype('int64')
+    expected_df['max_tilt_angle'] = expected_df['max_tilt_angle'].astype('int64')
+
+    pd.testing.assert_frame_equal(result_df, expected_df)
+
+def test_wedge_list_sg_to_em_file_creation(tmp_path):
+    star_file_path = create_sample_star_file(tmp_path)
+    em_file_path = tmp_path / "output_wedge_list.em"
+    wedge_list_sg_to_em(star_file_path, em_file_path, write_out=True)
+
+    assert os.path.exists(em_file_path)
+
+    em_df = load_wedge_list_em(str(em_file_path)) # convert to string
+
+    expected_data = {
+        "tomo_id": [1, 2, 3],
+        "min_tilt_angle": [-60.0, -45.0, -20.0],
+        "max_tilt_angle": [0.0, 45.0, 20.0],
+    }
+    expected_df = pd.DataFrame(expected_data)
+    expected_df['min_tilt_angle'] = expected_df['min_tilt_angle'].astype('float32') # changed line
+    expected_df['max_tilt_angle'] = expected_df['max_tilt_angle'].astype('float32') # changed line
+    expected_df['tomo_id'] = expected_df['tomo_id'].astype('float32')
+
+    pd.testing.assert_frame_equal(em_df, expected_df)
+
+def test_wedge_list_sg_to_em_invalid_input(tmp_path):
+    invalid_file_path = tmp_path / "invalid.star"
+    with pytest.raises(Exception):
+        wedge_list_sg_to_em(str(invalid_file_path), tmp_path / "output.em")
+
+
+# ── generate_wedge_mask ────────────────────────────────────────────────────────
+
+_WL_PATH = str(Path(__file__).parent / "test_data" / "cryowedge_data" / "wedge_list.star")
+_DATA_DIR = Path(__file__).parent / "test_data" / "cryowedge_data"
+_TOMO_NUM = 17
+
+
+@pytest.fixture(scope="module")
+def exposure_wedgelist():
+    tilts = np.arange(-52, 54, 2, dtype=float)
+    n = len(tilts)
+    return pd.DataFrame({
+        "tomo_num": [1] * n,
+        "tilt_angle": tilts,
+        "pixelsize": [2.4] * n,
+        "exposure": np.linspace(0.1, 5.0, n),
+        "tomo_x": [512] * n,
+        "tomo_y": [512] * n,
+        "tomo_z": [200] * n,
+        "defocus": [3.5] * n,
+        "voltage": [300.0] * n,
+        "amp_contrast": [0.07] * n,
+        "cs": [2.7] * n,
+    })
+
+
+# ── structural / error tests ──────────────────────────────────────────────────
+
+def test_generate_wedge_mask_cubic_shape():
+    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
+    assert result["mask"].shape == (32, 32, 32)
+
+
+def test_generate_wedge_mask_triplet_shape():
+    result = generate_wedge_mask((20, 20, 20), _WL_PATH, _TOMO_NUM)
+    assert result["mask"].shape == (20, 20, 20)
+
+
+def test_generate_wedge_mask_output_path_roundtrip(tmp_path):
+    out = tmp_path / "mask.em"
+    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, output_path=str(out))
+    assert out.exists()
+    assert result["output_path"] == str(out)
+    loaded = cryomap.read(str(out))
+    assert np.allclose(loaded, result["mask"])
+
+
+def test_generate_wedge_mask_no_output_path():
+    result = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
+    assert result["output_path"] is None
+
+
+def test_generate_wedge_mask_default_method_is_geometric():
+    """Default call must be byte-for-byte identical to method='geometric'."""
+    r_default = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)
+    r_explicit = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="geometric")
+    assert np.array_equal(r_default["mask"], r_explicit["mask"])
+
+
+def test_generate_wedge_mask_method_validation_bogus():
+    with pytest.raises(ValueError) as exc_info:
+        generate_wedge_mask(16, _WL_PATH, _TOMO_NUM, method="bogus")
+    msg = str(exc_info.value)
+    assert "geometric" in msg
+    assert "analytic" in msg
+
+
+def test_generate_wedge_mask_thickness_warning_when_geometric():
+    with pytest.warns(UserWarning, match="thickness.*analytic"):
+        result = generate_wedge_mask(
+            16, _WL_PATH, _TOMO_NUM, method="geometric", thickness=2.0
+        )
+    assert result["mask"].shape == (16, 16, 16)
+
+
+# ── integration tests: voxel-level comparison against stored reference masks ──
+#
+# Reference files were generated once from the corrected implementation and
+# stored in test_data/cryowedge_data/.  Any change to generate_wedge_mask,
+# _geometric_wedgemask_slices, _analytical_wedgemask_slices, or the filter
+# application path will cause a mismatch here.
+
+def test_generate_wedge_mask_geometric_tomo17_matches_reference():
+    """Geometric mask for tomo 17 must reproduce the stored reference exactly."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_geom_t17.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 17, method="geometric")
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="geometric mask (tomo 17) diverged from reference")
+
+
+def test_generate_wedge_mask_geometric_tomo18_matches_reference():
+    """Geometric mask for tomo 18 must reproduce the stored reference exactly
+    (exercises tomo-number selection from the wedge list)."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_geom_t18.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 18, method="geometric")
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="geometric mask (tomo 18) diverged from reference")
+
+
+def test_generate_wedge_mask_analytic_tomo17_matches_reference():
+    """Analytic mask for tomo 17 must reproduce the stored reference exactly."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_ana_t17.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 17, method="analytic")
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="analytic mask (tomo 17) diverged from reference")
+
+
+def test_generate_wedge_mask_lowpass_filter_matches_reference():
+    """Geometric mask with low_pass_filter=8 must match the stored reference,
+    pinning that the filter is applied as a binary Fourier-domain sphere
+    (not a real-space FFT round-trip as the old broken implementation did)."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_geom_lp8_t17.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 17, method="geometric", low_pass_filter=8)
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="low-pass filtered mask diverged from reference")
+
+
+def test_generate_wedge_mask_exposure_weighting_matches_reference(exposure_wedgelist):
+    """Exposure-weighted mask must reproduce the stored reference voxel-for-voxel."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_exposure_t1.em"))
+    result = generate_wedge_mask(32, exposure_wedgelist, 1, exposure_weighting=True)
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="exposure-weighted mask diverged from reference")
+
+
+def test_generate_wedge_mask_ctf_weighting_matches_reference():
+    """CTF-weighted mask must reproduce the stored reference voxel-for-voxel."""
+    ref = cryomap.read(str(_DATA_DIR / "wedge_mask_32_ctf_t17.em"))
+    result = generate_wedge_mask(32, _WL_PATH, 17, ctf_weighting=True)
+    np.testing.assert_allclose(result["mask"], ref, atol=1e-6,
+                               err_msg="CTF-weighted mask diverged from reference")
+
+
+# ── property-based tests ──────────────────────────────────────────────────────
+
+
+def test_generate_wedge_mask_values_in_unit_interval():
+    """Both methods produce output values in [0, 1]."""
+    for method in ("geometric", "analytic"):
+        mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method=method)["mask"]
+        assert mask.min() >= 0.0, f"{method}: value below 0"
+        assert mask.max() <= 1.0 + 1e-9, f"{method}: value above 1"
+
+
+def test_generate_wedge_mask_lowpass_not_all_ones():
+    """A low-pass filter with a small radius zeroes the high-frequency corners."""
+    mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, low_pass_filter=6)["mask"]
+    assert mask.min() == 0.0
+
+
+def test_generate_wedge_mask_exposure_weighting(exposure_wedgelist):
+    """exposure_weighting=True changes the mask relative to the unweighted result."""
+    raw = generate_wedge_mask(32, exposure_wedgelist, 1)["mask"]
+    weighted = generate_wedge_mask(32, exposure_wedgelist, 1, exposure_weighting=True)["mask"]
+    assert not np.array_equal(raw, weighted)
+
+
+def test_generate_wedge_mask_ctf_weighting():
+    """ctf_weighting=True changes the mask relative to the unweighted result."""
+    raw = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)["mask"]
+    weighted = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, ctf_weighting=True)["mask"]
+    assert not np.array_equal(raw, weighted)
+
+
+def test_generate_wedge_mask_two_sizes_independent():
+    """Two calls with different box sizes do not interfere with each other."""
+    r32a = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)["mask"]
+    r64 = generate_wedge_mask(64, _WL_PATH, _TOMO_NUM)["mask"]
+    r32b = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM)["mask"]
+    assert r64.shape == (64, 64, 64)
+    assert np.array_equal(r32a, r32b)
+
+
+def test_generate_wedge_mask_both_methods_reach_dc():
+    """DC voxel (index 0,0,0 in FFT order) is covered (>0) by both methods."""
+    for method in ("geometric", "analytic"):
+        mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method=method)["mask"]
+        assert mask[0, 0, 0] > 0.0, f"{method}: DC voxel is zero"
+
+
+def test_generate_wedge_mask_analytic_reaches_nyquist_corner():
+    """Analytic slabs span the full Fourier volume, covering at least as many
+    voxels as the geometric method (which is bounded by the 2D image extent)."""
+    geom_mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="geometric")["mask"]
+    ana_mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="analytic")["mask"]
+    assert (ana_mask > 0).sum() >= (geom_mask > 0).sum()
+
+
+def test_generate_wedge_mask_analytic_has_at_least_geometric_mean():
+    """Mean analytic mask value >= mean geometric mask value (more coverage)."""
+    geom_mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="geometric")["mask"]
+    ana_mask = generate_wedge_mask(32, _WL_PATH, _TOMO_NUM, method="analytic")["mask"]
+    assert np.mean(ana_mask) >= np.mean(geom_mask) - 1e-9
+
+
+def test_generate_wedge_mask_auto_thickness_large_box():
+    """Auto-thickness (thickness=None) with a 128-cube analytic mask completes
+    without error and produces output with values in [0, 1]."""
+    result = generate_wedge_mask(128, _WL_PATH, _TOMO_NUM, method="analytic")
+    mask = result["mask"]
+    assert mask.shape == (128, 128, 128)
+    assert mask.min() >= 0.0
+    assert mask.max() <= 1.0 + 1e-9
+
+
+def test_generate_wedge_mask_sign_convention_asymmetric_tilts():
+    """Negative-only tilt list leaves positive-angle slabs unmeasured: the mask
+    has zeros in the missing-wedge region and non-zeros in the sampled region."""
+    n = 20
+    neg_wl = pd.DataFrame({
+        "tomo_num": [99] * n,
+        "tilt_angle": np.arange(-60, -60 + n * 3, 3, dtype=float),  # -60 … -3
+        "pixelsize": [2.4] * n,
+        "exposure": np.ones(n),
+        "tomo_x": [128] * n, "tomo_y": [128] * n, "tomo_z": [64] * n,
+        "defocus": [3.5] * n, "voltage": [300.0] * n,
+        "amp_contrast": [0.07] * n, "cs": [2.7] * n,
+    })
+    mask = generate_wedge_mask(32, neg_wl, 99)["mask"]
+    assert mask.shape == (32, 32, 32)
+    assert mask.min() == 0.0   # positive-tilt region is missing
+    assert mask.max() > 0.0    # negative-tilt region is covered
+

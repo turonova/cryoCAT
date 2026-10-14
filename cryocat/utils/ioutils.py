@@ -1,22 +1,41 @@
-import numpy as np
-import pandas as pd
+from __future__ import annotations
+
 import json
-from copy import deepcopy
-import re
 import os
-from cryocat.utils import starfileio as sf, starfileio
-from cryocat.core import mdoc
+import re
 import xml.etree.ElementTree as ET
+from copy import deepcopy
+from typing import Any
 
+import numpy as np
+import numpy.typing as npt
+import pandas as pd
+
+from cryocat._types import (
+    ArrayLike,
+    DataSource,
+    DictSource,
+    EulerAngles,
+    ListLike,
+    PathOrStr,
+    TomoDimensions,
+    TomoList,
+    TripletLike,
+)
+from cryocat.utils.classutils import gui_exposed
+from cryocat.core import mdoc
+from cryocat.utils import starfileio as sf, starfileio
 from cryocat.utils.exceptions import UserInputError
+from cryocat.utils import geom
+from scipy.interpolate import make_interp_spline, BSpline
 
 
-def get_file_encoding(file_path):
+def get_file_encoding(input_path: PathOrStr) -> str:
     """Detects the encoding of a file by trying a list of common encodings.
 
     Parameters
     ----------
-    file_path : str
+    input_path : PathOrStr
         The path to the file for which the encoding needs to be determined.
 
     Returns
@@ -38,16 +57,20 @@ def get_file_encoding(file_path):
     encodings = ["utf-8", "iso-8859-1", "windows-1252"]
     for encoding in encodings:
         try:
-            with open(file_path, "r", encoding=encoding) as file:
+            with open(input_path, "r", encoding=encoding) as file:
                 _ = file.read()
             return encoding
         except UnicodeDecodeError:
             pass
     else:
-        raise UnicodeEncodeError(f"Failed to read file {file_path} with any of the tried encodings.")
+        raise UnicodeEncodeError(f"Failed to read file {input_path} with any of the tried encodings.")
 
 
-def get_all_files_matching_pattern(filename_pattern, numeric_wildcards_only=False, return_wildcards=True):
+def get_all_files_matching_pattern(
+    filename_pattern: str,
+    numeric_wildcards_only: bool = False,
+    return_wildcards: bool = True,
+) -> tuple[list[str], list[str]] | list[str]:
     """Get all files in a directory that match a specified filename pattern.
 
     Parameters
@@ -122,7 +145,11 @@ def get_all_files_matching_pattern(filename_pattern, numeric_wildcards_only=Fals
         return file_names
 
 
-def sort_files_by_idx(file_list, idx_list, order="ascending"):
+def sort_files_by_idx(
+    file_list: list[str],
+    idx_list: list[str],
+    order: str = "ascending",
+) -> np.ndarray:
     """Sorts a list of files based on corresponding indices.
 
     Parameters
@@ -141,7 +168,7 @@ def sort_files_by_idx(file_list, idx_list, order="ascending"):
         An array of file names sorted according to the specified order of indices.
 
     Raises
-    -------
+    ------
     ValueError
         If idx_list and file_list aren't of list type.
         If idx_list doesn't contain only integers, or if file_list doesn't contain only strings.
@@ -180,12 +207,16 @@ def sort_files_by_idx(file_list, idx_list, order="ascending"):
     return file_array[sorted_indices]
 
 
-def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
+def get_files_prefix_suffix(
+    dir_path: PathOrStr,
+    prefix: str = "",
+    suffix: str = "",
+) -> list[str]:
     """Retrieve files from a specified directory that start with a given prefix and end with a given suffix.
 
     Parameters
     ----------
-    dir_path : str
+    dir_path : PathOrStr
         The path to the directory from which to retrieve files.
     prefix : str, default=""
         The prefix that the files should start with. If ommited, no filtering based on prefix will be done. Defaults
@@ -200,9 +231,9 @@ def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
         A list of filenames that match the given prefix and suffix criteria.
 
     Raises
-    -------
+    ------
     ValueError
-        If file does not exist or if specified from file_path is not readable
+        If the directory specified by ``dir_path`` does not exist.
 
     Examples
     --------
@@ -220,12 +251,12 @@ def get_files_prefix_suffix(dir_path, prefix="", suffix=""):
     return sorted(matching_files)
 
 
-def get_number_of_lines_with_character(filename, character):
+def get_number_of_lines_with_character(input_path: PathOrStr, character: str) -> int:
     """Count the number of lines in a file that start with a specified character.
 
     Parameters
     ----------
-    filename : str
+    input_path : PathOrStr
         The path to the file to be read.
     character : str
         The character to check at the start of each line.
@@ -237,19 +268,19 @@ def get_number_of_lines_with_character(filename, character):
     """
 
     # Open the file for reading
-    with open(filename, "r") as file:
+    with open(input_path, "r") as file:
         # Count the number of lines starting with specified character
         count = sum(1 for line in file if line.startswith(character))
 
     return count
 
 
-def is_float(value):
+def is_float(value: Any) -> bool:
     """Check if a value can be converted to a float.
 
     Parameters
     ----------
-    value : any
+    value : Any
         The value to be checked.
 
     Returns
@@ -275,19 +306,20 @@ def is_float(value):
         return False
 
 
-def get_filename_from_path(input_path, with_extension=True):
+def get_filename_from_path(input_path: PathOrStr, with_extension: bool = True) -> str:
     """Get the filename from the given input path.
 
     Parameters
     ----------
-    input_path: str
+    input_path : PathOrStr
         The input path from which the filename is to be extracted.
-    with_extension: bool, default=True
+    with_extension : bool, default=True
         Flag to indicate whether to include the file extension in the filename. Default is True.
 
-    Returns:
-        str
-            The extracted filename from the input path.
+    Returns
+    -------
+    str
+        The extracted filename from the input path.
     """
 
     # Get the filename without the path
@@ -300,7 +332,12 @@ def get_filename_from_path(input_path, with_extension=True):
     return filename
 
 
-def fileformat_replace_pattern(filename_format, input_number, test_letter, raise_error=True):
+def fileformat_replace_pattern(
+    filename_format: str,
+    input_number: int,
+    test_letter: str,
+    raise_error: bool = True,
+) -> str:
     """Replace a pattern in a filename format string with a given number. If the pattern is longer than number
     of digits in the input number the pattern is pad with zeros.
 
@@ -339,18 +376,18 @@ def fileformat_replace_pattern(filename_format, input_number, test_letter, raise
     'some_text_079_rest'
 
     >>> fileformat_replace_pattern("file_/$A/$B.txt", 123, "C")
-    ValueError: The format file_/$A/$B.txt does not contain any sequence of \$ followed by C.
+    ValueError: The format file_/$A/$B.txt does not contain any sequence of $ followed by C.
 
     >>> fileformat_replace_pattern("file_/$A/$B.txt", 12345, "A")
-    ValueError: Number '12345' has more digits than string '\$A'.
+    ValueError: Number '12345' has more digits than string '$A'.
     """
 
-    pattern = f"\$(?:{test_letter})+"
+    pattern = rf"\$(?:{test_letter})+"
     findings = re.findall(pattern, filename_format)
     if not findings:
         if raise_error:
             raise ValueError(
-                f"The format {filename_format} does not contain any sequence of \$ followed by {test_letter}."
+                f"The format {filename_format} does not contain any sequence of \\$ followed by {test_letter}."
             )
         else:
             return filename_format
@@ -369,17 +406,21 @@ def fileformat_replace_pattern(filename_format, input_number, test_letter, raise
         return filename_format
 
 
-def get_data_from_warp_xml(xml_file_path, node_name, node_level=1):
+def get_data_from_warp_xml(
+    xml_file_path: PathOrStr,
+    node_name: str,
+    node_level: int = 1,
+) -> np.ndarray | None:
     """This function parses an XML file and extracts data based on the provided XPath expression. The function
     supports two levels of extraction: level 1 and level 2.
 
     Parameters
     ----------
-    xml_file_path: str
+    xml_file_path : PathOrStr
         The path to the XML file.
-    node_name: str
+    node_name : str
         The XPath expression to find elements in the XML file.
-    node_level: int, default=1
+    node_level : int, default=1
         The level of extraction. Default is 1 which works for nodes that have values without further tags (i.e.,
         one value per line without a xml tag). The other allowed level is 2 which should be used for all tags that have
         values stored in Node tags (such as GridCTF).
@@ -436,30 +477,38 @@ def get_data_from_warp_xml(xml_file_path, node_name, node_level=1):
         return None
 
 
-def warp_ctf_read(input_file):
+def warp_ctf_read(input_path: PathOrStr) -> pd.DataFrame:
     """Reads CTF parameters from a WARP XML file.
 
     Parameters
     ----------
-    input_file: str
+    input_path : PathOrStr
         Path to the input WARP XML file.
 
-    Returns:
+    Returns
+    -------
     pandas.DataFrame
-        DataFrame containing the columns "defocus1", "defocus2", "astigmatism",
-        "phase_shift", "defocus_mean". All defocii values are in micrometers. The phase shift is in radians.
+        DataFrame with columns ``defocus1``, ``defocus2``, ``astigmatism``,
+        ``phase_shift``, and ``defocus_mean``. All defocus values are in
+        micrometers; phase shift is in radians.
     """
 
     df_columns = ["defocus1", "defocus2", "astigmatism", "phase_shift", "defocus_mean"]
     defocus_df = pd.DataFrame(columns=df_columns)
-    defocus_df["defocus_mean"] = get_data_from_warp_xml(input_file, "GridCTF", node_level=2)
-    defocus_df["phase_shift"] = get_data_from_warp_xml(input_file, "GridCTFPhase", node_level=2)
+    defocus_df["defocus_mean"] = get_data_from_warp_xml(input_path, "GridCTF", node_level=2)
+    defocus_df["phase_shift"] = get_data_from_warp_xml(input_path, "GridCTFPhase", node_level=2)
     defocus_df["defocus1"] = defocus_df["defocus_mean"]
     defocus_df["defocus2"] = defocus_df["defocus_mean"]
-    defocus_df["astigmatism"] = get_data_from_warp_xml(input_file, "GridCTFDefocusAngle", node_level=2)
+    defocus_df["astigmatism"] = get_data_from_warp_xml(input_path, "GridCTFDefocusAngle", node_level=2)
     return defocus_df
 
-def extract_defocus_data(df, u_col, v_col, angle_col, phase_col=None):
+def extract_defocus_data(
+    df: pd.DataFrame,
+    u_col: str,
+    v_col: str,
+    angle_col: str,
+    phase_col: str | None = None,
+) -> pd.DataFrame:
     """
     Extracts and standardizes defocus-related data from a DataFrame.
 
@@ -500,14 +549,25 @@ def extract_defocus_data(df, u_col, v_col, angle_col, phase_col=None):
         "defocus_mean": defocus_mean
     })
 
-def defocus_load(input_data, file_type="gctf"):
+@gui_exposed(
+    label="Defocus / CTF",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_data",
+    extensions=(".defocus", ".txt", ".star", ".log"),
+    hide=("input_data",),
+)
+def defocus_load(
+    input_data: pd.DataFrame | PathOrStr | np.ndarray,
+    file_type: str = "gctf",
+) -> pd.DataFrame:
     """Load defocus data from various file types or a pandas DataFrame.
 
     Parameters
     ----------
-    input_data : pd.DataFrame or str or numpy.ndarray
+    input_data : pandas.DataFrame or PathOrStr or numpy.ndarray
         The input data to load. If a pandas DataFrame is provided, it is assumed to already contain the defocus data.
-        If a string is provided, it is assumed to be the path to a file containing the defocus data. If a numpy ndarray
+        If a string/path is provided, it is the path to a file containing the defocus data. If a numpy ndarray
         is provided, it is assumed to be a 2D array of shape Nx5 where N is number of tilts.
 
     file_type : str, default="gctf"
@@ -545,13 +605,13 @@ def defocus_load(input_data, file_type="gctf"):
 
     return defocus_df
 
-def gctf_read(file_path):
+def gctf_read(input_path: PathOrStr) -> pd.DataFrame:
     """This function reads in a gctf starfile and returns a pandas dataframe with the following columns:
     defocus1, defocus2, astigmatism, phase_shift, and defocus_mean. All defocii values are in micrometers.
 
     Parameters
     ----------
-    file_path: str
+    input_path : PathOrStr
         Path to the gctf star file that contains values for all tilts in the tilt series. The columns to be read in are
         "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", and "rlnPhaseShift" (if present, otherwise the phase shift
         is set to 0.0). The defocii values are converted to micrometers.
@@ -564,7 +624,7 @@ def gctf_read(file_path):
 
     """
 
-    gctf_df = sf.Starfile.read(file_path, data_id=0)[0]
+    gctf_df = sf.Starfile.read(input_path, data_id=0)[0]
 
     return extract_defocus_data(
         gctf_df,
@@ -574,13 +634,13 @@ def gctf_read(file_path):
         phase_col="rlnPhaseShift"
     )
 
-def ctffind4_read(file_path):
+def ctffind4_read(input_path: PathOrStr) -> pd.DataFrame:
     """This function reads in a ctffind4 file (typically .txt) and returns a pandas dataframe with the following columns:
     defocus1, defocus2, astigmatism, phase_shift, and defocus_mean. All defocii values are in micrometers.
 
     Parameters
     ----------
-    file_path: str
+    input_path : PathOrStr
         Path to the ctffind4 file (typically in .txt format) that contains values for all tilts in the tilt series.
         The defocii values are converted to micrometers.
 
@@ -591,8 +651,8 @@ def ctffind4_read(file_path):
         are in micrometers.
 
     """
-    rows_to_skip = get_number_of_lines_with_character(file_path, "#")
-    ctf = pd.read_csv(file_path, skiprows=rows_to_skip, header=None, dtype=np.float32, sep=r"\s+", engine="python")
+    rows_to_skip = get_number_of_lines_with_character(input_path, "#")
+    ctf = pd.read_csv(input_path, skiprows=rows_to_skip, header=None, dtype=np.float32, sep=r"\s+", engine="python")
     converted_ctf = ctf.iloc[:, 1:5].copy()
     converted_ctf.loc[:, converted_ctf.columns[0:2]] *= 10e-5
     converted_ctf.columns = ["defocus1", "defocus2", "astigmatism", "phase_shift"]
@@ -600,12 +660,12 @@ def ctffind4_read(file_path):
     converted_ctf["defocus_mean"] = (converted_ctf["defocus1"] + converted_ctf["defocus2"]).values / 2.0
     return converted_ctf
 
-def relion_ctffind4_read(file_path):
+def relion_ctffind4_read(input_path: PathOrStr) -> pd.DataFrame:
     """Reads a Relion ctffind4-style STAR file and extracts defocus data.
 
     Parameters
     ----------
-    file_path : str
+    input_path : PathOrStr
         Path to the STAR file.
 
     Returns
@@ -613,7 +673,7 @@ def relion_ctffind4_read(file_path):
     pandas.DataFrame
         DataFrame with columns: defocus1, defocus2, astigmatism, phase_shift, defocus_mean
     """
-    df = sf.Starfile.read(file_path, data_id=0)[0]
+    df = sf.Starfile.read(input_path, data_id=0)[0]
 
     return extract_defocus_data(
         df,
@@ -624,15 +684,18 @@ def relion_ctffind4_read(file_path):
     )
 
 
-def one_value_per_line_read(file_path, data_type=np.float32):
+def one_value_per_line_read(
+    input_path: PathOrStr,
+    data_type: npt.DTypeLike = np.float32,
+) -> np.ndarray:
     """This function reads in a file with one value per line and returns them as numpy ndarray. The values are expected
     to be in the format specified in data_type.
 
     Parameters
     ----------
-    file_path: str
+    input_path : PathOrStr
         Path to the file where on each line there is expected to be a one value of the type specified by data_type.
-    data_type: dtype, default=np.float32
+    data_type : numpy.typing.DTypeLike, default=np.float32
         A typde of the data to be read in.
 
     Returns
@@ -641,15 +704,15 @@ def one_value_per_line_read(file_path, data_type=np.float32):
         A ndarray with values of the type data_type.
 
     Raises
-    -------
+    ------
     ValueError
-        If file does not exist or if specified from file_path is not readable
+        If file does not exist or if specified from input_path is not readable
     """
-    if not os.path.isfile(file_path):
+    if not os.path.isfile(input_path):
         raise ValueError("The input file does not exist")
 
     try:
-        data_df = pd.read_csv(file_path, header=None, dtype=data_type, sep=r"\s+", engine="python")
+        data_df = pd.read_csv(input_path, header=None, dtype=data_type, sep=r"\s+", engine="python")
         if data_df.empty:
             raise ValueError("The input file is empty or contains no valid data.")
     except pd.errors.EmptyDataError:
@@ -658,13 +721,24 @@ def one_value_per_line_read(file_path, data_type=np.float32):
     return data_df.iloc[:, 0].values
 
 
-def total_dose_load(input_dose, sort_mdoc=True):
+@gui_exposed(
+    label="Total dose",
+    category="reader",
+    returns="array",
+    path_arg="input_dose",
+    extensions=(".txt", ".mdoc"),
+    hide=("input_dose",),
+)
+def total_dose_load(
+    input_dose: PathOrStr | np.ndarray | list,
+    sort_mdoc: bool = True,
+) -> np.ndarray:
     """Load total dose for single tilt series that should be used for dose-filtering/weighting.
 
     Parameters
     ----------
-    input_dose : str or array-like
-        The input dose. If ndarray, it is returned as is. If str, it can be a path to a csv, xml (warp), mdoc
+    input_dose : PathOrStr or numpy.ndarray or list
+        The input dose. If ndarray, it is returned as is. If str/path, it can be a path to a csv, xml (warp), mdoc
         or a file with one value per line for each tilt image in the tilt series (any extension, typically .txt).
         The values should correspond to the total dose applied to each tilt image (i.e., low values for tilts acquired
         as first, large values for the tilt images acqured as last). If mdoc file is used the total dose is corrected
@@ -739,39 +813,65 @@ def total_dose_load(input_dose, sort_mdoc=True):
         raise ValueError("Error: the dose has to be either ndarray or str with valid path!")
 
 
-def rot_angles_load(input_angles, angles_order="zxz"):
-    """Load rotation angles from a file or numpy array and arrange them in a specified order.
+@gui_exposed(
+    label="Euler angles",
+    category="reader",
+    returns="array",
+    path_arg="input_angles",
+    extensions=(".txt", ".em"),
+    hide=("input_angles",),
+)
+def euler_angles_load(
+    input_angles: EulerAngles,
+    angles_order: str = "zxz",
+) -> np.ndarray:
+    """Load rotation angles from a file, numpy array, 3-list or 3-tuple and arrange them in a specified order.
 
     Parameters
     ----------
-    input_angles : str or numpy.ndarray
-        If a string, it should be the path to a CSV file containing the angles (three per line). If a numpy array, it
-        should directly contain the angles.
+    input_angles : EulerAngles
+        If a string/path, it should be the path to a CSV file containing the angles (three per line). If a numpy array, it
+        should directly contain the angles. If 1D ndarray is provided, its shape should be (3,),
+        if a 2D ndarray is provided, its shape should be (N, 3) where N is the number of angle sets. If a list or tuple is
+        provided, it should contain exactly three float or int values corresponding to the angles.
     angles_order : str, default="zxz"
         The order of the angles in the output array. Default is "zxz" (phi, theta, psi). If "zzx", the order will be
         adjusted to phi, psi, theta.
 
+
     Returns
     -------
     angles : numpy.ndarray
-        A numpy array of shape (N, 3) where n is the number of angle sets. Each row contains the angles phi, theta,
-          and psi in the specified order.
+        A numpy array of shape (N, 3) where N is the number of angle sets. Each row contains the angles phi, theta,
+          and psi in the specified order. If the input was a 3-list, tuple or 1D ndarray with shape (3,), the 
+          output will have shape (3,).
 
     Raises
     ------
     ValueError
-        If `input_angles` is neither a string path to a CSV file nor a numpy array.
+        If `input_angles` is neither a string path to a CSV file nor a numpy array nor a 3-list nor a 3-tuple.
+    ValueError
+        If the CSV file does not contain valid data (i.e., it does not have exactly three columns).
+    ValueError
+        If the input 1D array or list or tuple does not contain exactly three elements.
+    ValueError
+        If the input 2D array does not have shape (N,3).
+    ValueError
+        If the input has an unsupported number of dimensions (i.e., not 1D or 2D).
 
     Examples
     --------
-    >>> rot_angles_load("path/to/angles.csv")
+    >>> euler_angles_load("path/to/angles.csv")
     array([[phi1, theta1, psi1],
            [phi2, theta2, psi2],
            ...])
 
-    >>> rot_angles_load(numpy.array([[0, 45, 90], [90, 45, 0]]), "zzx")
+    >>> euler_angles_load(numpy.array([[0, 45, 90], [90, 45, 0]]), "zzx")
     array([[0, 90, 45],
            [90, 0, 45]])
+    
+    >>> euler_angles_load([20,30,45])
+    array([20, 30, 45])
     """
 
     if isinstance(input_angles, str):
@@ -784,30 +884,102 @@ def rot_angles_load(input_angles, angles_order="zxz"):
         if len(angles.columns) != 3:
             raise ValueError(f"File '{input_angles}' does not contain valid data.")
 
-        if angles_order == "zzx":
-            angles.columns = ["phi", "psi", "theta"]
-        else:
-            angles.columns = ["phi", "theta", "psi"]
-
-        angles = angles.loc[:, ["phi", "theta", "psi"]].to_numpy()
+        angles = angles.to_numpy()
 
     elif isinstance(input_angles, np.ndarray):
         angles = input_angles.copy()
+
+        # Ensure correct shape (3,) or (N,3): require second dim == 3 for 2D arrays
+        if angles.ndim == 1:
+            if not angles.shape[0] == 3:
+                raise ValueError(f"1D input array must have exactly 3 elements, but got {angles.shape[0]}.")
+            
+        elif angles.ndim == 2:
+            if angles.shape[1] != 3:
+                raise ValueError(f"2D input array must have shape (N, 3), but got {angles.shape}.")
+            
+        else:
+            raise ValueError(f"Input arrays must be 1D length-3 or 2D shape (N,3), but got {angles.ndim}D array with shape {angles.shape}.")
+
+    elif isinstance(input_angles, (list, tuple)) and len(input_angles) == 3 and all(isinstance(angle, (int, float)) for angle in input_angles):
+        angles = np.asarray(input_angles) # this returns (3,)
+        
     else:
-        raise ValueError("The input_angles have to be either a valid path to a file or numpy array!!!")
+        raise ValueError("The input_angles have to be either a valid path to a file, numpy array or a length-3 list or tuple!!!")
+    
+    # Rearrange angles if needed
+    if angles_order == "zzx":
+        if angles.ndim == 1:
+            angles = angles[[0, 2, 1]]
+        else:  # angles.ndim == 2
+            angles = angles[:, [0, 2, 1]]
 
     return angles
 
 
-def tlt_load(input_tlt, sort_angles=True):
+def angles_save(
+    angles: EulerAngles,
+    output_path: PathOrStr,
+    **output_kwargs: Any,
+) -> None:
+    """Write Euler angles to a headerless three-column CSV file.
+
+    The output format is compatible with :func:`euler_angles_load`: each row
+    contains three whitespace/comma-separated values (phi, theta, psi) with no
+    header line and no row index.
+
+    Parameters
+    ----------
+    angles : array-like, shape (N, 3)
+        Euler angles to write. Each row is one angle triplet. Values are
+        written as-is (no unit conversion).
+    output_path : str or path-like
+        Destination file path. Parent directories must exist. The ``.csv``
+        extension is conventional but not enforced.
+    **output_kwargs
+        Extra keyword arguments forwarded to :func:`pandas.DataFrame.to_csv`
+        (e.g. ``sep``, ``float_format``).
+
+    Raises
+    ------
+    ValueError
+        If ``angles`` cannot be converted to a two-dimensional array with
+        exactly three columns.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> angles = np.array([[0.0, 45.0, 90.0], [30.0, 60.0, 120.0]])
+    >>> angles_save(angles, "output_angles.csv")
+    """
+    arr = np.asarray(angles, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 3:
+        raise ValueError(
+            f"angles must be a (N, 3) array; got shape {arr.shape}."
+        )
+    pd.DataFrame(arr).to_csv(output_path, header=False, index=False, **output_kwargs)
+
+
+@gui_exposed(
+    label="Tilt angles",
+    category="reader",
+    returns="array",
+    path_arg="input_tlt",
+    extensions=(".tlt", ".txt"),
+    hide=("input_tlt",),
+)
+def tlt_load(
+    input_tlt: PathOrStr | np.ndarray | list,
+    sort_angles: bool = True,
+) -> np.ndarray:
     """This function loads in tilt angles in degrees and returns them as ndarray. The input can be either a path to the
     file or an ndarray of tilts. The function will check if the input is already an array, and if not it will read in
     the data from the specified file type.
 
     Parameters
     ----------
-    input_tlt : str or array-like
-        The input tilt data. If it is a numpy array, it will be returned as is. If it is a string, it can be a path to
+    input_tlt : PathOrStr or numpy.ndarray or list
+        The input tilt data. If it is a numpy array, it will be returned as is. If it is a string/path, it can be a path to
         a mdoc file, a xml file (warp) or any file where the angles are stored one per line (e.g. tlt, rawtlt,
         csv, .txt file).
     sort_angles : bool, default=True
@@ -853,18 +1025,69 @@ def tlt_load(input_tlt, sort_angles=True):
         raise ValueError("Error: the dose has to be either ndarray or path to csv, mdoc, or tlt file!")
 
 
-def dimensions_load(input_dims, tomo_idx=None):
+def removed_tilts_load(input_data: DataSource) -> np.ndarray:
+    """Load removed tilt angles from a STAR file, a DataFrame, or a NumPy array.
+
+    Parameters
+    ----------
+    input_data : DataSource
+        - ``str`` or path-like: path to a ``.star`` file whose first data
+          block contains a ``removed_tilts`` column.
+        - ``pandas.DataFrame``: must contain a ``removed_tilts`` column.
+        - ``numpy.ndarray``: interpreted directly as a 1-D array of angles
+          (float); returned as a flat float array.
+
+    Returns
+    -------
+    numpy.ndarray
+        1-D float array of tilt angles.
+
+    Raises
+    ------
+    ValueError
+        If *input_data* is not one of the supported types, or if a DataFrame
+        is given without a ``removed_tilts`` column.
+    """
+    if isinstance(input_data, np.ndarray):
+        return input_data.astype(float).ravel()
+    if isinstance(input_data, pd.DataFrame):
+        if "removed_tilts" not in input_data.columns:
+            raise ValueError(
+                "DataFrame does not contain a 'removed_tilts' column."
+            )
+        return input_data["removed_tilts"].to_numpy(dtype=float)
+    if isinstance(input_data, str):
+        df = sf.Starfile.read(input_data, data_id=0)[0]
+        return df["removed_tilts"].to_numpy(dtype=float)
+    raise ValueError(
+        "input_data must be a path to a .star file, a pandas.DataFrame with a "
+        "'removed_tilts' column, or a numpy.ndarray."
+    )
+
+
+@gui_exposed(
+    label="Tomogram dimensions",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_dims",
+    extensions=(".txt",),
+    hide=("input_dims", "tomo_idx"),
+)
+def dimensions_load(
+    input_dims: TomoDimensions,
+    tomo_idx: TomoList | None = None,
+) -> pd.DataFrame:
     """Load and process tomogram dimensions from various input formats.
 
     Parameters
     ----------
-    input_dims : pd.DataFrame, str, list, or np.ndarray
+    input_dims : TomoDimensions
         Either a path to a file with the dimensions, array-like input or pandas.DataFrame. The shape of the input should
         be 1x3 (x y z) in case of one tomogram or Nx4 for multiple tomograms (tomo_id x y z). In case of file, the
         dimensions can be fetched from .com file (typically tilt.com file) from parameters FULLIMAGE (x,y) and
         THICKNESS (z), from .star file (relion5 >) or from general file with either 1x3 values on a single line or Nx4
         values on N lines (separator is a space(s)).
-    tomo_idx : str or array-like, optional
+    tomo_idx : TomoList, optional
         Path to a file containing tomogram indices or an 1D array with the indices. It is used only if the input_dims
         do not contain 4 columns (i.e., do not have tomo_id). If provided, the function will replicate the 1x3
         dimensions to the length of tomo_idx array and will add "tomo_id" column. Defaults to None.
@@ -930,7 +1153,7 @@ def dimensions_load(input_dims, tomo_idx=None):
     else:
         raise ValueError(
             f"The dimensions should have shape of 1x3 or Nx4, where N is number of tomograms."
-            f"Instead following shape was extracted from the prvoided files: {dimensions.shape}."
+            f"Instead following shape was extracted from the provided files: {dimensions.shape}."
         )
 
     if tomo_idx is not None:
@@ -943,12 +1166,22 @@ def dimensions_load(input_dims, tomo_idx=None):
     return dimensions
 
 
-def z_shift_load(input_shift):
+@gui_exposed(
+    label="Z shifts",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_shift",
+    extensions=(".txt", ".csv"),
+    hide=("input_shift",),
+)
+def z_shift_load(
+    input_shift: PathOrStr | pd.DataFrame | float | int | list | np.ndarray,
+) -> pd.DataFrame:
     """Loads tomogram z-shift from a file, number or numpy.ndarray.
 
     Parameters
     ----------
-    input_dims : str or number or pandas.DataFrame or array-like
+    input_shift : PathOrStr or pandas.DataFrame or float or int or list or numpy.ndarray
         Either a path to a file with z-shift, single number, pandas.DataFrame or numpy.ndarray. If the z-shift should
         be loaded for more than one tomogram and is different for each tomogram the shape of the input should be Nx2
         where N is number of tomograms. In the first column should be tomogram id, in the second one corresponding
@@ -1001,12 +1234,12 @@ def z_shift_load(input_shift):
     return z_shift
 
 
-def imod_com_read(filename):
+def imod_com_read(input_path: PathOrStr) -> dict:
     """Reads a file in IMOD's .com format and returns a dictionary containing the data.
 
     Parameters
     ----------
-    filename : str
+    input_path : PathOrStr
         The name of the IMOC .com file to be read. All lines starting with # or $ are ignored, the rest is read in as
         dictionary. The keys are the first words of each line, and the values are the remaining words converted to the
         correct type.
@@ -1025,7 +1258,7 @@ def imod_com_read(filename):
 
     result_dict = {}
 
-    with open(filename, "r") as file:
+    with open(input_path, "r") as file:
         for line in file:
             # Ignore lines starting with #
             if line.startswith("#") or line.startswith("$"):
@@ -1046,23 +1279,29 @@ def imod_com_read(filename):
     return result_dict
 
 
-def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start=0, output_file=None):
+def remove_lines(
+    input_path: PathOrStr,
+    lines_to_remove: ListLike[int],
+    start_str_to_skip: str | list[str] | None = None,
+    number_start: int = 0,
+    output_path: PathOrStr | None = None,
+) -> list[str]:
     """Reads a file, removes specified lines while skipping those that start with given strings and returns/writes out
     the rest.
 
     Parameters
     ----------
-    filename : str
+    input_path : PathOrStr
         The name of the file to remove the lines from.
-    lines_to_remove: int or array-like
+    lines_to_remove : ListLike[int]
         Array/list (or single int) with numbers of lines to be removed. If start_str_to_skip is empty, the indices
         corresponds to the line numbers.
-    start_str_to_skip: str or array-like
+    start_str_to_skip : str or list of str, optional
         Array/list of strings (or single string). The lines starting with any of those strings will be ignored. The indices
-        from lines_to_remove will be applied to filter only the remaining lines. Dafaults to None.
-    number_start: int. default=0
+        from lines_to_remove will be applied to filter only the remaining lines. Defaults to None.
+    number_start : int, default=0
         Whether the line numbers provied start counting at 0 or 1. Defaults to 0.
-    output_file: str
+    output_path : PathOrStr, optional
         Path to a file to write out the content into. Defaults to None (no file will be written out).
 
     Returns
@@ -1081,7 +1320,7 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
         start_str_to_skip = [start_str_to_skip]
 
     kept_counter = number_start
-    with open(filename, "r") as file:
+    with open(input_path, "r") as file:
         for line in file:
             if any(line.startswith(s) for s in start_str_to_skip):
                 filtered_lines.append(line)
@@ -1091,8 +1330,8 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
 
                 kept_counter += 1
 
-    if output_file is not None:
-        with open(output_file, "w") as of:
+    if output_path is not None:
+        with open(output_path, "w") as of:
             of.writelines(filtered_lines)
 
     return filtered_lines
@@ -1104,28 +1343,28 @@ def remove_lines(filename, lines_to_remove, start_str_to_skip=None, number_start
     elif not isinstance(start_str_to_skip, list):
         start_str_to_skip = [start_str_to_skip]
 
-    with open(filename, "r") as file:
+    with open(input_path, "r") as file:
         for line in file:
             if not any(line.startswith(s) for s in start_str_to_skip):
                 lines_to_write.append(line)
 
     filtered_lines = [line for i, line in enumerate(lines_to_write) if i not in lines_to_remove]
 
-    if output_file is not None:
-        with open(output_file, "w") as of:
+    if output_path is not None:
+        with open(output_path, "w") as of:
             of.writelines(filtered_lines)
 
     return filtered_lines """
 
 
-def dict_write(dict_data, file_name):
+def dict_write(dict_data: dict, output_path: PathOrStr) -> None:
     """Write the given dictionary to a file in JSON format.
 
     Parameters
     ----------
     dict_data : dict
         Dictionary containing the data to write to the file.
-    file_name : str
+    output_path : PathOrStr
         The name of the file where the dictionary will be written.
 
     Returns
@@ -1133,17 +1372,25 @@ def dict_write(dict_data, file_name):
     None
     """
 
-    with open(file_name, "w") as json_file:
+    with open(output_path, "w") as json_file:
         json.dump(dict_data, json_file, indent=4)
 
 
-def dict_load(input_data):
+@gui_exposed(
+    label="Dictionary / JSON",
+    category="reader",
+    returns="dict",
+    path_arg="input_data",
+    extensions=(".json", ".txt"),
+    hide=("input_data",),
+)
+def dict_load(input_data: DictSource) -> dict:
     """Load a dictionary from a JSON string or copy an existing dictionary.
 
     Parameters
     ----------
-    input_data : str or dict
-        The input data to load. This can be a JSON string or an existing dictionary.
+    input_data : DictSource
+        The input data to load. This can be a JSON string (or path) or an existing dictionary.
 
     Returns
     -------
@@ -1185,16 +1432,24 @@ def dict_load(input_data):
     return dict_data
 
 
-def df_load(input_data, header=None):
+@gui_exposed(
+    label="Generic table",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_data",
+    extensions=(".csv", ".txt", ".pkl", ".star"),
+    hide=("input_data", "header"),
+)
+def df_load(input_data: DataSource, header: list[str] | None = None) -> pd.DataFrame:
     """Load data into a pandas DataFrame from various input types.
 
     Parameters
     ----------
-    input_data : pandas.DataFrame, str, or numpy.ndarray
+    input_data : DataSource
         The data to load. Can be:
 
         - ``pandas.DataFrame``: returned as-is.
-        - ``str``: path to a CSV file that will be read with :func:`pandas.read_csv`.
+        - ``PathOrStr``: path to a CSV file that will be read with :func:`pandas.read_csv`.
         - ``numpy.ndarray``: converted to a DataFrame using the optional *header*.
     header : list of str, optional
         Column names to assign when *input_data* is a ``numpy.ndarray``. The
@@ -1256,12 +1511,23 @@ def df_load(input_data, header=None):
     )
 
 
-def indices_load(input_data, numbered_from_1=True):
+@gui_exposed(
+    label="Indices",
+    category="reader",
+    returns="array",
+    path_arg="input_data",
+    extensions=(".txt",),
+    hide=("input_data", "numbered_from_1"),
+)
+def indices_load(
+    input_data: PathOrStr | list | np.ndarray,
+    numbered_from_1: bool = True,
+) -> np.ndarray | None:
     """Load indices from a specified input source.
 
     Parameters
     ----------
-    input_data : str, list, or numpy.ndarray
+    input_data : PathOrStr or list or numpy.ndarray
         The input data can be a file path to a CSV file, a text file containing indices (one per line), or a list/array
         of indices. If a CSV file is provided, it is expected to have a column named "ToBeRemoved".
     numbered_from_1 : bool, default=True
@@ -1274,7 +1540,7 @@ def indices_load(input_data, numbered_from_1=True):
         An array of indices, adjusted based on the input data and the numbered_from_1 flag.
 
     Raises
-    -------
+    ------
     ValueError
         If input data isn't either a path to valid file either a list/array
     """
@@ -1305,12 +1571,12 @@ def indices_load(input_data, numbered_from_1=True):
     return indices
 
 
-def indices_reset(input_data):
+def indices_reset(input_data: PathOrStr) -> None:
     """Reset the indices of a CSV file by modifying specific columns.
 
     Parameters
     ----------
-    input_data : str
+    input_data : PathOrStr
         The path to the CSV file that needs to be processed.
 
     Returns
@@ -1334,24 +1600,28 @@ def indices_reset(input_data):
 
 
 def defocus_remove_file_entries(
-    input_file, entries_to_remove, file_type="gctf", numbered_from_1=True, output_file=None
-):
+    input_path: PathOrStr,
+    entries_to_remove: PathOrStr | list | np.ndarray,
+    file_type: str = "gctf",
+    numbered_from_1: bool = True,
+    output_path: PathOrStr | None = None,
+) -> None:
     """Remove specified entries from a file and optionally update a specification file.
 
     Parameters
     ----------
-    input_file : str
+    input_path : PathOrStr
         The path to the input file from which entries will be removed.
-    entries_to_remove : str, list, or numpy.ndarray
+    entries_to_remove : PathOrStr or list or numpy.ndarray
         The entries to remove can be specified as a file path to a CSV file, a text file containing indices
         (one per line), or a list/array of indices. If a CSV file is provided, it is expected to have a column
         named "ToBeRemoved".
     file_type : str, default='gctf'
         The type of the input file. Can be 'gctf' or "ctffind4'. Defaults to 'gctf'.
-    numbered_from_1 : bool=True
+    numbered_from_1 : bool, default=True
         Indicates whether the entries in `entries_to_remove` are numbered from 1. Defaults to True.
-    output_file : str, optional
-        The path to the output file where the modified content will be saved. If None, the input_file will be overwritten.
+    output_path : PathOrStr, optional
+        The path to the output file where the modified content will be saved. If None, the input_path will be overwritten.
         Defaults to None.
 
     Returns
@@ -1369,29 +1639,41 @@ def defocus_remove_file_entries(
     lines_to_remove = indices_load(entries_to_remove, numbered_from_1=numbered_from_1)
     if lines_to_remove is not None:
 
-        if output_file is None:
-            output_file = input_file
+        if output_path is None:
+            output_path = input_path
 
         if file_type.lower() == "gctf":
             sf.Starfile.remove_lines(
-                input_file,
+                input_path,
                 lines_to_remove,
-                output_path=output_file,
+                output_path=output_path,
                 data_specifier="data_",
                 number_columns=True,
             )
         elif file_type.lower() == "ctffind4":
-            _ = remove_lines(input_file, lines_to_remove, start_str_to_skip=["#"], output_file=output_file)
+            _ = remove_lines(input_path, lines_to_remove, start_str_to_skip=["#"], output_path=output_path)
         else:
             print(f"The defocus filetype {file_type} is not supported and thus will not be cleaned.")
 
 
-def fsc_read(input_path, pixel_size=None, box_size=None):
+@gui_exposed(
+    label="FSC curve",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_path",
+    extensions=(".csv", ".xml", ".txt"),
+    hide=("input_path", "pixel_size", "box_size"),
+)
+def fsc_read(
+    input_path: PathOrStr,
+    pixel_size: float | None = None,
+    box_size: int | None = None,
+) -> pd.DataFrame:
     """Read an FSC curve from a CSV, XML, or TXT file into a DataFrame.
 
     Parameters
     ----------
-    input_path : str
+    input_path : PathOrStr
         Path to the FSC file.  Supported extensions:
 
         ``.csv``
@@ -1407,9 +1689,11 @@ def fsc_read(input_path, pixel_size=None, box_size=None):
             (spatial frequency in 1/Å).
 
     pixel_size : float, optional
-        Pixel size in Angstroms.  Required for ``.txt`` input.
+        Pixel size in Angstroms.  When both *pixel_size* and *box_size* are
+        given for a ``.txt`` file, ``x`` is expressed as spatial frequency
+        in 1/Å; otherwise ``x`` is the shell index (1, 2, …, N).
     box_size : int, optional
-        Box edge length in voxels.  Required for ``.txt`` input.
+        Box edge length in voxels.  See *pixel_size*.
 
     Returns
     -------
@@ -1419,8 +1703,7 @@ def fsc_read(input_path, pixel_size=None, box_size=None):
     Raises
     ------
     ValueError
-        If the extension is unsupported, or if *pixel_size* / *box_size*
-        are missing for a ``.txt`` file.
+        If the extension is unsupported.
     """
     if input_path.endswith(".csv"):
         return pd.read_csv(input_path)
@@ -1432,21 +1715,28 @@ def fsc_read(input_path, pixel_size=None, box_size=None):
             ys.append(float(coord.find("y").text))
         return pd.DataFrame({"x": xs, "uncorrected_fsc": ys})
     elif input_path.endswith(".txt"):
-        if pixel_size is None or box_size is None:
-            raise ValueError("pixel_size and box_size are required for .txt FSC files.")
         fsc_vals = np.loadtxt(input_path)
         shells = np.arange(1, len(fsc_vals) + 1)
-        return pd.DataFrame({"x": shells / (int(box_size) * float(pixel_size)), "uncorrected_fsc": fsc_vals})
+        if pixel_size is not None and box_size is not None:
+            x = shells / (int(box_size) * float(pixel_size))
+        else:
+            x = shells.astype(float)
+        return pd.DataFrame({"x": x, "uncorrected_fsc": fsc_vals})
     else:
         raise ValueError(f"Unsupported FSC file format: {input_path!r}. Use .csv, .xml, or .txt.")
 
 
-def fsc_write(output_path, x_vals, y_vals, pixel_size=None):
+def fsc_write(
+    output_path: PathOrStr,
+    x_vals: ArrayLike,
+    y_vals: ArrayLike,
+    pixel_size: float | None = None,
+) -> None:
     """Write an FSC curve to a CSV or ChimeraX-compatible XML file.
 
     Parameters
     ----------
-    output_path : str
+    output_path : PathOrStr
         Destination file path.  Extension selects format:
 
         ``.csv``
@@ -1455,9 +1745,9 @@ def fsc_write(output_path, x_vals, y_vals, pixel_size=None):
             ChimeraX-compatible XML with ``<fsc>`` root containing
             ``<coordinate><x>``/``<y>`` children.
 
-    x_vals : array-like
+    x_vals : ArrayLike
         X-axis values (Fourier shell index or spatial frequency in 1/Å).
-    y_vals : array-like
+    y_vals : ArrayLike
         FSC correlation values.
     pixel_size : float, optional
         When provided, the XML ``xaxis`` attribute is set to
@@ -1485,3 +1775,455 @@ def fsc_write(output_path, x_vals, y_vals, pixel_size=None):
         ET.ElementTree(root).write(output_path, encoding="utf-8", xml_declaration=True)
     else:
         raise ValueError(f"Unsupported FSC output format: {output_path!r}. Use .csv or .xml.")
+
+
+@gui_exposed(
+    label="CMM markers",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_path",
+    extensions=(".cmm",),
+    hide=("input_path",),
+)
+def cmm_read(input_path: PathOrStr) -> pd.DataFrame:
+    """Reads a file in ChimeraX .cmm format ad returns a DataFrame containing the data.
+
+    Parameters
+    ----------
+    input_path : PathOrStr
+        The path of the .cmm file to be read. 
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame representation of the input data.
+    
+    Raises
+    ------
+    FileNotFoundError
+        If the file at the specified path does not exist.
+    ValueError
+        If ``input_path`` has the wrong file extension.
+    """
+    if not os.path.isfile(input_path):
+        raise FileNotFoundError(f"The file {input_path} does not exist.")
+    if not input_path.endswith(".cmm"):
+        raise ValueError(f"The file {input_path} is not a valid marker file.")
+
+    tree = ET.parse(input_path)
+    root = tree.getroot()
+
+    markers = root.findall(".//marker")
+    markers=pd.DataFrame([marker.attrib for marker in markers])
+    markers[["x", "y","z"]]=markers[["x", "y","z"]].astype(float)
+
+    return markers
+
+
+    # if marker_idx >= len(markers):
+    #     raise ValueError(f"Marker number {marker_idx} exceeds the number of markers in the file ({len(markers)}).")
+
+    # marker = markers[marker_idx]
+    # x = marker.attrib["x"]
+    # y = marker.attrib["y"]
+    # z = marker.attrib["z"]
+
+    # return np.asarray([x, y, z]).astype(float)
+
+
+@gui_exposed(
+    label="Marker coordinates",
+    category="reader",
+    returns="dataframe",
+    path_arg="input_data",
+    extensions=(".txt", ".csv"),
+    hide=("input_data",),
+)
+def marker_coords_load(input_data: DataSource | TripletLike) -> pd.DataFrame:   #str | np.ndarray | pd.DataFrame | list[float]) -> pd.DataFrame:
+    """Extract 3D coordinates of points from various sources.
+
+    Parameters
+    ----------
+    input_data : DataSource or TripletLike
+        The input data to load. If a pandas DataFrame is provided, it is assumed to already contain the coordinates data
+        with the header containing "x", "y" and "z" columns. If a numpy ndarray is provided, the shape should be Nx3, where
+        N is the number of points. If a list or tuple is provided, it is assumed to be a single set of x,y,z coordinates. 
+        If a string is provided, it is assumed to be the path to a file containing 3D coordinates with ene set of (x,y,z)
+        coordinates in each line (e.g. csv, txt file). The file can also be a marker file (.cmm extension) from ChimeraX.
+        Integers or floats are also accepted and will be converted to a single set of x,y,z coordinates with the same value 
+        for each coordinate.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the 3D coordinates of each point. Columns will be named as ["x", "y", "z"].
+    
+    Raises
+    ------
+    ValueError
+        If the number of columns does not match
+    FileNotFoundError
+        If the file at the specified path does not exist.
+    
+    See Also
+    --------
+    cmm_read : Read coordinates from a ChimeraX marker file.
+    df_load : Load data into a DataFrame from a DataFrame or numpy ndarray.
+    cryocat.utils.geom.as_triplet : Convert a list, tuple, int or float to a triplet of coordinates.
+    """
+    required_cols=["x", "y", "z"] # columns of the output dataframe
+
+    if isinstance(input_data, pd.DataFrame):
+        input_data.columns = map(str.lower, input_data.columns)
+        missing_required = set(required_cols) - set(input_data.columns)
+        if missing_required:
+            raise ValueError(f"Invalid input. The following columns are missing: {missing_required}")
+        else:
+            coords=df_load(input_data)[required_cols]
+    
+    elif isinstance(input_data, np.ndarray):  
+        if input_data.ndim == 2 and input_data.shape[1] == 3:
+            coords=df_load(input_data, header=required_cols) #pd.DataFrame(data=input_data, columns=required_cols)
+        else:
+            raise ValueError("Invalid input. The input array needs to have shape (N,3), where N is the number of points.")
+
+    elif isinstance(input_data, (list, tuple, int, float)): # 1 point only
+        input_data = geom.as_triplet(input_data)
+        coords = pd.DataFrame(data= np.reshape(input_data, (1, len(input_data))), columns=required_cols) 
+        
+    elif isinstance(input_data, str):
+        if os.path.isfile(input_data):
+
+            if input_data.endswith(".csv"):
+                coords=pd.read_csv(input_data, dtype=float, header=None)
+                if len(coords.columns) != 3:
+                    raise ValueError(f"Invalid input. File '{input_data}' does not contain valid data.")
+                else:
+                    coords.columns=required_cols
+                
+            elif input_data.endswith(".cmm"): # chimera marker file
+                coords=cmm_read(input_data)
+                coords=coords[required_cols]
+
+            else:
+                coords=pd.read_csv(input_data, sep=r"\s+", header=None, dtype=float, engine="python") #txt file
+                coords.columns = required_cols
+
+        else:
+            raise FileNotFoundError(f"The file at the path {input_data} does not exist.")
+    else:
+        raise ValueError("Invalid input. The input_data has to be either a valid path to a csv, txt or cmm file, or a list, or ndarray or pandas.DataFrame!")
+    
+    return coords
+
+
+def write_coords_to_cmm_file(coords: np.ndarray | pd.DataFrame | TripletLike, output_path: PathOrStr) -> None:
+    """Write the given coordinates to a .cmm file as markers.
+
+    Parameters
+    ----------
+    coords : np.ndarray or pandas.DataFrame or TripletLike
+        Data of 3D coordinates to write out as markers that can be loaded in ChimeraX for visualization.
+        
+        - TripletLike: A 3-element list, tuple, 1D numpy ndarray, int or float that can be converted to a triplet of coordinates (x,y,z).
+        - 2D numpy array: An array of shape (N, 3) containing the x, y, z coordinates of the markers.
+        - pandas DataFrame: Three-columns dataframe with "x", "y" and "z" columns
+
+    output_path : PathOrStr
+       Destination file path. Extension must be .cmm (ChimeraX marker file).
+
+    Returns
+    -------
+    None
+    
+    Raises
+    ------
+    ValueError
+        If the extension is not ``.cmm``.
+    ValueError
+        If the input is not a supported type or is invalid.
+    """
+    
+    def make_marker(e_root, coords_set, idx=0):
+        marker = ET.SubElement(e_root, "marker", id=str(idx), x=str(coords_set[0]), y=str(coords_set[1]), z=str(coords_set[2]), r="1", g="1", b="0", radius="2")
+        return marker
+
+    # check output file extension
+    if not output_path.endswith(".cmm"):
+        raise ValueError("Invalid output file name. Please specify the path to a .cmm file.")
+    
+    root = ET.Element("marker_set", name="markers")
+
+    # TripletLike input
+    if isinstance(coords, (list, tuple, int, float)):
+        coords = geom.as_triplet(coords)
+        coords = np.reshape(coords, (1, len(coords)))
+    elif isinstance(coords, np.ndarray) and coords.ndim == 1 and coords.shape[0] == 3:
+        coords = np.reshape(coords, (1, 3))
+    # check input types and cast to ndarray of shape (N,3)
+    elif isinstance(coords, np.ndarray) and coords.ndim == 2:
+        if not coords.shape[1]==3:
+            raise ValueError("Invalid input. The array needs to have shape (N,3), where N is the number of points to convert to markers!")
+        else:
+            coords=coords
+    elif isinstance(coords, pd.DataFrame):
+        required_cols=["x", "y", "z"]
+        coords.columns = map(str.lower, coords.columns)
+        missing_required = set(required_cols) - set(coords.columns)
+        if missing_required:
+            raise ValueError(f"Invalid input. The following columns are missing: {missing_required}")
+        else:
+            coords=coords[required_cols].to_numpy(dtype=float)
+    else:
+        raise ValueError("Invalid input.")
+
+    # parse coordinates to xml and write output file
+    idx=1
+    for coord in coords:
+        make_marker(root, coord, idx=idx) #ET.SubElement(root, "marker", x=str(coord[0]), y=str(coord[1]), z=str(coord[2]), r="1", g="1", b="0", radius="2")
+        idx+=1
+    tree = ET.ElementTree(root)
+    tree.write(output_path, encoding="utf-8", xml_declaration=False)
+
+
+# =============================================================================
+# Warp XML geometry — grid classes and read_warp_tilt_xml
+# =============================================================================
+
+_DEG = np.pi / 180.0
+
+
+def _rot_x(a: float) -> np.ndarray:
+    c, s = np.cos(a), np.sin(a)
+    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]], float)
+
+
+def _warp_euler(r: float, t: float, p: float) -> np.ndarray:
+    """Warp Matrix3.Euler: intrinsic ZYZ rotation matrix, angles in radians."""
+    ca, cb, cg = np.cos(r), np.cos(t), np.cos(p)
+    sa, sb, sg = np.sin(r), np.sin(t), np.sin(p)
+    cc, cs, sc, ss = cb * ca, cb * sa, sb * ca, sb * sa
+    return np.array(
+        [
+            [cg * cc - sg * sa, cg * cs + sg * ca, -cg * sb],
+            [-sg * cc - cg * sa, -sg * cs + cg * ca, sg * sb],
+            [sc, ss, cb],
+        ],
+        float,
+    )
+
+
+class CubicGrid:
+    """Separable cubic-spline interpolation grid loaded from a Warp XML node."""
+
+    def __init__(self, dims_xyz, values_flat, margins=(0.0, 0.0, 0.0)):
+        self.dims = tuple(int(d) for d in dims_xyz)
+        self.margins = tuple(float(m) for m in margins)
+        nx, ny, nz = self.dims
+        self.data = np.asarray(values_flat, float).reshape(nz, ny, nx)
+        self.active = [i for i, d in enumerate(self.dims) if d > 1]
+        self.is_const = len(self.active) == 0
+        if not self.is_const:
+            c = self.data
+            self.knots: dict = {}
+            for ai in self.active:
+                n, m = self.dims[ai], self.margins[ai]
+                grid = np.linspace(m, 1.0 - m, n)
+                arr_axis = {0: 2, 1: 1, 2: 0}[ai]
+                d = np.moveaxis(c, arr_axis, 0)
+                spl = make_interp_spline(grid, d, k=3, bc_type="natural")
+                self.knots[ai] = spl.t
+                c = np.moveaxis(spl.c, 0, arr_axis)
+            self.coeffs = c
+
+    def interp(self, x, y, z) -> np.ndarray:
+        x, y, z = (np.atleast_1d(np.asarray(v, float)) for v in (x, y, z))
+        n = max(x.size, y.size, z.size)
+        if self.is_const:
+            return np.full(n, self.data.flat[0])
+        q = {0: x, 1: y, 2: z}
+        bases: dict = {}
+        for ai in (0, 1, 2):
+            if ai not in self.active:
+                bases[ai] = np.ones((n, 1))
+                continue
+            lo, hi = self.margins[ai], 1.0 - self.margins[ai]
+            v = np.broadcast_to(q[ai], (n,))
+            bases[ai] = BSpline.design_matrix(np.clip(v, lo, hi), self.knots[ai], 3).toarray()
+        return np.einsum("pz,py,px,zyx->p", bases[2], bases[1], bases[0], self.coeffs, optimize=True)
+
+
+class LinearGrid4D:
+    """4-D trilinear interpolation grid (x/y/z/dose) loaded from a Warp XML node."""
+
+    def __init__(self, dims_xyzw, values_flat):
+        self.dims = tuple(int(d) for d in dims_xyzw)
+        nx, ny, nz, nw = self.dims
+        self.data = np.asarray(values_flat, float).reshape(nw, nz, ny, nx)
+        self.is_const = all(d == 1 for d in self.dims)
+
+    def interp(self, x, y, z, w) -> np.ndarray:
+        x, y, z, w = (np.atleast_1d(np.asarray(v, float)) for v in (x, y, z, w))
+        n = max(v.size for v in (x, y, z, w))
+        if self.is_const:
+            return np.full(n, self.data.flat[0])
+        coords = [np.broadcast_to(v, (n,)) * (d - 1) for v, d in zip((x, y, z, w), self.dims)]
+        p0 = [np.clip(c.astype(int), 0, d - 1) for c, d in zip(coords, self.dims)]
+        p1 = [np.minimum(p + 1, d - 1) for p, d in zip(p0, self.dims)]
+        f = [c - p for c, p in zip(coords, p0)]
+        out = np.zeros(n)
+        for iw in (0, 1):
+            for iz in (0, 1):
+                for iy in (0, 1):
+                    for ix in (0, 1):
+                        wgt = (
+                            (f[3] if iw else 1 - f[3])
+                            * (f[2] if iz else 1 - f[2])
+                            * (f[1] if iy else 1 - f[1])
+                            * (f[0] if ix else 1 - f[0])
+                        )
+                        out += wgt * self.data[
+                            (p1 if iw else p0)[3],
+                            (p1 if iz else p0)[2],
+                            (p1 if iy else p0)[1],
+                            (p1 if ix else p0)[0],
+                        ]
+        return out
+
+
+def load_xml_root(path: PathOrStr):
+    """Parse a Warp XML file, handling UTF-16, UTF-8-BOM, and plain UTF-8 encodings."""
+    raw = open(path, "rb").read()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        txt = raw.decode("utf-16")
+    elif raw[:3] == b"\xef\xbb\xbf":
+        txt = raw.decode("utf-8-sig")
+    else:
+        txt = raw.decode("utf-8")
+    return ET.fromstring(re.sub(r"^\s*<\?xml[^>]*\?>", "", txt, count=1))
+
+
+def _floats(root, tag: str) -> np.ndarray | None:
+    node = root.find(tag)
+    return None if node is None else np.array([float(v) for v in node.text.split()])
+
+
+def _attr_float_list(root, name: str) -> np.ndarray | None:
+    v = root.get(name)
+    return None if v is None else np.array([float(s) for s in v.split(",")])
+
+
+def _cubic(root, tag: str) -> CubicGrid:
+    node = root.find(tag)
+    dims = (int(node.get("Width")), int(node.get("Height")), int(node.get("Depth")))
+    margins = (
+        float(node.get("MarginX", 0)),
+        float(node.get("MarginY", 0)),
+        float(node.get("MarginZ", 0)),
+    )
+    vals = np.zeros(dims[0] * dims[1] * dims[2])
+    for nd in node:
+        x, y, z = int(nd.get("X")), int(nd.get("Y")), int(nd.get("Z"))
+        vals[(z * dims[1] + y) * dims[0] + x] = float(nd.get("Value"))
+    return CubicGrid(dims, vals, margins)
+
+
+def _linear4(root, tag: str) -> LinearGrid4D:
+    node = root.find(tag)
+    dims = (
+        int(node.get("Width")),
+        int(node.get("Height")),
+        int(node.get("Depth")),
+        int(node.get("Duration")),
+    )
+    vals = np.zeros(int(np.prod(dims)))
+    for nd in node:
+        x, y, z, w = int(nd.get("X")), int(nd.get("Y")), int(nd.get("Z")), int(nd.get("W"))
+        vals[((w * dims[2] + z) * dims[1] + y) * dims[0] + x] = float(nd.get("Value"))
+    return LinearGrid4D(dims, vals)
+
+
+def read_warp_tilt_xml(path: PathOrStr) -> dict:
+    """Load per-tilt geometry from a Warp XML file, in cryoCAT frame.
+
+    FG1 conjugation: Warp builds tilt matrices in Relion convention (z flipped).
+    Conjugating by F = diag(1,1,-1) converts them to cryoCAT convention::
+
+      F Rz(0) Ry(θ) Rz(φ) Rx(a) F  =  Rz(0) Ry(−θ) Rz(φ) Rx(−a)
+
+    Effect: tilt angle and levelAngleX are negated; axis angle (z-rotation) is unchanged.
+    Matrices are pre-built once here; no coordinate flip is needed in the call path.
+
+    Returns a dict with keys
+    pixel_size, angles, dose, axis_offset_x, axis_offset_y, tilt_matrices,
+    grid_movement_x, grid_movement_y, grid_volume_warp, movie_paths,
+    use_tilt, angles_inverted, image_dims, volume_dims.
+    """
+    r = load_xml_root(path)
+    ctf = r.find("CTF")
+    pixel_size = float(
+        [p for p in ctf.findall("Param") if p.get("Name") == "PixelSize"][0].get("Value")
+    )
+    angles = _floats(r, "Angles")
+    axis_angles = _floats(r, "AxisAngle")
+    level_angle_y = float(r.get("LevelAngleY", 0))
+    lax_rad = -float(r.get("LevelAngleX", 0)) * _DEG  # negated levelAngleX for conjugation
+    tilt_matrices = np.stack(
+        [
+            _warp_euler(0.0, -(angles[t] + level_angle_y) * _DEG, -axis_angles[t] * _DEG)
+            @ _rot_x(lax_rad)
+            for t in range(len(angles))
+        ]
+    )
+    return {
+        "pixel_size": pixel_size,
+        "angles": angles,
+        "dose": _floats(r, "Dose"),
+        "axis_offset_x": _floats(r, "AxisOffsetX"),
+        "axis_offset_y": _floats(r, "AxisOffsetY"),
+        "tilt_matrices": tilt_matrices,
+        "grid_movement_x": _cubic(r, "GridMovementX"),
+        "grid_movement_y": _cubic(r, "GridMovementY"),
+        "grid_volume_warp": (
+            _linear4(r, "GridVolumeWarpX"),
+            _linear4(r, "GridVolumeWarpY"),
+            _linear4(r, "GridVolumeWarpZ"),
+        ),
+        "movie_paths": r.find("MoviePath").text.split(),
+        "use_tilt": np.array([v == "True" for v in r.find("UseTilt").text.split()]),
+        "angles_inverted": r.get("AreAnglesInverted", "False") == "True",
+        "image_dims": _attr_float_list(r, "ImageDimensionsAngstrom"),
+        "volume_dims": _attr_float_list(r, "VolumeDimensionsAngstrom"),
+    }
+
+
+def check_same_tiltseries(a: dict, b: dict) -> tuple[bool, str]:
+    """Return (ok, message). Checks that per-tilt correspondence a[t] ↔ b[t] is valid."""
+    ma = [os.path.basename(p) for p in a["movie_paths"]]
+    mb = [os.path.basename(p) for p in b["movie_paths"]]
+    if ma != mb:
+        return False, "movie lists differ"
+    if not (a["use_tilt"].all() and b["use_tilt"].all()):
+        return False, "some tilts deselected"
+    if not np.allclose(a["dose"], b["dose"], atol=0.05):
+        return False, "dose sequences differ"
+    return True, "ok"
+
+
+def set_volume_geometry(
+    geom: dict,
+    volume_dims: np.ndarray | None = None,
+    image_dims: np.ndarray | None = None,
+) -> None:
+    """Patch missing volume_dims / image_dims in a Warp geometry dict.
+
+    When image_dims is omitted, defaults to volume_dims[:2].
+    """
+    if geom["volume_dims"] is None:
+        if volume_dims is None:
+            raise ValueError("volume_dims must be provided when not present in the XML")
+        geom["volume_dims"] = np.asarray(volume_dims, float)
+    if geom["image_dims"] is None:
+        geom["image_dims"] = (
+            np.asarray(image_dims, float) if image_dims is not None else geom["volume_dims"][:2]
+        )

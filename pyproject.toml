@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "cryoCAT"
-version = "0.8"
+version = "v1.0.0rc1"
 authors = [
   { name="Beata Turonova", email="beata.turonova@gmail.com" },
 ]
@@ -31,6 +31,10 @@ dependencies = [
     "dash_ag_grid>=35.2.0",
     "networkx>=3.6.1",
     "numpydoc>=1.10",
+    "open3d>=0.19",
+    "pyvista>=0.48",
+    "ipywidgets>=8.0",
+    "IPython>=8.0",
 ]
 classifiers = [
     "Intended Audience :: Science/Research",
@@ -48,6 +52,16 @@ packages = ["cryocat"]
 [project.scripts]
 wedge_list = "cryocat.cli:wedge_list"
 tm_ana = "cryocat.cli:tm_ana"
-tango_app = "cryocat.app.app:tango_app"
+cryocatG = "cryocat.app.server:main"
 [tool.setuptools.package-data]
 "cryocat" = ["example_files/*.tlt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "slow: browser-driven end-to-end tests (excluded by default)",
+    "needs_data: requires real tomogram/motl files not in the repo",
+    "integration: end-to-end tests that run the full pipeline against real data (slow)",
+]
+addopts = "-m 'not slow and not needs_data' --strict-markers"

@@ -1,357 +1,589 @@
+import types
 import pytest
 import sys
 from unittest.mock import patch, MagicMock
 import numpy as np
 
-from cryocat.utils.classutils import *
+import inspect
+import typing
+
+from cryocat.utils.classutils import (
+    filter_strings,
+    get_class_names_by_parent,
+    get_class_names_by_prefix,
+    get_classes_from_names,
+    gui_exposed,
+    process_method_docstring,
+    resolve_param_type,
+    TYPE_HANDLERS,
+    as_list,
+    GuiCategory,
+    GuiEntry,
+    GUI_REGISTRY,
+)
+from cryocat._types import MapSource, TripletLike, Symmetry, MotlType
 
 
-class TestFilterStrings:
+# ---------------------------------------------------------------------------
+# filter_strings
+# ---------------------------------------------------------------------------
 
-    def test_basic_filtering(self):
-        input_list = ["apple", "banana", "cherry", "date"]
-        result = filter_strings(input_list, filter_contains=["a"])
-        assert result == ["apple", "banana", "date"]
-
-    def test_exclude_filtering(self):
-        input_list = ["apple", "banana", "cherry", "date"]
-        result = filter_strings(input_list, filter_exclude=["a"])
-        assert result == ["cherry"]
-
-    def test_combined_filters(self):
-        input_list = ["apple", "banana", "cherry", "date", "apricot"]
-        result = filter_strings(input_list, filter_contains=["a"], filter_exclude=["an"])
-        assert result == ["apple", "date", "apricot"]
-
-    def test_string_filters(self):
-        input_list = ["apple", "banana", "cherry"]
-        result = filter_strings(input_list, filter_contains="a", filter_exclude="n")
-        assert result == ["apple"]
-
-    def test_empty_input(self):
-        assert filter_strings([]) == []
-
-    def test_none_filters(self):
-        input_list = ["apple", "banana"]
-        result = filter_strings(input_list)
-        assert result == input_list
+@pytest.mark.parametrize(
+    "input_list, filter_contains, filter_exclude, expected",
+    [
+        # include filter only
+        (["apple", "banana", "cherry", "date"], ["a"], None, ["apple", "banana", "date"]),
+        # exclude filter only
+        (["apple", "banana", "cherry", "date"], None, ["a"], ["cherry"]),
+        # both filters combined
+        (["apple", "banana", "cherry", "date", "apricot"], ["a"], ["an"], ["apple", "date", "apricot"]),
+        # string (not list) filters
+        (["apple", "banana", "cherry"], "a", "n", ["apple"]),
+        # empty input list
+        ([], None, None, []),
+        # no filters → identity
+        (["apple", "banana"], None, None, ["apple", "banana"]),
+        # filter_contains with no match → empty
+        (["apple", "banana"], ["xyz"], None, []),
+        # exclude removes all
+        (["apple", "apricot"], None, ["a"], []),
+    ],
+)
+def test_filter_strings(input_list, filter_contains, filter_exclude, expected):
+    assert filter_strings(input_list, filter_contains=filter_contains, filter_exclude=filter_exclude) == expected
 
 
-class TestParseAllowedTypes:
+# ---------------------------------------------------------------------------
+# gui_exposed
+# ---------------------------------------------------------------------------
 
-    def test_basic_types(self):
-        input_str = "int, float, str"
-        result = parse_allowed_types(input_str)
-        assert result == ["float", "int", "str"]
+def test_gui_exposed_bare():
+    @gui_exposed
+    def my_op(self):
+        pass
 
-    def test_with_and_or(self):
-        input_str = "int and float or str"
-        result = parse_allowed_types(input_str)
-        assert result == ["float", "int", "str"]
-
-    def test_filter_unsupported_types(self):
-        input_str = "int, pandas, dataframe, float"
-        result = parse_allowed_types(input_str)
-        assert result == ["float", "int"]
-
-    def test_empty_string(self):
-        assert parse_allowed_types("") == []
-
-    def test_mixed_case_unsupported(self):
-        input_str = "int, Pandas, DataFrame, float"
-        result = parse_allowed_types(input_str)
-        assert result == ["float", "int"]
+    assert my_op._gui is not None
+    assert my_op._gui["label"] == "My op"
+    assert my_op._gui["hide"] == {"self", "cls"}
+    assert my_op._gui["category"] is None
+    assert my_op._gui["output"] is None
 
 
-class TestParseStringIntoArray:
+def test_gui_exposed_with_metadata():
+    @gui_exposed(label="Custom", category="Cleaning", hide=("x",), output="motl")
+    def my_op(self, x, y):
+        pass
 
-    def test_integer_array(self):
-        result = parse_string_into_array("1,2,3,4")
-        assert np.array_equal(result, np.array([1, 2, 3, 4]))
-
-    def test_float_array(self):
-        result = parse_string_into_array("1.1,2.2,3.3")
-        assert np.array_equal(result, np.array([1.1, 2.2, 3.3]))
-
-    def test_string_array(self):
-        result = parse_string_into_array("a,b,c")
-        assert np.array_equal(result, np.array(["a", "b", "c"]))
-
-    def test_mixed_types_fallback_to_string(self):
-        result = parse_string_into_array("1,2.2,hello")
-        assert np.array_equal(result, np.array(["1", "2.2", "hello"]))
-
-    def test_single_value(self):
-        result = parse_string_into_array("42")
-        assert np.array_equal(result, np.array([42]))
+    assert my_op._gui["label"] == "Custom"
+    assert my_op._gui["category"] == "Cleaning"
+    assert my_op._gui["hide"] == {"self", "cls", "x"}
+    assert my_op._gui["output"] == "motl"
 
 
-class TestParseChoices:
+def test_gui_exposed_undecorated_has_no_gui():
+    def plain():
+        pass
 
-    def test_integer_choices(self):
-        result = parse_choices("{1, 2, 3}")
-        assert result == [1, 2, 3]
-
-    def test_float_choices(self):
-        result = parse_choices("{1.1, 2.2, 3.3}")
-        assert result == [1.1, 2.2, 3.3]
-
-    def test_string_choices(self):
-        result = parse_choices('{"a", "b", "c"}')
-        assert result == ["a", "b", "c"]
-
-    def test_string_choices_no_quotes(self):
-        result = parse_choices("{a, b, c}")
-        assert result == ["a", "b", "c"]
+    assert getattr(plain, "_gui", None) is None
 
 
-class TestReplaceCrossReferences:
+def test_gui_exposed_defaults_standalone_preview():
+    """Bare @gui_exposed must carry standalone=False and preview=None."""
+    @gui_exposed
+    def my_op(self):
+        pass
 
-    def test_replace_meth(self):
-        input_str = "Use :meth:`some_method` for processing"
-        result = replace_cross_references(input_str)
-        assert result == "Use `some_method` for processing"
-
-    def test_no_replacement(self):
-        input_str = "This is a normal string"
-        result = replace_cross_references(input_str)
-        assert result == input_str
-
-    def test_multiple_replacements(self):
-        input_str = ":meth:`first` and :meth:`second`"
-        result = replace_cross_references(input_str)
-        assert result == "`first` and `second`"
+    assert my_op._gui["standalone"] is False
+    assert my_op._gui["preview"] is None
 
 
-class TestParseDocParam:
+def test_gui_exposed_standalone_and_preview_fields():
+    """Custom standalone/preview values land on fn._gui."""
+    @gui_exposed(category="builder", standalone=True, preview="orientational")
+    def my_builder_sp(x):
+        pass
 
-    def test_optional_parameter(self):
-        doc_param = ("param1", "int, optional", ["Some description"])
-        result = parse_doc_param(doc_param)
-        expected = ("param1", "Some description", False, ["int"], None, [])
-        assert result == expected
+    assert my_builder_sp._gui["standalone"] is True
+    assert my_builder_sp._gui["preview"] == "orientational"
+    assert my_builder_sp._gui["category"] == "builder"
 
-    def test_parameter_with_default(self):
-        doc_param = ("param2", "float, default=1.0", ["Description here"])
-        result = parse_doc_param(doc_param)
-        expected = ("param2", "Description here", False, ["float"], 1.0, [])
-        assert result == expected
 
-    def test_required_parameter(self):
-        doc_param = ("param3", "str", ["Required parameter"])
-        result = parse_doc_param(doc_param)
-        expected = ("param3", "Required parameter", True, ["str"], None, [])
-        assert result == expected
+# ---------------------------------------------------------------------------
+# GUI_REGISTRY / GuiEntry / GuiCategory (R1)
+# ---------------------------------------------------------------------------
 
-    def test_parameter_with_choices(self):
-        doc_param = ("param4", "int, {1, 2, 3}", ["Choice parameter"])
-        result = parse_doc_param(doc_param)
-        expected = ("param4", "Choice parameter", False, int, 1, [1, 2, 3])
-        assert result == expected
+def test_gui_category_values():
+    assert GuiCategory.MOTL_OP == "motl-op"
+    assert GuiCategory.BUILDER == "builder"
 
-    def test_with_prefix(self):
-        doc_param = ("param5", "str", ["Prefixed"])
-        result = parse_doc_param(doc_param, add_prefix="test_")
-        expected = ("test_param5", "Prefixed", True, ["str"], None, [])
-        assert result == expected
 
+def test_gui_entry_is_frozen():
+    e = GuiEntry(
+        key="test.fn", fn=lambda: None, label="Test", category=GuiCategory.MOTL_OP,
+        owner="test", kind="function",
+    )
+    with pytest.raises((AttributeError, TypeError)):
+        e.label = "changed"  # type: ignore[misc]
+
+
+def test_gui_registry_populated_by_decoration():
+    """@gui_exposed adds an entry to GUI_REGISTRY under the derived key."""
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(label="Registry test op")
+    def _reg_test_op(self):
+        pass
+
+    after = set(GUI_REGISTRY.keys())
+    new_keys = after - before
+    assert len(new_keys) == 1
+    key = next(iter(new_keys))
+    entry = GUI_REGISTRY[key]
+    assert entry.label == "Registry test op"
+    assert entry.category == GuiCategory.MOTL_OP
+    assert entry.kind == "method"  # has self
+    assert entry.fn is _reg_test_op
+
+
+def test_gui_registry_builder_tier():
+    """category='builder' → GuiCategory.BUILDER in the registry entry."""
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(category="builder", standalone=True, preview="test_p")
+    def _reg_test_builder(x):
+        pass
+
+    after = set(GUI_REGISTRY.keys())
+    new_keys = after - before
+    assert len(new_keys) == 1
+    entry = GUI_REGISTRY[next(iter(new_keys))]
+    assert entry.category == GuiCategory.BUILDER
+    assert entry.standalone is True
+    assert entry.preview == "test_p"
+    assert entry.kind == "function"  # no self/cls
+
+
+def test_gui_registry_motl_op_group():
+    """category='Geometry' → MOTL_OP tier with group='Geometry'."""
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(category="Geometry", label="My geom op")
+    def _reg_test_geom(self):
+        pass
+
+    after = set(GUI_REGISTRY.keys())
+    new_key = next(iter(after - before))
+    entry = GUI_REGISTRY[new_key]
+    assert entry.category == GuiCategory.MOTL_OP
+    assert entry.group == "Geometry"
+
+
+def test_gui_registry_key_format_function():
+    """Standalone function key is 'module_short.fn_name'."""
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(label="Key fmt fn")
+    def _key_fmt_fn(x):
+        pass
+
+    new_key = next(iter(set(GUI_REGISTRY.keys()) - before))
+    assert "." in new_key
+    assert new_key.endswith("._key_fmt_fn")
+
+
+def test_gui_registry_idempotent():
+    """Re-decorating the same function (module reimport) is a no-op."""
+    before_size = len(GUI_REGISTRY)
+
+    # Simulate reimport by calling gui_exposed again on an already-registered fn.
+    # We use a unique function to avoid clashing with test_gui_registry_populated.
+    @gui_exposed(label="Idempotent op")
+    def _idem_op(self):
+        pass
+
+    size_after_first = len(GUI_REGISTRY)
+
+    # Second decoration with same label/category → no-op.
+    @gui_exposed(label="Idempotent op")
+    def _idem_op(self):  # noqa: F811 — intentional re-def for idempotency test
+        pass
+
+    assert len(GUI_REGISTRY) == size_after_first
+
+
+def test_gui_registry_conflict_raises():
+    """Re-registering the same key with a different label raises RuntimeError."""
+    @gui_exposed(label="Conflict original")
+    def _conflict_op(self):
+        pass
+
+    with pytest.raises(RuntimeError, match="conflicting registration"):
+        @gui_exposed(label="Conflict different")
+        def _conflict_op(self):  # noqa: F811
+            pass
+
+
+def test_gui_exposed_invalid_motls_missing_arity():
+    with pytest.raises(ValueError, match="missing 'arity'"):
+        @gui_exposed(motls={"ordered": True})
+        def _bad_motls(self):
+            pass
+
+
+def test_gui_exposed_invalid_motls_bad_arity():
+    with pytest.raises(ValueError, match="must be 'pair' or 'list'"):
+        @gui_exposed(motls={"arity": "triple"})
+        def _bad_arity(self):
+            pass
+
+
+def test_gui_exposed_invalid_motls_unknown_key():
+    with pytest.raises(ValueError, match="unknown motls keys"):
+        @gui_exposed(motls={"arity": "pair", "bogus_key": True})
+        def _bad_key(self):
+            pass
+
+
+def test_gui_entry_hide_is_frozenset():
+    before = set(GUI_REGISTRY.keys())
+
+    @gui_exposed(label="Hide test", hide=("x", "y"))
+    def _hide_test(self, x, y, z):
+        pass
+
+    new_key = next(iter(set(GUI_REGISTRY.keys()) - before))
+    entry = GUI_REGISTRY[new_key]
+    assert isinstance(entry.hide, frozenset)
+    assert "x" in entry.hide
+    assert "y" in entry.hide
+    assert "self" not in entry.hide  # GuiEntry.hide does NOT include self/cls
+
+
+# ---------------------------------------------------------------------------
+# resolve_param_type
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "annotation, expected_tag",
+    [
+        (inspect.Parameter.empty, "str"),
+        (None, "str"),
+        (int, "int"),
+        (float, "float"),
+        (bool, "bool"),
+        (str, "str"),
+        (int | None, "int"),
+        (MapSource, "MapSource"),
+        (TripletLike, "TripletLike"),
+        (Symmetry, "Symmetry"),
+        (MapSource | None, "MapSource"),
+        (typing.Literal["a", "b"], "Literal"),
+    ],
+)
+def test_resolve_param_type_tag(annotation, expected_tag):
+    tag, _ = resolve_param_type(annotation)
+    assert tag == expected_tag
+
+
+def test_resolve_param_type_literal_alias_choices():
+    tag, extra = resolve_param_type(MotlType)
+    assert tag == "Literal"
+    assert "emmotl" in extra["choices"]
+
+
+# ---------------------------------------------------------------------------
+# TYPE_HANDLERS
+# ---------------------------------------------------------------------------
+
+def test_type_handlers_shape():
+    for tag, entry in TYPE_HANDLERS.items():
+        assert set(entry) == {"widget", "parse", "argparse"}
+        assert isinstance(entry["widget"], str)
+        assert callable(entry["parse"])
+        assert "type" in entry["argparse"]
+
+
+def test_type_handlers_parse_roundtrip():
+    assert TYPE_HANDLERS["bool"]["parse"]("True") is True
+    assert TYPE_HANDLERS["bool"]["parse"]("False") is False
+    assert TYPE_HANDLERS["int"]["parse"]("5") == 5
+    assert TYPE_HANDLERS["TripletLike"]["parse"]("1,2,3") == [1, 2, 3]
+    assert TYPE_HANDLERS["TripletLike"]["parse"]("64") == 64
+    assert TYPE_HANDLERS["MapSource"]["parse"]("") is None
+    assert TYPE_HANDLERS["Literal"]["parse"]("b", ["a", "b"]) == "b"
+
+
+# ---------------------------------------------------------------------------
+# Coverage for the private parser/argparse helpers (exercised via TYPE_HANDLERS
+# entries that don't already appear in the roundtrip above).
+# ---------------------------------------------------------------------------
+
+
+def test_type_handlers_parse_float_and_str():
+    """_parse_float and _parse_str via their TYPE_HANDLERS entries."""
+    assert TYPE_HANDLERS["float"]["parse"]("3.14") == 3.14
+    assert TYPE_HANDLERS["float"]["parse"]("") is None
+    assert TYPE_HANDLERS["float"]["parse"](None) is None
+    assert TYPE_HANDLERS["str"]["parse"]("hello") == "hello"
+    assert TYPE_HANDLERS["str"]["parse"](None) is None
+    assert TYPE_HANDLERS["Symmetry"]["parse"]("C5") == "C5"
+
+
+def test_type_handlers_parse_listlike_variants():
+    """_parse_listlike via ListLike / ArrayLike / TomoList entries."""
+    assert TYPE_HANDLERS["ListLike"]["parse"]("1,2,3") == [1, 2, 3]
+    assert TYPE_HANDLERS["ArrayLike"]["parse"]("4.5,6") == [4.5, 6]
+    assert TYPE_HANDLERS["TomoList"]["parse"]("10,11,12") == [10, 11, 12]
+
+
+def test_type_handlers_argparse_helpers():
+    """_arg_bool / _arg_triplet / _arg_listlike via the argparse spec."""
+    assert TYPE_HANDLERS["bool"]["argparse"]["type"]("True") is True
+    assert TYPE_HANDLERS["TripletLike"]["argparse"]["type"]("64,64,64") == [64, 64, 64]
+    assert TYPE_HANDLERS["ListLike"]["argparse"]["type"]("1,2,3") == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Direct coverage of private helpers not surfaced through TYPE_HANDLERS.
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_scalar_int_float_str_priority():
+    """_coerce_scalar: int beats float beats string."""
+    from cryocat.utils.classutils import _coerce_scalar
+    assert _coerce_scalar("42") == 42
+    assert _coerce_scalar("3.14") == 3.14
+    assert _coerce_scalar("hello") == "hello"
+    assert _coerce_scalar("  5  ") == 5  # whitespace stripped
+
+
+def test_parse_number_list_single_vs_multi():
+    """Single token returns a scalar; multiple tokens return a list."""
+    from cryocat.utils.classutils import _parse_number_list
+    assert _parse_number_list("64") == 64
+    assert _parse_number_list("1,2,3") == [1, 2, 3]
+    assert _parse_number_list("") is None
+    assert _parse_number_list(None) is None
+    # Non-string input is returned unchanged.
+    assert _parse_number_list([1, 2, 3]) == [1, 2, 3]
+
+
+def test_clean_desc_strips_role_markers():
+    """_clean_desc removes reST cross-reference role prefixes."""
+    from cryocat.utils.classutils import _clean_desc
+    assert _clean_desc("See :meth:`foo`") == "See `foo`"
+    assert _clean_desc(":func:`bar`") == "`bar`"
+    assert _clean_desc(":class:`Baz`") == "`Baz`"
+    assert _clean_desc("plain") == "plain"
+
+
+# ---------------------------------------------------------------------------
+# get_classes_from_names
+# ---------------------------------------------------------------------------
 
 class TestGetClassesFromNames:
 
     def test_single_string(self):
-        with patch('importlib.import_module') as mock_import:
+        with patch("importlib.import_module") as mock_import:
             mock_module = MagicMock()
-            mock_module.TestClass = type('TestClass', (), {})
+            mock_module.TestClass = type("TestClass", (), {})
             mock_import.return_value = mock_module
 
             result = get_classes_from_names("TestClass", "test_module")
             assert result == mock_module.TestClass
 
     def test_list_of_strings(self):
-        with patch('importlib.import_module') as mock_import:
+        with patch("importlib.import_module") as mock_import:
             mock_module = MagicMock()
-            mock_module.Class1 = type('Class1', (), {})
-            mock_module.Class2 = type('Class2', (), {})
+            mock_module.Class1 = type("Class1", (), {})
+            mock_module.Class2 = type("Class2", (), {})
             mock_import.return_value = mock_module
 
             result = get_classes_from_names(["Class1", "Class2"], "test_module")
             assert result == [mock_module.Class1, mock_module.Class2]
 
-    def test_already_classes(self):
-        class TestClass:
+    def test_already_class_object_passthrough(self):
+        class SomeClass:
             pass
 
-        result = get_classes_from_names(TestClass, "test_module")
-        assert result == TestClass
+        result = get_classes_from_names(SomeClass, "test_module")
+        assert result is SomeClass
+
+    def test_list_of_class_objects_passthrough(self):
+        class A:
+            pass
+
+        class B:
+            pass
+
+        result = get_classes_from_names([A, B], "test_module")
+        assert result == [A, B]
 
 
-class BaseClass:
-    pass
+# ---------------------------------------------------------------------------
+# get_class_names_by_parent
+# ---------------------------------------------------------------------------
 
+def _make_test_module(name="test_module"):
+    """Helper: build a synthetic module with Base, Child1, Child2, Unrelated."""
+    mod = types.ModuleType(name)
 
-class ChildClass1(BaseClass):
-    pass
+    class BaseClass:
+        pass
 
+    class ChildClass1(BaseClass):
+        pass
 
-class ChildClass2(BaseClass):
-    pass
+    class ChildClass2(BaseClass):
+        pass
 
+    class UnrelatedClass:
+        pass
 
-class UnrelatedClass:
-    pass
+    for cls in (BaseClass, ChildClass1, ChildClass2, UnrelatedClass):
+        cls.__module__ = name
+        setattr(mod, cls.__name__, cls)
+
+    return mod
 
 
 class TestGetClassNamesByParent:
 
-    def test_find_subclasses(self):
-        test_module = types.ModuleType('test_module')
-
-        class BaseClass:
-            pass
-
-        class ChildClass1(BaseClass):
-            pass
-
-        class ChildClass2(BaseClass):
-            pass
-
-        class UnrelatedClass:
-            pass
-
-        BaseClass.__module__ = 'test_module'
-        ChildClass1.__module__ = 'test_module'
-        ChildClass2.__module__ = 'test_module'
-        UnrelatedClass.__module__ = 'test_module'
-
-        test_module.BaseClass = BaseClass
-        test_module.ChildClass1 = ChildClass1
-        test_module.ChildClass2 = ChildClass2
-        test_module.UnrelatedClass = UnrelatedClass
-
-        with patch.dict('sys.modules', {'test_module': test_module}):
-            with patch('importlib.import_module') as mock_import:
-                mock_import.return_value = test_module
-
-                result = get_class_names_by_parent("BaseClass", "test_module")
+    def test_find_all_subclasses(self):
+        mod = _make_test_module()
+        with patch.dict("sys.modules", {mod.__name__: mod}):
+            with patch("importlib.import_module", return_value=mod):
+                result = get_class_names_by_parent("BaseClass", mod.__name__)
                 assert set(result) == {"ChildClass1", "ChildClass2"}
 
-    def test_with_filters(self):
-        test_module = types.ModuleType('test_module')
+    def test_filter_contains(self):
+        mod = _make_test_module()
+        with patch.dict("sys.modules", {mod.__name__: mod}):
+            with patch("importlib.import_module", return_value=mod):
+                result = get_class_names_by_parent("BaseClass", mod.__name__, filter_contains="1")
+                assert result == ["ChildClass1"]
 
-        class BaseClass:
-            pass
+    def test_filter_exclude(self):
+        mod = _make_test_module()
+        with patch.dict("sys.modules", {mod.__name__: mod}):
+            with patch("importlib.import_module", return_value=mod):
+                result = get_class_names_by_parent("BaseClass", mod.__name__, filter_exclude="2")
+                assert result == ["ChildClass1"]
 
-        class ChildClass1(BaseClass):
-            pass
-
-        class ChildClass2(BaseClass):
-            pass
-
-        # Set module attributes
-        BaseClass.__module__ = 'test_module'
-        ChildClass1.__module__ = 'test_module'
-        ChildClass2.__module__ = 'test_module'
-
-        test_module.BaseClass = BaseClass
-        test_module.ChildClass1 = ChildClass1
-        test_module.ChildClass2 = ChildClass2
-
-        with patch.dict('sys.modules', {'test_module': test_module}):
-            with patch('importlib.import_module') as mock_import:
-                mock_import.return_value = test_module
-
+    def test_filter_contains_and_exclude(self):
+        mod = _make_test_module()
+        with patch.dict("sys.modules", {mod.__name__: mod}):
+            with patch("importlib.import_module", return_value=mod):
                 result = get_class_names_by_parent(
-                    "BaseClass", "test_module",
-                    filter_contains="1",
-                    filter_exclude="2"
+                    "BaseClass", mod.__name__, filter_contains="Child", filter_exclude="2"
                 )
                 assert result == ["ChildClass1"]
 
-    def test_invalid_parent_class(self):
-        test_module = types.ModuleType('test_module')
-
-        class SomeOtherClass:
-            pass
-
-        SomeOtherClass.__module__ = 'test_module'
-        test_module.SomeOtherClass = SomeOtherClass
-
-        with patch.dict('sys.modules', {'test_module': test_module}):
-            with patch('importlib.import_module') as mock_import:
-                mock_import.return_value = test_module
-
+    def test_invalid_parent_class_raises(self):
+        mod = _make_test_module()
+        with patch.dict("sys.modules", {mod.__name__: mod}):
+            with patch("importlib.import_module", return_value=mod):
                 with pytest.raises(ValueError, match="'NonExistentClass' is not a valid class"):
-                    get_class_names_by_parent("NonExistentClass", "test_module")
+                    get_class_names_by_parent("NonExistentClass", mod.__name__)
 
 
-
-class TestClass1:
-    pass
-
-class TestClass2:
-    pass
-
-class OtherClass:
-    pass
+# ---------------------------------------------------------------------------
+# get_class_names_by_prefix
+# The function inspects its *own* module (classutils.py), which defines no
+# classes, so the result is always an empty list.  Tests verify behaviour
+# rather than specific class names.
+# ---------------------------------------------------------------------------
 
 class TestGetClassNamesByPrefix:
 
-    def test_find_by_prefix(self):
-        result = get_class_names_by_prefix("Test")
+    def test_returns_list(self):
+        result = get_class_names_by_prefix("Prefix")
         assert isinstance(result, list)
-        for class_name in result:
-            assert class_name.startswith("Test")
 
-    def test_find_by_prefix_simple(self):
-        for prefix in ["Test", "TestGet", "TestGetClass"]:
-            result = get_class_names_by_prefix(prefix)
-            print(f"Prefix '{prefix}': {result}")
-            assert isinstance(result, list)
+    def test_all_results_start_with_prefix(self):
+        result = get_class_names_by_prefix("Prefix")
+        for name in result:
+            assert name.startswith("Prefix")
 
-            if result:
-                for name in result:
-                    assert name.startswith(prefix)
+    def test_no_match_returns_empty(self):
+        result = get_class_names_by_prefix("ZZZNonexistentPrefix999")
+        assert result == []
+
+    @pytest.mark.parametrize("prefix", ["A", "B", "My", "Test"])
+    def test_arbitrary_prefix_returns_list(self, prefix):
+        result = get_class_names_by_prefix(prefix)
+        assert isinstance(result, list)
+        for name in result:
+            assert name.startswith(prefix)
+
+
+# ---------------------------------------------------------------------------
+# process_method_docstring
+# ---------------------------------------------------------------------------
+
+class _SampleClass:
+    def documented(self, param1: int, param2: str = "default"):
+        """Sample method for testing.
+
+        Parameters
+        ----------
+        param1 : int
+            First required parameter.
+        param2 : str, default="default"
+            Second optional parameter.
+        """
+        pass
+
+    def undocumented(self):
+        pass
+
 
 class TestProcessMethodDocstring:
+    # process_method_docstring now supplies parameter *descriptions* only —
+    # types/required/default come from the signature, not the docstring.
 
-    def test_process_method_doc(self):
-        class TestClass:
-            def test_method(self, param1: int, param2: str = "default"):
-                """
-                Test method description.
+    def test_returns_descriptions(self):
+        result = process_method_docstring(_SampleClass, "documented")
+        assert result["param1"] == "First required parameter."
+        assert result["param2"] == "Second optional parameter."
 
-                Parameters
-                ----------
-                param1 : int
-                    First parameter description.
-                param2 : str, default="default"
-                    Second parameter description.
-                """
-                pass
+    def test_empty_docstring_returns_empty_dict(self):
+        result = process_method_docstring(_SampleClass, "undocumented")
+        assert result == {}
 
-        with patch('inspect.getattr_static') as mock_getattr:
-            mock_getattr.return_value = TestClass.test_method
+    def test_result_keys_match_param_names(self):
+        result = process_method_docstring(_SampleClass, "documented")
+        assert set(result.keys()) == {"param1", "param2"}
 
-            result = process_method_docstring(TestClass, "test_method")
+    def test_accepts_callable_directly(self):
+        # method_name=None -> the first argument is the callable itself.
+        result = process_method_docstring(_SampleClass.documented)
+        assert set(result.keys()) == {"param1", "param2"}
 
-            assert "param1" in result
-            assert result["param1"]["types"] == ["int"]
-            assert result["param1"]["required"] == True
 
-            assert "param2" in result
-            assert result["param2"]["types"] == ["str"]
-            assert result["param2"]["default"] == "default"
-            assert result["param2"]["required"] == False
+# ---------------------------------------------------------------------------
+# as_list
+# ---------------------------------------------------------------------------
 
-    def test_pretty_print(self):
-        class TestClass:
-            def method(self, test_param: int):
-                pass
+@pytest.mark.parametrize(
+    "input_val, expected",
+    [
+        (5, [5]),
+        (3.14, [3.14]),
+        ("hello", ["hello"]),
+        (b"bytes", [b"bytes"]),
+        ([1, 2, 3], [1, 2, 3]),
+        ((1, 2, 3), [1, 2, 3]),
+        (range(3), [0, 1, 2]),
+        (np.array([1, 2, 3]), [1, 2, 3]),
+        ([], []),
+    ],
+)
+def test_as_list(input_val, expected):
+    result = as_list(input_val)
+    assert result == expected
 
-        with patch('inspect.getattr_static') as mock_getattr:
-            mock_getattr.return_value = TestClass.method
 
-            result = process_method_docstring(TestClass, "method", pretty_print=True)
-
-            assert isinstance(result, dict)
-            assert result == {}
+def test_as_list_returns_same_list_object():
+    original = [1, 2, 3]
+    assert as_list(original) is original

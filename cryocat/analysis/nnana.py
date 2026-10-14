@@ -1,710 +1,2060 @@
+"""Nearest-neighbor analysis for particle motls.
+
+This module is organised in three layers:
+
+1. **Stateless array helpers** (``find_nn_indices``, ``find_nn_within_radius``,
+   ``centered_nn_coords``, ``rotated_nn_coords``, ``angular_distances``,
+   ``relative_rotations``, ``rotations_to_unit_vectors``).  These take plain
+   numpy arrays of coordinates and Euler angles and have no Motl dependency.
+   Use them when you already have coords/angles in hand and only need
+   per-particle NN geometry.
+
+2. **The** ``NearestNeighbors`` **class** — motl-aware container that splits
+   particles by ``feature_id`` (typically ``tomo_id``), runs the layer-1
+   primitives per feature, and stores everything in ``self.df``.  Use it when
+   you want a single object you can repeatedly query.
+
+3. **Module-level wrappers** (``get_nn_stats``, ``get_nn_distances``,
+   ``get_nn_rotations``, ``get_feature_nn_indices``, …).  Backward-compatible
+   functions that accept motls and return numpy arrays / DataFrames.  Each is
+   a thin shim around layer 1 / layer 2.
+
+A standalone ``trace_chains`` function (plus its private helpers) lives at
+the bottom of this file.  Tracing is NN-based but conceptually distinct from
+the ``NearestNeighbors`` class; downstream chain analysis (occupancies,
+chain stats, etc.) lives in ``cryocat.analysis.assembly.Chain``.
+"""
+
+from __future__ import annotations
+
+import copy
+import warnings
+from typing import Any, TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
-from cryocat.core import cryomotl
-from cryocat.core import cryomap
-from scipy.spatial.transform import Rotation as srot
-from cryocat.utils import geom
-import seaborn as sns
 import sklearn.neighbors as sn
-import matplotlib.pyplot as plt
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
+from scipy.spatial.transform import Rotation as srot
+
+from cryocat._types import (
+    ArrayLike,
+    ListLike,
+    MapSource,
+    MotlColumn,
+    NNType,
+    PathOrStr,
+    RotationDistanceType,
+)
+from cryocat.core import cryomap, cryomotl
+from cryocat.utils import classutils, geom, ioutils
+from cryocat.utils.classutils import gui_exposed
+
+if TYPE_CHECKING:
+    # Import the alias lazily to avoid the cryomotl ↔ nnana circular import
+    # (cryomotl loads nnana before its own module body finishes executing).
+    from cryocat.core.cryomotl import MotlSource
 
 
-class NearestNeighbors:
-
-    def __init__(
-        self,
-        input_data=None,
-        feature_id="tomo_id",
-        nn_type="closest_dist",
-        type_param=None,
-        remove_qp=None,
-        remove_duplicates=False,
-    ):
-        """Initialize the class with input data and parameters for feature extraction.
-
-        Parameters
-        ----------
-        input_data : str or list of str, optional
-            A single Motl object (or path to a Motl file) or a list of Motls (or paths). If None,
-            self.features and self.df will be set to None.
-        feature_id : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
-            The identifier for the motl feature which specifies the level of comparison. For instance, if "tomo_id" is
-            specified the NN analysis will be computed at the tomogram level. If "object_id" is specified, the nearest
-            neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
-            numbering among all tomograms in case "tomo_id" is not set, otherwise objects from different tomograms might
-            be incorrectly grouped together. Default is "tomo_id".
-        nn_type : str, {"closest_dist", "radius"}
-            The type of nearest neighbor search to perform. Options are "closest_dist" to find N closest neighbors,
-            where N is specified by type_param, or "radius" to return or neigbors within radius R speficied by type_param.
-            Default is "closest_dist".
-        type_param : int or float, optional
-            Parameter for nearest neighbor search type. If nn_type is "closest_dist" one should specify how many of
-            the nearest neighbors should be considered. If nn_type is "radius" one should specify the search radius for
-            which all neighbors within this radius will be considered. Default is None.
-        remove_qp : bool, default=False
-            Flag to indicate whether to remove the query point from the nearest neighbors search. It is always True in case
-            only one motl is specified. If two or more motls are specified, it should be set to True if it is expected
-            that the found neighbors could contain the query point itself (or the point that belongs to the same
-            particle). Default is False.
-        remove_duplicates : bool, default=False
-            Flag to indicate whether to remove symmetric duplicates from the resulting DataFrame. Default is False.
-
-        Attributes
-        ----------
-        features : array-like
-            Unique feature values extracted from the MOTL files.
-        df : pandas.DataFrame
-            DataFrame containing the results of the nearest neighbor search, including various attributes and coordinates.
-        feature_id : str
-            The identifier for the feature used in the extraction process.
-        """
-
-        if input_data is None:
-            self.features = None
-            self.df = None
-            return
-
-        self.feature_id = feature_id 
-        motl_list = []
-        single_motl = False
-        if not isinstance(input_data, list):
-            motl_list.append(cryomotl.Motl.load(input_data))
-            motl_list.append(cryomotl.Motl.load(input_data))
-            single_motl = True
-        else:
-            for m in input_data:
-                motl_list.append(cryomotl.Motl.load(m))
-
-        single_motl = remove_qp or single_motl  # if only one motl is given, always remove the qp
-
-        features = motl_list[0].get_unique_values(feature_id)
-        for m in motl_list[1:]:
-            features = np.intersect1d(features, m.get_unique_values(feature_id), assume_unique=True)
-
-        results = []
-        columns = [
-            "motl_id",
-            feature_id,
-            "qp_id",
-            "qp_subtomo_id",
-            "nn_id",
-            "nn_subtomo_id",
-            "qp_angles_phi",
-            "qp_angles_theta",
-            "qp_angles_psi",
-            "qp_coord_x",
-            "qp_coord_y",
-            "qp_coord_z",
-            "nn_angles_phi",
-            "nn_angles_theta",
-            "nn_angles_psi",
-            "nn_coord_x",
-            "nn_coord_y",
-            "nn_coord_z",
-        ]
-
-        if nn_type == "closest_dist":
-            columns.append("nn_dist")
-
-        for f in features:
-            fm_qp = motl_list[0].get_motl_subset(feature_values=f, feature_id=feature_id)
-            qp_subtomos = fm_qp.df["subtomo_id"].values
-            qp_angles = fm_qp.get_angles()
-            qp_coord = fm_qp.get_coordinates()
-
-            for i, m in enumerate(motl_list[1:], start=1):
-                fm_nn = m.get_motl_subset(feature_values=f, feature_id=feature_id)
-                nn_subtomos = fm_nn.df["subtomo_id"].values
-                nn_angles = fm_nn.get_angles()
-                nn_coord = fm_nn.get_coordinates()
-
-                def stack_nn_results(qp_idx, nn_idx):
-                    counts = np.array([len(n) for n in nn_idx])
-                    if counts.sum() == 0:
-                        return None
-
-                    nn_idx_flat = np.concatenate(nn_idx)
-
-                    qp_idx_expanded = np.repeat(qp_idx, counts)
-
-                    qp_angles_expanded = qp_angles[qp_idx_expanded]
-                    qp_coord_expanded = qp_coord[qp_idx_expanded]
-                    nn_angles_expanded = nn_angles[nn_idx_flat]
-                    nn_coord_expanded = nn_coord[nn_idx_flat]
-
-                    stacked = np.column_stack(
-                        [
-                            np.repeat(i, counts.sum()),
-                            np.repeat(f, counts.sum()),
-                            qp_idx_expanded,
-                            qp_subtomos[qp_idx_expanded],
-                            nn_idx_flat,
-                            nn_subtomos[nn_idx_flat],
-                            qp_angles_expanded,
-                            qp_coord_expanded,
-                            nn_angles_expanded,
-                            nn_coord_expanded,
-                        ]
-                    )
-                    return stacked
-
-                if nn_type == "closest_dist":
-                    nn_count = type_param or 1
-                    qp_idx, nn_idx, nn_dist, _ = get_feature_nn_indices(
-                        fm_qp, fm_nn, nn_number=nn_count, remove_qp=single_motl
-                    )
-
-                    stacked = stack_nn_results(qp_idx, nn_idx)
-
-                    if stacked is None:
-                        continue
-
-                    stacked = np.column_stack((stacked, np.concatenate(nn_dist)))
-                    results.append(stacked)
-
-                elif nn_type == "radius":
-                    radius = type_param or 1
-                    qp_idx, nn_idx = get_feature_nn_within_radius(fm_qp, fm_nn, radius=radius, remove_qp=single_motl)
-                    stacked = stack_nn_results(qp_idx, nn_idx)
-                    if stacked is None:
-                        continue
-                    results.append(stacked)
-                else:
-                    raise ValueError(f"The type {nn_type} is not supported, choose between closest_dist and radius.")
-
-        final_array = np.vstack(results)
-
-        self.df = pd.DataFrame(data=final_array, columns=columns)
-
-        if remove_duplicates:
-            self.df = self.drop_symmetric_duplicates()
-
-        # self.motls = motl_list
-        self.features = features
-        # self.feature_id = feature_id
-
-    def drop_symmetric_duplicates(self):
-
-        qp_col = "qp_subtomo_id"
-        nn_col = "nn_subtomo_id"
-        # Create a tuple (min_id, max_id) so (1,2) and (2,1) become the same
-        pairs = self.df[[qp_col, nn_col]].apply(lambda row: tuple(sorted(row)), axis=1)
-
-        # Add to a temp column
-        self.df = self.df.copy()
-        self.df["_pair_key"] = pairs
-
-        # Drop duplicates based on the sorted pair
-        df_unique = self.df.drop_duplicates(subset="_pair_key")
-
-        # Remove temp column
-        df_unique = df_unique.drop(columns="_pair_key")
-
-        return df_unique
-
-    def get_unique_values(self):
-        return self.features
-    
-    def get_nn_subset(self, motl_values, feature_values):
-        nn_subset = NearestNeighbors()
-        nn_subset.feature_id = self.feature_id
-
-        if not isinstance(motl_values, list):
-            motl_values = [motl_values]
-        if not isinstance(feature_values, list):
-            feature_values = [feature_values]
-
-        nn_subset.df = self.df[
-            (self.df["motl_id"].isin(motl_values)) &
-            (self.df[self.feature_id].isin(feature_values))
-        ].copy()
-
-        nn_subset.features = feature_values
-
-        return nn_subset
-
-    def get_normalized_coord(self, add_to_df=True):
-        # if normalized columns already exist, just return them
-        if all(col in self.df.columns for col in ["norm_nn_x", "norm_nn_y", "norm_nn_z"]):
-            return self.df[["norm_nn_x", "norm_nn_y", "norm_nn_z"]].to_numpy()
-
-        # otherwise compute them
-        norm_coord = (
-            self.df[["nn_coord_x", "nn_coord_y", "nn_coord_z"]].to_numpy()
-            - self.df[["qp_coord_x", "qp_coord_y", "qp_coord_z"]].to_numpy()
-        )
-
-        # if requested, add to dataframe
-        if add_to_df:
-            self.df[["norm_nn_x", "norm_nn_y", "norm_nn_z"]] = norm_coord
-
-        return norm_coord
-
-    def get_qp_rotations(self):
-        angles = self.df[["qp_angles_phi", "qp_angles_theta", "qp_angles_psi"]].to_numpy()
-        return srot.from_euler("zxz", degrees=True, angles=angles)
-
-    def get_nn_rotations(self):
-        angles = self.df[["nn_angles_phi", "nn_angles_theta", "nn_angles_psi"]].to_numpy()
-        return srot.from_euler("zxz", degrees=True, angles=angles)
-
-    def get_angular_distances(self, rotation_type="all"):
-
-        angles_qp = self.df[["qp_angles_phi", "qp_angles_theta", "qp_angles_psi"]].to_numpy()
-        angles_nn = self.df[["nn_angles_phi", "nn_angles_theta", "nn_angles_psi"]].to_numpy()
-        ang_dist = geom.compare_rotations(angles_qp, angles_nn, rotation_type=rotation_type)
-        return ang_dist
+# =============================================================================
+# Layer 1 — stateless array-level helpers
+# =============================================================================
 
 
-def get_feature_nn_within_radius(fm_a, fm_nn, radius, remove_qp=False):
-    """Get nearest neighbors within a specified radius from a set of coordinates which are feature specific.
+def find_nn_indices(
+    coords_qp: ArrayLike,
+    coords_nn: ArrayLike,
+    k: int = 1,
+    remove_qp: bool = False,
+    qp_labels: np.ndarray | None = None,
+    nn_labels: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """k-nearest-neighbor search on raw coordinate arrays.
 
     Parameters
     ----------
-    fm_a : cryomotl.Motl
-        A motl for which nearest neighbors are to be found.
-    fm_nn : cryomotl.Motl
-        A motl in which the nearest neighbors will be searched for.
-    radius : float
-        The distance within which to search for nearest neighbors.
+    coords_qp : numpy.ndarray
+        Query coordinates, shape ``(N, 3)``.
+    coords_nn : numpy.ndarray
+        Candidate-neighbor coordinates, shape ``(M, 3)``.
+    k : int, default=1
+        Number of neighbors to retrieve per query point.
     remove_qp : bool, default=False
-        If True, the query point will be removed from nn_indices. Default is False.
+        Set to True when ``coords_qp is coords_nn`` (or otherwise share
+        particles) and the trivial zero-distance self-match should be dropped.
+    qp_labels : numpy.ndarray or None, optional
+        Shape ``(N,)``.  Label for each query particle.
+    nn_labels : numpy.ndarray or None, optional
+        Shape ``(M,)``.  Label for each candidate.  When both *qp_labels* and
+        *nn_labels* are given, candidate ``j`` is excluded from query ``i``'s
+        result when ``nn_labels[j] == qp_labels[i]``.
 
     Returns
     -------
-    qp_indices : numpy.ndarray
-        An array of indices representing the query particles for which neighbors are found.
-    nn_indices : list of list of int
-        A list where each element is a list of indices of the nearest neighbors corresponding to each center index.
-
-    Notes
-    -----
-    This function uses a KDTree for efficient spatial querying of nearest neighbors. If `unique_only` is set to True,
-    it ensures that each neighbor is unique by removing duplicates.
+    qp_idx : numpy.ndarray
+        ``np.arange(N)``.
+    nn_idx : numpy.ndarray
+        Shape ``(N, k_eff)``.
+    nn_dist : numpy.ndarray
+        Shape ``(N, k_eff)``.
+    k_eff : int
+        ``min(k, M - int(remove_qp))`` — the number of neighbors actually
+        retrieved per query point.
     """
+    coords_qp = np.atleast_2d(coords_qp)
+    coords_nn = np.atleast_2d(coords_nn)
 
-    coord_qp = fm_a.get_coordinates()
-    coord_nn = fm_nn.get_coordinates()
-    kdt_nn = sn.KDTree(coord_nn)
-    nn_idx = kdt_nn.query_radius(coord_qp, radius)
-
-    qp_indices = []
-    nn_indices = []
-
-    for i, neighbors in enumerate(nn_idx):
-        # Optionally remove self from neighbors
+    if qp_labels is not None and nn_labels is not None:
+        # Determine how many extra candidates we need to absorb same-label exclusions.
+        max_group = int(np.unique(nn_labels, return_counts=True)[1].max()) if len(nn_labels) else 0
+        over_k = min(k + int(remove_qp) + max_group, coords_nn.shape[0])
+        kdt = sn.KDTree(coords_nn)
+        nn_dist_over, nn_idx_over = kdt.query(coords_qp, k=over_k)
+        nn_dist_over = np.atleast_2d(nn_dist_over)
+        nn_idx_over  = np.atleast_2d(nn_idx_over)
+        # Build a keep-mask: True where candidate passes label filter (and self filter).
+        mask = nn_labels[nn_idx_over] != qp_labels[:, None]
         if remove_qp:
-            neighbors = neighbors[neighbors != i]
+            mask &= nn_idx_over != np.arange(nn_idx_over.shape[0])[:, None]
+        # Stable argsort puts kept candidates (mask=True → ~mask=0) before excluded ones
+        # while preserving distance order within the kept group.
+        order = np.argsort(~mask, axis=1, kind="stable")
+        sel  = np.take_along_axis(nn_idx_over,  order, axis=1)[:, :k]
+        seld = np.take_along_axis(nn_dist_over, order, axis=1)[:, :k]
+        keep = np.take_along_axis(mask,          order, axis=1)[:, :k]
+        nn_idx  = np.where(keep, sel,  0).astype(int)
+        nn_dist = np.where(keep, seld, 0.0)
+        return np.arange(nn_idx.shape[0]), nn_idx, nn_dist, k
 
-        if len(neighbors) > 0:
-            qp_indices.append(i)
-            nn_indices.append(np.sort(neighbors))
+    query_k = k + 1 if remove_qp else k
+    query_k = min(query_k, coords_nn.shape[0])
+    kdt = sn.KDTree(coords_nn)
+    nn_dist, nn_idx = kdt.query(coords_qp, k=query_k)
+    nn_dist = np.atleast_2d(nn_dist)
+    nn_idx  = np.atleast_2d(nn_idx)
+    qp_idx  = np.arange(nn_idx.shape[0])
+    if remove_qp:
+        nn_dist = nn_dist[:, 1 : k + 1]
+        nn_idx  = nn_idx[:, 1 : k + 1]
+    return qp_idx, nn_idx, nn_dist, nn_dist.shape[1]
 
-    return qp_indices, nn_indices
 
-
-def get_nn_within_distance(feature_motl, radius, unique_only=True):
-    """Get nearest neighbors within a specified distance from a set of coordinates.
+def find_nn_within_radius(
+    coords_qp: ArrayLike,
+    coords_nn: ArrayLike,
+    radius: float,
+    remove_qp: bool = False,
+    qp_labels: np.ndarray | None = None,
+    nn_labels: np.ndarray | None = None,
+) -> tuple[list[int], list[np.ndarray]]:
+    """Radius search on raw coordinate arrays.
 
     Parameters
     ----------
-    feature_motl : cryomotl.Motl
-        A motl for which each particle should be analyzed.
+    coords_qp, coords_nn : numpy.ndarray
+        Shapes ``(N, 3)`` and ``(M, 3)``.
     radius : float
-        The distance within which to search for nearest neighbors.
+        Search radius (same units as the coordinates).
+    remove_qp : bool, default=False
+        Drop self-matches (only meaningful when query and reference are the
+        same set).
+    qp_labels : numpy.ndarray or None, optional
+        Shape ``(N,)``.  Label for each query particle.
+    nn_labels : numpy.ndarray or None, optional
+        Shape ``(M,)``.  Label for each candidate.  When both *qp_labels* and
+        *nn_labels* are given, candidate ``j`` is excluded from query ``i``'s
+        result when ``nn_labels[j] == qp_labels[i]``.
+
+    Returns
+    -------
+    qp_idx : list of int
+        Query indices that have at least one neighbor.
+    nn_idx : list of numpy.ndarray
+        For each kept query index, the sorted neighbor indices.
+    """
+    coords_qp = np.atleast_2d(coords_qp)
+    coords_nn = np.atleast_2d(coords_nn)
+    kdt = sn.KDTree(coords_nn)
+    raw = kdt.query_radius(coords_qp, radius)
+
+    qp_idx = []
+    nn_idx = []
+    for i, neighbors in enumerate(raw):
+        if remove_qp:
+            neighbors = neighbors[neighbors != i]
+        if qp_labels is not None and nn_labels is not None:
+            neighbors = neighbors[nn_labels[neighbors] != qp_labels[i]]
+        if len(neighbors) > 0:
+            qp_idx.append(i)
+            nn_idx.append(np.sort(neighbors))
+    return qp_idx, nn_idx
+
+
+def find_nn_within_self(
+    coords: ArrayLike,
+    radius: float,
+    unique_only: bool = True,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Radius self-NN: each particle's neighbors within `radius`.
+
+    Parameters
+    ----------
+    coords : numpy.ndarray
+        Shape ``(N, 3)``.
+    radius : float
+        Search radius.
     unique_only : bool, default=True
-        If True, only unique nearest neighbors are returned. Default is True.
+        Deduplicate symmetric pairs (so pair ``(i, j)`` is reported once).
+
+    Returns
+    -------
+    center_idx : numpy.ndarray or list of int
+    nn_idx : list of numpy.ndarray
+        Per-center neighbor indices (self excluded).
+    """
+
+    def _unique_arrays(list_of_arrays):
+        seen, out = set(), []
+        for la in list_of_arrays:
+            t = tuple(la)
+            if t not in seen:
+                out.append(la)
+                seen.add(t)
+        return out
+
+    coords = np.atleast_2d(coords)
+    kdt = sn.KDTree(coords)
+    nn_idx = kdt.query_radius(coords, radius)
+
+    ordered_idx = np.arange(nn_idx.shape[0])
+    keep = [i for i, row in zip(ordered_idx, nn_idx) if len(row) > 1]
+    nn_indices = nn_idx[keep]
+
+    if unique_only:
+        sorted_rows = [np.sort(row) for row in nn_indices]
+        sorted_rows = _unique_arrays(sorted_rows)
+        center_idx = np.array([row[0] for row in sorted_rows])
+        nn_idx_out = [row[1:] for row in sorted_rows]
+    else:
+        center_idx = np.array(keep)
+        nn_idx_out = [
+            np.array([e for e in row if e != center_idx[i]])
+            for i, row in enumerate(nn_indices)
+        ]
+
+    return center_idx, nn_idx_out
+
+
+def nms_by_distance(
+    coords: ArrayLike,
+    scores: ArrayLike,
+    distance: float,
+    keep_greater: bool = True,
+) -> np.ndarray:
+    """Greedy non-maximum suppression by Euclidean distance.
+
+    Walks through the points in score order and keeps the current one, then
+    suppresses all not-yet-suppressed points within *distance* of it. Identical
+    in spirit to bounding-box NMS in object detection, only the suppression
+    criterion is pairwise Euclidean distance rather than IoU.
+
+    Parameters
+    ----------
+    coords : array-like
+        Shape ``(N, 3)``. Point positions.
+    scores : array-like
+        Shape ``(N,)``. Per-point score used to break ties.
+    distance : float
+        Suppression radius. Points within this distance of a kept point
+        are removed.
+    keep_greater : bool, default=True
+        When ``True``, points are visited in descending score order, so the
+        highest-scoring point in each cluster survives. When ``False``,
+        ascending order; the lowest-scoring point survives.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean keep-mask of shape ``(N,)``.
+    """
+    coords = np.asarray(coords)
+    scores = np.asarray(scores)
+    n = coords.shape[0]
+
+    sort_idx = np.argsort(scores)
+    if keep_greater:
+        sort_idx = sort_idx[::-1]
+
+    keep = np.ones(n, dtype=bool)
+    for j in sort_idx:
+        if not keep[j]:
+            continue
+        dist = geom.point_pairwise_dist(coords[j, :], coords)
+        within = dist < distance
+        within[j] = False  # never suppress the current point
+        keep[within] = False
+
+    return keep
+
+
+def centered_nn_coords(
+    coords_qp: ArrayLike,
+    qp_idx: ArrayLike,
+    coords_nn: ArrayLike,
+    nn_idx: ArrayLike,
+    pixel_size: float = 1.0,
+) -> np.ndarray:
+    """Per-pair centered coordinates: ``coords_nn[nn_idx] - coords_qp[qp_idx]``.
+
+    Parameters
+    ----------
+    coords_qp, coords_nn : numpy.ndarray
+        Shapes ``(N, 3)`` and ``(M, 3)``.
+    qp_idx : numpy.ndarray
+        Shape ``(N,)``.
+    nn_idx : numpy.ndarray
+        Shape ``(N, k)``.
+    pixel_size : float, default=1.0
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(N * k, 3)``.
+    """
+    nn_idx = np.atleast_2d(nn_idx)
+    k = nn_idx.shape[1]
+    qp_expanded = np.repeat(qp_idx, k)
+    nn_flat = nn_idx.reshape(-1)
+    return (coords_nn[nn_flat] - coords_qp[qp_expanded]) * pixel_size
+
+
+def rotated_nn_coords(
+    centered_coords: ArrayLike,
+    qp_angles_per_pair: ArrayLike,
+) -> np.ndarray:
+    """Express centered NN coordinates in the local frame of each query point.
+
+    Parameters
+    ----------
+    centered_coords : numpy.ndarray
+        Shape ``(M, 3)``.
+    qp_angles_per_pair : numpy.ndarray
+        Shape ``(M, 3)``, zxz Euler degrees.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape ``(M, 3)``.
+    """
+    inv_angles = -qp_angles_per_pair[:, [2, 1, 0]]
+    rot = srot.from_euler("zxz", angles=inv_angles, degrees=True)
+    return rot.apply(centered_coords)
+
+
+def angular_distances(
+    qp_angles_per_pair: ArrayLike,
+    nn_angles_per_pair: ArrayLike,
+    rotation_type: RotationDistanceType = "angular_distance",
+) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-pair angular distances between qp and nn rotations.
+
+    Parameters
+    ----------
+    qp_angles_per_pair, nn_angles_per_pair : numpy.ndarray
+        Shape ``(M, 3)``, zxz Euler in degrees.
+    rotation_type : str, default='angular_distance'
+        One of ``{"all", "angular_distance", "cone_distance", "in_plane_distance"}``.
+
+    Returns
+    -------
+    numpy.ndarray (or tuple of three for ``rotation_type='all'``)
+    """
+    qp = srot.from_euler("zxz", np.asarray(qp_angles_per_pair, dtype=float), degrees=True)
+    nn = srot.from_euler("zxz", np.asarray(nn_angles_per_pair, dtype=float), degrees=True)
+    return geom.compare_rotations(qp, nn, rotation_type=rotation_type)
+
+
+def relative_rotations(
+    qp_angles_per_pair: ArrayLike,
+    nn_angles_per_pair: ArrayLike,
+) -> srot:
+    """Return the qp→nn relative rotation as a scipy ``Rotation`` object.
+
+    Computes ``R_qp⁻¹ · R_nn`` for each pair, i.e. the rotation that
+    transforms the qp orientation into the nn orientation.
+
+    Parameters
+    ----------
+    qp_angles_per_pair : numpy.ndarray
+        Shape ``(M, 3)``, zxz Euler angles in degrees.
+    nn_angles_per_pair : numpy.ndarray
+        Shape ``(M, 3)``, zxz Euler angles in degrees.
+
+    Returns
+    -------
+    scipy.spatial.transform.Rotation
+        Length-``M`` Rotation object.
+    """
+    inv_qp = -qp_angles_per_pair[:, [2, 1, 0]]
+    rot_qp_to_zero = srot.from_euler("zxz", angles=inv_qp, degrees=True)
+    rot_nn = srot.from_euler("zxz", angles=nn_angles_per_pair, degrees=True)
+    return rot_qp_to_zero * rot_nn
+
+
+def rotations_to_unit_vectors(rotations: srot) -> tuple[np.ndarray, np.ndarray]:
+    """Convert rotations to their representative unit vectors and Euler angles.
+
+    Parameters
+    ----------
+    rotations : scipy.spatial.transform.Rotation
+        Length-``M`` Rotation object.
+
+    Returns
+    -------
+    points_on_sphere : numpy.ndarray
+        Shape ``(M, 3)``.  Unit vectors on the sphere obtained by applying
+        each rotation to a reference direction.
+    euler_angles : numpy.ndarray
+        Shape ``(M, 3)``.  zxz Euler angles in degrees.
+    """
+    points = geom.rotations_to_z_normals(rotations)
+    angles = rotations.as_euler("zxz", degrees=True)
+    return points, angles
+
+
+# =============================================================================
+# NearestNeighbors class
+# =============================================================================
+
+
+class NearestNeighbors:
+    """Container holding a per-pair NN DataFrame for one or two motls.
+
+    Parameters
+    ----------
+    input_data : str, Motl or list of (str / Motl), optional
+        A single motl (or path) or a list of motls. If a single motl is
+        given, NN search is run on that motl against itself (with
+        ``remove_qp`` forced to True). If a list is given, the first
+        element is the query and each subsequent element is searched
+        against the query.
+    column_name : str, default='tomo_id'
+        Column name used to partition particles before NN search; only
+        particles sharing the same value (e.g. same tomogram) are paired.
+    nn_type : NNType, default='closest_dist'
+        Search mode -- one of {"closest_dist", "radius"}.
+    type_param : int or float, optional
+        Parameter for the search mode. For ``"closest_dist"`` it is the
+        number K of nearest neighbours to keep per query (cast to int).
+        For ``"radius"`` it is the search radius in voxels. Defaults to 1
+        (or 1 voxel) when omitted.
+    remove_qp : bool, optional
+        Drop the query particle from its own neighbour set. Forced True
+        when ``input_data`` is a single motl. Defaults to None (False
+        unless self-pairing).
+    remove_duplicates : bool, default=False
+        Drop duplicate ``(qp_id, nn_id)`` pairs from the resulting table.
+    paired : bool, default=False
+        If True, angles are taken from ``motl_a`` only (entry/exit pairs).
+    exclude_column_name : str or None, default=None
+        When set, NN candidates sharing the query particle's value in this
+        column are excluded from the result.  See also :meth:`add_motl_columns`.
+
+    Notes
+    -----
+    ``self.motls`` holds live references to the loaded Motl objects
+    (``motls[0]`` = query, ``motls[1:]`` = neighbour motls).  Mutating the
+    originals is visible here; call ``motl.copy()`` explicitly if you need a
+    snapshot.
+    """
+
+    _QP_COORD_COLS = ["qp_coord_x", "qp_coord_y", "qp_coord_z"]
+    _NN_COORD_COLS = ["nn_coord_x", "nn_coord_y", "nn_coord_z"]
+    _QP_ANGLE_COLS = ["qp_angles_phi", "qp_angles_theta", "qp_angles_psi"]
+    _NN_ANGLE_COLS = ["nn_angles_phi", "nn_angles_theta", "nn_angles_psi"]
+    _NORM_COORD_COLS = ["norm_nn_x", "norm_nn_y", "norm_nn_z"]
+    _ROT_COORD_COLS = ["rot_nn_x", "rot_nn_y", "rot_nn_z"]
+
+    @staticmethod
+    def default_feature_columns(df: "pd.DataFrame") -> list[str]:
+        """Columns of *df* that are meaningful as clustering / PCA features."""
+        _ID_COLS = frozenset({"motl_id", "qp_id", "nn_id", "qp_subtomo_id", "nn_subtomo_id"})
+        _MEASUREMENT_COLS = frozenset(
+            NearestNeighbors._QP_COORD_COLS + NearestNeighbors._NN_COORD_COLS
+            + NearestNeighbors._QP_ANGLE_COLS + NearestNeighbors._NN_ANGLE_COLS
+            + NearestNeighbors._NORM_COORD_COLS + NearestNeighbors._ROT_COORD_COLS
+            + ["nn_dist"]
+        )
+        return [c for c in df.columns if c in _MEASUREMENT_COLS and c not in _ID_COLS]
+
+    def __init__(
+        self,
+        input_data: cryomotl.MotlSource | list[cryomotl.MotlSource] | None = None,
+        column_name: MotlColumn = "tomo_id",
+        nn_type: NNType = "closest_dist",
+        type_param: float | None = None,
+        remove_qp: bool | None = None,
+        remove_duplicates: bool = False,
+        paired: bool = False,
+        exclude_column_name: MotlColumn | None = None,
+    ) -> None:
+        if input_data is None:
+            self.features = None
+            self.df = None
+            self.motls = None
+            self.column_name = column_name
+            self.paired = paired
+            self.exclude_column_name = exclude_column_name
+            return
+
+        self.column_name = column_name
+        self.paired = paired
+        self.exclude_column_name = exclude_column_name
+
+        if exclude_column_name is not None and exclude_column_name == column_name:
+            import warnings
+            warnings.warn(
+                f"exclude_column_name={exclude_column_name!r} is the same as column_name; "
+                "this excludes the entire partition (all candidates share the feature label).",
+                UserWarning, stacklevel=2,
+            )
+
+        if not isinstance(input_data, list):
+            motl_list = [cryomotl.Motl.load(input_data), cryomotl.Motl.load(input_data)]
+            single_motl = True
+        else:
+            motl_list = [cryomotl.Motl.load(m) for m in input_data]
+            single_motl = False
+
+        single_motl = bool(remove_qp) or single_motl
+
+        features = motl_list[0].get_unique_values(column_name)
+        for m in motl_list[1:]:
+            features = np.intersect1d(features, m.get_unique_values(column_name), assume_unique=True)
+
+        columns = [
+            "motl_id", column_name,
+            "qp_id", "qp_subtomo_id",
+            "nn_id", "nn_subtomo_id",
+            *self._QP_ANGLE_COLS, *self._QP_COORD_COLS,
+            *self._NN_ANGLE_COLS, *self._NN_COORD_COLS,
+        ]
+        if nn_type == "closest_dist":
+            columns.append("nn_dist")
+
+        # Pre-extract per-motl arrays once; slice per feature via groupby indices
+        # to avoid repeated get_motl_subset / get_coordinates / get_angles calls.
+        _m_coords   = [m.get_coordinates()               for m in motl_list]
+        _m_angles   = [m.get_angles()                    for m in motl_list]
+        _m_subtomos = [m.df["subtomo_id"].values         for m in motl_list]
+        _m_labels   = [
+            m.df[exclude_column_name].values if exclude_column_name else None
+            for m in motl_list
+        ]
+        _m_groups   = [dict(m.df.groupby(column_name).indices) for m in motl_list]
+
+        results = []
+        for f in features:
+            qp_rows     = _m_groups[0][f]
+            qp_subtomos = _m_subtomos[0][qp_rows]
+            qp_coord    = _m_coords[0][qp_rows]
+            qp_angles   = _m_angles[0][qp_rows]
+            qp_labels   = _m_labels[0][qp_rows] if _m_labels[0] is not None else None
+
+            for motl_idx in range(1, len(motl_list)):
+                nn_rows     = _m_groups[motl_idx][f]
+                nn_subtomos = _m_subtomos[motl_idx][nn_rows]
+                nn_coord    = _m_coords[motl_idx][nn_rows]
+                nn_angles   = qp_angles if paired else _m_angles[motl_idx][nn_rows]
+                nn_labels   = _m_labels[motl_idx][nn_rows] if _m_labels[motl_idx] is not None else None
+
+                if nn_type == "closest_dist":
+                    # type_param is the K of K-nearest neighbours; sklearn's
+                    # kneighbors needs an int, but the GUI form yields a float.
+                    nn_count = int(type_param) if type_param else 1
+                    qp_idx, nn_idx, nn_dist, _ = find_nn_indices(
+                        qp_coord, nn_coord, k=nn_count,
+                        remove_qp=single_motl or paired,
+                        qp_labels=qp_labels, nn_labels=nn_labels,
+                    )
+                    stacked = self._stack_nn_results(
+                        motl_idx, column_name, f, qp_idx, nn_idx,
+                        qp_subtomos, nn_subtomos,
+                        qp_angles, nn_angles,
+                        qp_coord, nn_coord,
+                        nn_dist=nn_dist,
+                    )
+                elif nn_type == "radius":
+                    radius = type_param or 1
+                    qp_idx, nn_idx_list = find_nn_within_radius(
+                        qp_coord, nn_coord, radius=radius,
+                        remove_qp=single_motl or paired,
+                        qp_labels=qp_labels, nn_labels=nn_labels,
+                    )
+                    stacked = self._stack_nn_results_radius(
+                        motl_idx, column_name, f, qp_idx, nn_idx_list,
+                        qp_subtomos, nn_subtomos,
+                        qp_angles, nn_angles,
+                        qp_coord, nn_coord,
+                    )
+                else:
+                    raise ValueError(
+                        f"The type {nn_type} is not supported, choose between 'closest_dist' and 'radius'. "
+                        "For ordered pairing use NearestNeighbors.ordered_pairs()."
+                    )
+
+                if stacked is not None:
+                    results.append(stacked)
+
+        if not results:
+            self.df = pd.DataFrame(columns=columns)
+        else:
+            merged = {col: np.concatenate([r[col] for r in results]) for col in results[0]}
+            self.df = pd.DataFrame(merged, columns=columns)
+
+        int_cols = ["motl_id", column_name, "qp_id", "qp_subtomo_id", "nn_id", "nn_subtomo_id"]
+        float_cols = [
+            *self._QP_ANGLE_COLS, *self._QP_COORD_COLS,
+            *self._NN_ANGLE_COLS, *self._NN_COORD_COLS,
+        ]
+        if nn_type == "closest_dist":
+            float_cols.append("nn_dist")
+        if not self.df.empty:
+            self.df = self.df.astype(
+                {**{c: np.int32 for c in int_cols}, **{c: np.float32 for c in float_cols}}
+            )
+
+        if remove_duplicates:
+            self.df = self.drop_symmetric_duplicates()
+        self.features = features
+        self.motls = motl_list
+
+    @staticmethod
+    def ordered_pairs(
+        motl: "cryomotl.MotlSource",
+        group_column: "MotlColumn",
+        order_column: "MotlColumn",
+        *,
+        step: int = 1,
+        topology: str = "linear",
+        ring_size: int | None = None,
+        gaps: str = "full",
+        sort_first: bool = True,
+    ) -> "NearestNeighbors":
+        """Pair ordered particles within each group without any neighbour search.
+
+        Within each group (identified by *group_column*), particles are sorted
+        by *order_column* and each particle is paired with the one *step*
+        positions further along.  Pairs are one-directional (*i* → *i + step*);
+        reciprocal duplicates are impossible by construction for linear topology,
+        and are suppressed for circular topology when they arise.
+
+        Parameters
+        ----------
+        motl : MotlSource
+            The particle list to pair.
+        group_column : MotlColumn
+            Column identifying the group (e.g. chain, object or ring id).
+            **Required** — there is no default.
+        order_column : MotlColumn
+            Column encoding the position along the sequence (e.g. ``"geom1"``).
+            **Required** — there is no default.
+        step : int, default=1
+            How far along the sequence the partner lies.
+        topology : {'linear', 'circular'}, default='linear'
+            ``"linear"`` — the last *step* particles in each group have no
+            partner and are dropped; the count is in ``result.unpaired_count``.
+            ``"circular"`` — the sequence wraps: the particle with the highest
+            order value pairs toward the lowest, using *ring_size* to determine
+            the wrap.  A ring of *n* at step 1 gives *n* pairs including the
+            wrap pair; at step *n*/2 gives *n*/2 pairs (duplicates suppressed).
+        ring_size : int or None, default=None
+            Number of positions in the full ring.  **Required** for
+            *topology* == ``"circular"``; raises :exc:`ValueError` otherwise.
+            Do not infer from the member count — a ring missing a subunit would
+            then wrap the wrong particles.
+        gaps : {'full', 'holey'}, default='full'
+            ``"full"`` (default) — a particle pairs only with the one whose
+            *order_column* value is exactly ``order + step`` (linear) or
+            ``(order - min_order + step) % ring_size + min_order`` (circular).
+            If that value is absent there is no pair; the count of left-unpaired
+            particles is in ``result.unpaired_count``.  Full is the default
+            because pairing across a gap changes what *step* means — 1→3 looks
+            identical to 1→2 in the output; holey is opt-in.
+            ``"holey"`` — pairs are formed by sorted position: position *i*
+            pairs with position *i + step* (linear) or *(i + step) % n*
+            (circular), regardless of order-value gaps.  No gap-size column is
+            added; the output does not distinguish a gapped pair from a
+            contiguous one.
+        sort_first : bool, default=True
+            Sort by *group_column* then *order_column* before pairing.  Set to
+            ``False`` only when the data is guaranteed to be already sorted —
+            this is a performance option and **silently produces wrong pairs**
+            if the data is not actually sorted.
+
+        Returns
+        -------
+        NearestNeighbors
+            Instance with ``.df`` in the same column shape as
+            ``"closest_dist"`` output (including ``nn_dist`` as Euclidean
+            distance between paired particles).  Nothing filters on ``nn_dist``.
+            ``result.unpaired_count`` holds the number of particles that had no
+            partner (always 0 for holey and circular-full when all ring
+            positions are present).
+
+        Raises
+        ------
+        ValueError
+            If *topology* == ``"circular"`` and *ring_size* is ``None``.
+        ValueError
+            If a group contains duplicate *order_column* values.
+
+        Notes
+        -----
+        ``ordered_pairs`` is **not** ``@gui_exposed`` — it is a static method
+        and does not fit the GUI motl-source pattern.  Expose it via a
+        module-level wrapper if GUI access is needed.
+
+        Duplicate order values within a group raise :exc:`ValueError` because
+        the target lookup is ambiguous.
+        """
+        if topology == "circular" and ring_size is None:
+            raise ValueError(
+                "ring_size is required for topology='circular'. "
+                "Do not infer it from the member count — a ring missing a "
+                "subunit has fewer members than positions and would wrap wrong."
+            )
+
+        motl_obj = cryomotl.Motl.load(motl)
+        n_total = len(motl_obj.df)
+
+        coords_all   = motl_obj.get_coordinates()
+        angles_all   = motl_obj.get_angles()
+        subtomos_all = motl_obj.df["subtomo_id"].values
+        grp_all      = motl_obj.df[group_column].values
+        ord_all      = motl_obj.df[order_column].values
+
+        if sort_first:
+            sorted_pos = np.lexsort((ord_all, grp_all))
+        else:
+            sorted_pos = np.arange(n_total)
+
+        coords   = coords_all[sorted_pos]
+        angles   = angles_all[sorted_pos]
+        subtomos = subtomos_all[sorted_pos]
+        grp      = grp_all[sorted_pos]
+        ord_     = ord_all[sorted_pos]
+
+        columns = [
+            "motl_id", group_column,
+            "qp_id", "qp_subtomo_id",
+            "nn_id", "nn_subtomo_id",
+            *NearestNeighbors._QP_ANGLE_COLS, *NearestNeighbors._QP_COORD_COLS,
+            *NearestNeighbors._NN_ANGLE_COLS, *NearestNeighbors._NN_COORD_COLS,
+            "nn_dist",
+        ]
+
+        results: list[dict] = []
+        unpaired_count = 0
+        terminal_count = 0
+
+        g_unique, g_starts = np.unique(grp, return_index=True)
+        g_ends = np.append(g_starts[1:], n_total)
+
+        for g_val, g_start, g_end in zip(g_unique, g_starts, g_ends):
+            n_g  = int(g_end - g_start)
+            gc   = coords[g_start:g_end]
+            ga   = angles[g_start:g_end]
+            gs   = subtomos[g_start:g_end]
+            go   = ord_[g_start:g_end]
+
+            if len(np.unique(go)) < n_g:
+                _u_go, _u_cnt = np.unique(go, return_counts=True)
+                _dupes = sorted(_u_go[_u_cnt > 1].tolist())
+                raise ValueError(
+                    f"Group {g_val!r} (column {group_column!r}) has duplicate "
+                    f"'{order_column}' values: {_dupes}. "
+                    "Ordered pairing is ambiguous with duplicate order values."
+                )
+
+            pi_list: list[int] = []
+            pj_list: list[int] = []
+            order_to_local = {float(o): i for i, o in enumerate(go)}
+
+            if gaps == "full":
+                if topology == "linear":
+                    max_o = float(go.max())
+                    for i, o in enumerate(go):
+                        target = float(o) + step
+                        if target in order_to_local:
+                            pi_list.append(i)
+                            pj_list.append(order_to_local[target])
+                        elif target > max_o:
+                            terminal_count += 1  # structural end of chain, not a gap
+                        else:
+                            unpaired_count += 1  # genuine gap: target absent within range
+
+                else:  # circular full: all absent targets are genuine gaps (no terminals)
+                    min_o = float(go.min())
+                    needs_dedup = (2 * step) % ring_size == 0
+                    for i, o in enumerate(go):
+                        o_norm = float(o) - min_o
+                        t_norm = (o_norm + step) % ring_size
+                        target = t_norm + min_o
+                        if target not in order_to_local:
+                            unpaired_count += 1
+                            continue
+                        if needs_dedup and o_norm > t_norm:
+                            continue  # reverse already included
+                        pi_list.append(i)
+                        pj_list.append(order_to_local[target])
+
+            else:  # holey — value-based lookup; missing target → advance to next present
+                sorted_go = np.sort(go.astype(float))
+
+                if topology == "linear":
+                    for i, o in enumerate(go):
+                        target = float(o) + step
+                        idx = np.searchsorted(sorted_go, target)
+                        if idx < len(sorted_go):
+                            pi_list.append(i)
+                            pj_list.append(order_to_local[float(sorted_go[idx])])
+                        else:
+                            terminal_count += 1  # no present value at or beyond target
+
+                else:  # circular holey: value-based with ring_size wrap + seen-pair dedup
+                    min_o = float(go.min())
+                    seen: set[tuple[int, int]] = set()
+                    for i, o in enumerate(go):
+                        o_norm = float(o) - min_o
+                        t_norm_init = (o_norm + step) % ring_size
+                        eff_t_norm = None
+                        for k in range(ring_size):
+                            cand_norm = (t_norm_init + k) % ring_size
+                            if cand_norm == o_norm:
+                                break  # wrapped to self — no partner
+                            if float(cand_norm + min_o) in order_to_local:
+                                eff_t_norm = cand_norm
+                                break
+                        if eff_t_norm is None:
+                            continue
+                        j = order_to_local[float(eff_t_norm + min_o)]
+                        pair_key = (min(i, j), max(i, j))
+                        if pair_key in seen:
+                            continue
+                        seen.add(pair_key)
+                        pi_list.append(i)
+                        pj_list.append(j)
+
+            if not pi_list:
+                continue
+
+            pi_arr = np.array(pi_list, dtype=np.intp)
+            pj_arr = np.array(pj_list, dtype=np.intp)
+            n_pairs = len(pi_arr)
+            diffs = gc[pj_arr] - gc[pi_arr]
+
+            results.append({
+                "motl_id":         np.ones(n_pairs, dtype=np.int32),
+                group_column:      np.full(n_pairs, g_val),
+                "qp_id":           (g_start + pi_arr).astype(np.int32),
+                "qp_subtomo_id":   gs[pi_arr],
+                "nn_id":           (g_start + pj_arr).astype(np.int32),
+                "nn_subtomo_id":   gs[pj_arr],
+                "qp_angles_phi":   ga[pi_arr, 0],
+                "qp_angles_theta": ga[pi_arr, 1],
+                "qp_angles_psi":   ga[pi_arr, 2],
+                "qp_coord_x":      gc[pi_arr, 0],
+                "qp_coord_y":      gc[pi_arr, 1],
+                "qp_coord_z":      gc[pi_arr, 2],
+                "nn_angles_phi":   ga[pj_arr, 0],
+                "nn_angles_theta": ga[pj_arr, 1],
+                "nn_angles_psi":   ga[pj_arr, 2],
+                "nn_coord_x":      gc[pj_arr, 0],
+                "nn_coord_y":      gc[pj_arr, 1],
+                "nn_coord_z":      gc[pj_arr, 2],
+                "nn_dist":         np.linalg.norm(diffs, axis=1),
+            })
+
+        obj = NearestNeighbors.__new__(NearestNeighbors)
+        obj.column_name       = group_column
+        obj.paired            = False
+        obj.exclude_column_name = None
+        obj.motls             = [motl_obj, motl_obj]
+        obj.features          = g_unique
+        obj.unpaired_count    = unpaired_count
+        obj.terminal_count    = terminal_count
+
+        if not results:
+            obj.df = pd.DataFrame(columns=columns)
+        else:
+            merged = {col: np.concatenate([r[col] for r in results]) for col in columns}
+            obj.df = pd.DataFrame(merged, columns=columns)
+
+        int_cols   = ["motl_id", group_column, "qp_id", "qp_subtomo_id", "nn_id", "nn_subtomo_id"]
+        float_cols = [
+            *NearestNeighbors._QP_ANGLE_COLS, *NearestNeighbors._QP_COORD_COLS,
+            *NearestNeighbors._NN_ANGLE_COLS, *NearestNeighbors._NN_COORD_COLS,
+            "nn_dist",
+        ]
+        if not obj.df.empty:
+            obj.df = obj.df.astype(
+                {**{c: np.int32 for c in int_cols}, **{c: np.float32 for c in float_cols}}
+            )
+
+        return obj
+
+    @staticmethod
+    def _stack_nn_results(
+        motl_idx: int,
+        column_name: str,
+        column_value: Any,
+        qp_idx: np.ndarray,
+        nn_idx: np.ndarray,
+        qp_subtomos: np.ndarray,
+        nn_subtomos: np.ndarray,
+        qp_angles: np.ndarray,
+        nn_angles: np.ndarray,
+        qp_coord: np.ndarray,
+        nn_coord: np.ndarray,
+        nn_dist: np.ndarray,
+    ) -> dict | None:
+        """Stack k-NN pair data into a column-keyed dict of 1-D arrays.
+
+        Returns ``None`` when *k* is 0.  Each value is a 1-D array of length
+        ``N * k``; integer columns are returned as integer arrays (no float64
+        detour).
+        """
+        nn_idx  = np.atleast_2d(nn_idx)
+        nn_dist = np.atleast_2d(nn_dist)
+        k = nn_idx.shape[1]
+        if k == 0:
+            return None
+        qp_expanded = np.tile(qp_idx, k)
+        nn_flat     = nn_idx.T.reshape(-1)
+        n_pairs     = len(nn_flat)
+        qa = qp_angles[qp_expanded]
+        qc = qp_coord[qp_expanded]
+        na = nn_angles[nn_flat]
+        nc = nn_coord[nn_flat]
+        return {
+            "motl_id":           np.repeat(motl_idx,     n_pairs),
+            column_name:         np.repeat(column_value, n_pairs),
+            "qp_id":             qp_expanded,
+            "qp_subtomo_id":     qp_subtomos[qp_expanded],
+            "nn_id":             nn_flat,
+            "nn_subtomo_id":     nn_subtomos[nn_flat],
+            "qp_angles_phi":     qa[:, 0],
+            "qp_angles_theta":   qa[:, 1],
+            "qp_angles_psi":     qa[:, 2],
+            "qp_coord_x":        qc[:, 0],
+            "qp_coord_y":        qc[:, 1],
+            "qp_coord_z":        qc[:, 2],
+            "nn_angles_phi":     na[:, 0],
+            "nn_angles_theta":   na[:, 1],
+            "nn_angles_psi":     na[:, 2],
+            "nn_coord_x":        nc[:, 0],
+            "nn_coord_y":        nc[:, 1],
+            "nn_coord_z":        nc[:, 2],
+            "nn_dist":           nn_dist.T.reshape(-1),
+        }
+
+    @staticmethod
+    def _stack_nn_results_radius(
+        motl_idx: int,
+        column_name: str,
+        column_value: Any,
+        qp_idx: list[int] | np.ndarray,
+        nn_idx_list: list[np.ndarray],
+        qp_subtomos: np.ndarray,
+        nn_subtomos: np.ndarray,
+        qp_angles: np.ndarray,
+        nn_angles: np.ndarray,
+        qp_coord: np.ndarray,
+        nn_coord: np.ndarray,
+    ) -> dict | None:
+        """Stack radius-NN pair data into a column-keyed dict of 1-D arrays.
+
+        Returns ``None`` when ``nn_idx_list`` is empty or the total neighbor
+        count is zero.
+        """
+        if not nn_idx_list:
+            return None
+        counts = np.array([len(n) for n in nn_idx_list])
+        if counts.sum() == 0:
+            return None
+        qp_idx_arr  = np.asarray(qp_idx)
+        nn_flat     = np.concatenate(nn_idx_list).astype(int)
+        qp_expanded = np.repeat(qp_idx_arr, counts)
+        n_pairs     = counts.sum()
+        qa = qp_angles[qp_expanded]
+        qc = qp_coord[qp_expanded]
+        na = nn_angles[nn_flat]
+        nc = nn_coord[nn_flat]
+        return {
+            "motl_id":           np.repeat(motl_idx,     n_pairs),
+            column_name:         np.repeat(column_value, n_pairs),
+            "qp_id":             qp_expanded,
+            "qp_subtomo_id":     qp_subtomos[qp_expanded],
+            "nn_id":             nn_flat,
+            "nn_subtomo_id":     nn_subtomos[nn_flat],
+            "qp_angles_phi":     qa[:, 0],
+            "qp_angles_theta":   qa[:, 1],
+            "qp_angles_psi":     qa[:, 2],
+            "qp_coord_x":        qc[:, 0],
+            "qp_coord_y":        qc[:, 1],
+            "qp_coord_z":        qc[:, 2],
+            "nn_angles_phi":     na[:, 0],
+            "nn_angles_theta":   na[:, 1],
+            "nn_angles_psi":     na[:, 2],
+            "nn_coord_x":        nc[:, 0],
+            "nn_coord_y":        nc[:, 1],
+            "nn_coord_z":        nc[:, 2],
+        }
+
+    def drop_symmetric_duplicates(self) -> pd.DataFrame:
+        """Return a copy of ``self.df`` with symmetric (a, b)/(b, a) pairs deduped."""
+        a  = self.df["qp_subtomo_id"].values
+        b  = self.df["nn_subtomo_id"].values
+        lo = np.minimum(a, b)
+        hi = np.maximum(a, b)
+        pairs = np.empty(len(lo), dtype=[("lo", lo.dtype), ("hi", hi.dtype)])
+        pairs["lo"] = lo
+        pairs["hi"] = hi
+        _, keep_idx = np.unique(pairs, return_index=True)
+        return self.df.iloc[np.sort(keep_idx)]
+
+    def get_unique_values(self) -> np.ndarray:
+        """Return the feature values present in ``self.df``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Unique feature values (e.g. tomogram IDs).
+        """
+        return self.features
+
+    def get_nn_subset(
+        self,
+        motl_id_values: "ListLike[int]",
+        column_values: Any,
+    ) -> "NearestNeighbors":
+        """Return a new :class:`NearestNeighbors` restricted to the given subset.
+
+        Parameters
+        ----------
+        motl_id_values : int or list of int
+            ``motl_id`` values to keep.
+        column_values : scalar or list
+            Feature values (e.g. tomo IDs) to keep.
+
+        Returns
+        -------
+        NearestNeighbors
+            New instance with a filtered ``df`` and matching ``features``.
+        """
+        from cryocat.utils.classutils import as_list
+
+        sub = NearestNeighbors()
+        sub.column_name = self.column_name
+        sub.paired = self.paired
+        sub.motls = self.motls
+        motl_id_values = as_list(motl_id_values)
+        column_values = as_list(column_values)
+        sub.df = self.df[
+            (self.df["motl_id"].isin(motl_id_values))
+            & (self.df[self.column_name].isin(column_values))
+        ].copy()
+        sub.features = column_values
+        return sub
+
+    def write_out(self, file_path: PathOrStr) -> None:
+        """Write the per-pair NN table to CSV.
+
+        The ``motl_id`` and feature (``column_name``) columns are written first
+        and second so :meth:`load` can recover the feature column by position
+        regardless of any extra columns present.  Motls and metadata are not
+        stored; reattach motls via :meth:`load`.
+
+        Parameters
+        ----------
+        file_path : PathOrStr
+            Destination CSV path.
+        """
+        lead = ["motl_id", self.column_name]
+        cols = lead + [c for c in self.df.columns if c not in lead]
+        self.df[cols].to_csv(file_path, index=False)
+
+    @classmethod
+    def get_required_columns(cls, column_name: str = "tomo_id") -> list[str]:
+        """Return every column name that a saved NearestNeighbors CSV must contain."""
+        return [
+            "motl_id", column_name,
+            "qp_id", "qp_subtomo_id",
+            "nn_id", "nn_subtomo_id",
+            *cls._QP_ANGLE_COLS,
+            *cls._QP_COORD_COLS,
+            *cls._NN_ANGLE_COLS,
+            *cls._NN_COORD_COLS,
+        ]
+
+    @staticmethod
+    def check_nn_columns(df: "pd.DataFrame", column_name: str = "tomo_id") -> list[str]:
+        """Return column names required by NearestNeighbors that are missing from df."""
+        required = NearestNeighbors.get_required_columns(column_name=column_name)
+        return [c for c in required if c not in df.columns]
+
+    @classmethod
+    def load(
+        cls,
+        file_path: PathOrStr,
+        motls: "MotlSource | list[MotlSource] | None" = None,
+        column_name: "MotlColumn | None" = None,
+        paired: bool = False,
+        exclude_column_name: "MotlColumn | None" = None,
+    ) -> "NearestNeighbors":
+        """Load a ``NearestNeighbors`` instance from a CSV written by :meth:`write_out`.
+
+        Parameters
+        ----------
+        file_path : PathOrStr
+            Path to the CSV file.
+        motls : MotlSource or list of MotlSource or None, optional
+            Source motls to reattach, in the same order as the original
+            ``input_data`` (``[qp, nn1, nn2, …]``).  Pass ``None`` to get a
+            df-only instance (``motls`` will be ``None``).
+        column_name : MotlColumn or None, optional
+            Feature column used to partition the NN search.  Inferred from the
+            second column of the CSV when not given (``write_out`` guarantees
+            ``motl_id`` first and the feature column second).
+        paired : bool, default=False
+            Stored as provenance only; does not affect behaviour of the loaded
+            instance.
+        exclude_column_name : MotlColumn or None, optional
+            Stored as provenance only.
+
+        Returns
+        -------
+        NearestNeighbors
+            Loaded instance with ``df``, ``column_name``, ``features``, and
+            optionally ``motls`` populated.
+
+        Raises
+        ------
+        ValueError
+            If the first column of the CSV is not ``"motl_id"`` and
+            ``column_name`` was not supplied, or if the supplied motl list does
+            not cover all ``motl_id`` values in the table, or if any
+            ``qp_subtomo_id`` / ``nn_subtomo_id`` value is absent from the
+            corresponding source motl.
+        """
+        from cryocat.utils.classutils import as_list
+
+        df = ioutils.df_load(str(file_path))
+
+        # ── column_name recovery ─────────────────────────────────────────────
+        if column_name is None:
+            if df.columns[0] != "motl_id":
+                raise ValueError(
+                    f"First column of {file_path!r} is {df.columns[0]!r}, not 'motl_id'. "
+                    "The file does not follow the NearestNeighbors CSV convention; "
+                    "pass column_name explicitly."
+                )
+            column_name = str(df.columns[1])
+
+        # ── re-apply dtypes ──────────────────────────────────────────────────
+        int_base = ["motl_id", column_name, "qp_id", "qp_subtomo_id", "nn_id", "nn_subtomo_id"]
+        float_patterns = ("_angle", "_coord", "nn_dist")
+        int_cols = {c for c in int_base if c in df.columns}
+        float_cols = {
+            c for c in df.columns
+            if any(p in c for p in float_patterns) and c not in int_cols
+        }
+        cast = {**{c: np.int32 for c in int_cols}, **{c: np.float32 for c in float_cols}}
+        if cast:
+            df = df.astype(cast)
+
+        # ── build instance ───────────────────────────────────────────────────
+        obj = cls()
+        obj.df = df
+        obj.column_name = column_name
+        obj.paired = paired
+        obj.exclude_column_name = exclude_column_name
+        obj.features = np.unique(df[column_name].values) if not df.empty else df[column_name].values
+
+        # ── reattach motls ───────────────────────────────────────────────────
+        if motls is None:
+            obj.motls = None
+        else:
+            motl_list = [cryomotl.Motl.load(m) for m in as_list(motls)]
+            obj.motls = motl_list
+
+            # validate coverage
+            max_mid = int(df["motl_id"].max())
+            if max_mid >= len(motl_list):
+                raise ValueError(
+                    f"motl_id {max_mid} in the table requires motl_list[{max_mid}], "
+                    f"but only {len(motl_list)} motl(s) were supplied. "
+                    "Check the motl list order: [qp_motl, nn_motl1, nn_motl2, …]."
+                )
+            qp_ids = set(motl_list[0].df["subtomo_id"].values)
+            missing_qp = set(df["qp_subtomo_id"].values) - qp_ids
+            if missing_qp:
+                raise ValueError(
+                    f"{len(missing_qp)} qp_subtomo_id value(s) not found in motls[0] "
+                    f"(first missing: {next(iter(missing_qp))})."
+                )
+            for mid in df["motl_id"].unique():
+                nn_ids = set(motl_list[int(mid)].df["subtomo_id"].values)
+                mask = df["motl_id"] == mid
+                missing_nn = set(df.loc[mask, "nn_subtomo_id"].values) - nn_ids
+                if missing_nn:
+                    raise ValueError(
+                        f"{len(missing_nn)} nn_subtomo_id value(s) for motl_id={mid} "
+                        f"not found in motls[{int(mid)}] "
+                        f"(first missing: {next(iter(missing_nn))})."
+                    )
+
+        return obj
+
+    def get_normalized_coord(self, add_to_df: bool = True) -> np.ndarray:
+        """Return centered NN coordinates ``nn_coord - qp_coord``.
+
+        Parameters
+        ----------
+        add_to_df : bool, default=True
+            Store the result in ``self.df`` under columns
+            ``norm_nn_x/y/z`` for reuse.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(N, 3)``.  Coordinates are in the same units as the
+            motl (voxels unless a pixel size was applied).
+        """
+        if all(c in self.df.columns for c in self._NORM_COORD_COLS):
+            return self.df[self._NORM_COORD_COLS].to_numpy()
+        norm = (
+            self.df[self._NN_COORD_COLS].to_numpy()
+            - self.df[self._QP_COORD_COLS].to_numpy()
+        )
+        if add_to_df:
+            self.df[self._NORM_COORD_COLS] = norm
+        return norm
+
+    def get_rotated_coord(self, add_to_df: bool = True) -> np.ndarray:
+        """Return centered NN coordinates rotated into the qp local frame.
+
+        Parameters
+        ----------
+        add_to_df : bool, default=True
+            Store the result in ``self.df`` under columns
+            ``rot_nn_x/y/z`` for reuse.
+
+        Returns
+        -------
+        numpy.ndarray
+            Shape ``(N, 3)``.
+        """
+        if all(c in self.df.columns for c in self._ROT_COORD_COLS):
+            return self.df[self._ROT_COORD_COLS].to_numpy()
+        centered = self.get_normalized_coord(add_to_df=add_to_df)
+        rot = rotated_nn_coords(centered, self.df[self._QP_ANGLE_COLS].to_numpy())
+        if add_to_df:
+            self.df[self._ROT_COORD_COLS] = rot
+        return rot
+
+    def add_motl_columns(
+        self,
+        column_names: "ListLike[MotlColumn]",
+        *,
+        sides: "ListLike[str]" = ("qp", "nn"),
+        add_to_df: bool = True,
+    ) -> "NearestNeighbors":
+        """Enrich ``self.df`` with extra columns pulled from the source motls.
+
+        Parameters
+        ----------
+        column_names : str or list of str
+            One or more Motl column names to pull (e.g. ``"object_id"``).
+        sides : str or list of str, default=("qp", "nn")
+            Which side(s) to populate.  Each entry must be ``"qp"`` or ``"nn"``.
+        add_to_df : bool, default=True
+            Write the new columns into ``self.df`` and return ``self``; when
+            ``False``, return without modifying ``self.df`` (dry-run / validate).
+
+        Returns
+        -------
+        NearestNeighbors
+            ``self`` (for chaining).
+
+        Raises
+        ------
+        RuntimeError
+            When ``self.motls is None`` (instance was created with
+            ``input_data=None``).
+        KeyError
+            When a requested column is absent from a source motl.
+        """
+        from cryocat.utils.classutils import as_list
+
+        if self.motls is None:
+            raise RuntimeError(
+                "No source motls stored on this instance. "
+                "Construct NearestNeighbors with input_data != None to use add_motl_columns."
+            )
+        column_names = as_list(column_names)
+        sides = as_list(sides)
+
+        for col in column_names:
+            if "qp" in sides:
+                src = self.motls[0].df.set_index("subtomo_id")
+                if col not in src.columns:
+                    raise KeyError(f"Column {col!r} not found in query motl.")
+                self.df[f"qp_{col}"] = self.df["qp_subtomo_id"].map(src[col])
+            if "nn" in sides:
+                nn_col_data = pd.Series(index=self.df.index, dtype=object)
+                for mid in self.df["motl_id"].unique():
+                    mask = self.df["motl_id"] == mid
+                    src = self.motls[int(mid)].df.set_index("subtomo_id")
+                    if col not in src.columns:
+                        raise KeyError(f"Column {col!r} not found in motl[{int(mid)}].")
+                    nn_col_data[mask] = self.df.loc[mask, "nn_subtomo_id"].map(src[col])
+                self.df[f"nn_{col}"] = nn_col_data
+        return self
+
+    @gui_exposed(
+        label="Barycentric motl (orientation: query aligned toward centroid)",
+        returns="motl",
+    )
+    def get_barycentric_motl(self, n_neighbors: int = 1) -> "cryomotl.Motl":
+        """Return a Motl with barycentric coordinates for each query particle.
+
+        The output particle's orientation aligns the query's angles toward
+        the centroid of itself and its n_neighbors nearest neighbours.
+        Queries with fewer than n_neighbors neighbours are dropped and counted.
+        The dropped count is stored as ``_nn_dropped_count`` on the returned Motl.
+
+        Parameters
+        ----------
+        n_neighbors : int, default=1
+            Number of nearest neighbours to include per query particle.
+            Queries with fewer neighbours than this are dropped.
+        """
+        if self.df is None or self.df.empty:
+            raise ValueError("NearestNeighbors has no data.")
+        if self.motls is None:
+            raise ValueError(
+                "NearestNeighbors has no motls — barycentric motl requires "
+                "the source motls to be available (compute from pool, not loaded from file)."
+            )
+
+        col_name = self.column_name
+        _m_groups = [
+            dict(m.df.groupby(col_name).indices)
+            for m in self.motls
+        ]
+
+        has_dist = "nn_dist" in self.df.columns
+
+        qp_global_list = []
+        nn_global_rows = []
+        dropped = 0
+
+        for (feat, qp_local), grp in self.df.groupby([col_name, "qp_id"], sort=False):
+            if has_dist:
+                grp = grp.nsmallest(n_neighbors, "nn_dist")
+            else:
+                grp = grp.head(n_neighbors)
+            if len(grp) < n_neighbors:
+                dropped += 1
+                continue
+            feat_qp_rows = _m_groups[0].get(feat)
+            feat_nn_rows = _m_groups[1].get(feat)
+            if feat_qp_rows is None or feat_nn_rows is None:
+                dropped += 1
+                continue
+            global_qp = int(feat_qp_rows[int(qp_local)])
+            global_nns = [int(feat_nn_rows[int(nn_local)]) for nn_local in grp["nn_id"].values]
+            qp_global_list.append(global_qp)
+            nn_global_rows.append(global_nns)
+
+        if not qp_global_list:
+            raise ValueError(
+                f"No queries had {n_neighbors} or more neighbours after filtering. "
+                "Use a smaller n_neighbors or check the NN data."
+            )
+
+        idx = np.array(qp_global_list)
+        nn_idx = np.array(nn_global_rows)  # shape (N, n_neighbors)
+
+        result = self.motls[0].get_barycentric_motl(idx, nn_idx, nn_motl=self.motls[1])
+        result._nn_dropped_count = dropped
+        return result
+
+    def get_qp_rotations(self) -> srot:
+        """Return the query-particle rotations as a scipy ``Rotation`` object.
+
+        Returns
+        -------
+        scipy.spatial.transform.Rotation
+            Length-``N`` Rotation parsed from the zxz Euler angles stored in
+            ``self.df``.
+        """
+        return srot.from_euler("zxz", degrees=True, angles=self.df[self._QP_ANGLE_COLS].to_numpy())
+
+    def get_nn_rotations(self) -> srot:
+        """Return the nearest-neighbor rotations as a scipy ``Rotation`` object.
+
+        Returns
+        -------
+        scipy.spatial.transform.Rotation
+            Length-``N`` Rotation parsed from the zxz Euler angles stored in
+            ``self.df``.
+        """
+        return srot.from_euler("zxz", degrees=True, angles=self.df[self._NN_ANGLE_COLS].to_numpy())
+
+    def get_relative_rotations(self) -> srot:
+        """Return per-pair qp→nn relative rotations.
+
+        Returns
+        -------
+        scipy.spatial.transform.Rotation
+            Length-``N`` Rotation representing ``R_qp⁻¹ · R_nn`` for each
+            pair in ``self.df``.
+        """
+        return relative_rotations(
+            self.df[self._QP_ANGLE_COLS].to_numpy(),
+            self.df[self._NN_ANGLE_COLS].to_numpy(),
+        )
+
+    def get_angular_distances(
+        self,
+        rotation_type: RotationDistanceType = "angular_distance",
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return per-pair angular distances between qp and nn orientations.
+
+        Parameters
+        ----------
+        rotation_type : RotationDistanceType, default='angular_distance'
+            One of ``{"all", "angular_distance", "cone_distance",
+            "in_plane_distance"}``.  ``"all"`` returns a tuple of three
+            arrays.
+
+        Returns
+        -------
+        numpy.ndarray or tuple of numpy.ndarray
+            Angular distances in degrees.  Shape ``(N,)`` for a single type;
+            tuple of three ``(N,)`` arrays for ``"all"``.
+        """
+        return angular_distances(
+            self.df[self._QP_ANGLE_COLS].to_numpy(),
+            self.df[self._NN_ANGLE_COLS].to_numpy(),
+            rotation_type=rotation_type,
+        )
+
+    def to_stats_dataframe(
+        self,
+        pixel_size: float = 1.0,
+        rotation_type: RotationDistanceType = "angular_distance",
+    ) -> pd.DataFrame:
+        """Build the canonical per-pair statistics DataFrame.
+
+        Parameters
+        ----------
+        pixel_size : float, default=1.0
+            Pixel size in Å.  Distances and coordinates are multiplied by
+            this value before being stored.
+        rotation_type : str, default='angular_distance'
+            One of ``{"angular_distance", "cone_distance", "in_plane_distance"}``.
+            Determines which angular metric is stored in the ``angular_distance``
+            column.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per nearest-neighbor pair.  Columns:
+
+            ``distance``
+                Euclidean distance between qp and nn in physical units.
+            ``coord_x/y/z``
+                Centered ``nn - qp`` displacement in physical units.
+            ``coord_rx/ry/rz``
+                Displacement rotated into the qp local frame.
+            ``angular_distance``
+                Rotation distance (type controlled by *rotation_type*).
+            ``rot_x/y/z``
+                Unit-vector representation of the qp→nn relative rotation.
+            ``phi/theta/psi``
+                zxz Euler angles of the relative rotation (degrees).
+            ``subtomo_idx`` / ``subtomo_nn_idx``
+                Subtomogram IDs of qp and nn.
+            ``type``
+                Always ``"nn"``.
+
+        Raises
+        ------
+        ValueError
+            When the instance was constructed with ``nn_type='radius'`` (no
+            ``nn_dist`` column is available).
+        """
+        if "nn_dist" not in self.df.columns:
+            raise ValueError(
+                "to_stats_dataframe requires a 'closest_dist' run "
+                "(no nn_dist column in self.df)."
+            )
+        centered = self.get_normalized_coord(add_to_df=False) * pixel_size
+        rotated = rotated_nn_coords(centered, self.df[self._QP_ANGLE_COLS].to_numpy())
+        ang = angular_distances(
+            self.df[self._QP_ANGLE_COLS].to_numpy(),
+            self.df[self._NN_ANGLE_COLS].to_numpy(),
+            rotation_type=rotation_type,
+        )
+        rel = self.get_relative_rotations()
+        points, angles = rotations_to_unit_vectors(rel)
+        distance = self.df["nn_dist"].to_numpy() * pixel_size
+
+        out = pd.DataFrame({
+            "distance":         distance,
+            "coord_x":          centered[:, 0],
+            "coord_y":          centered[:, 1],
+            "coord_z":          centered[:, 2],
+            "coord_rx":         rotated[:, 0],
+            "coord_ry":         rotated[:, 1],
+            "coord_rz":         rotated[:, 2],
+            "angular_distance": ang,
+            "rot_x":            points[:, 0],
+            "rot_y":            points[:, 1],
+            "rot_z":            points[:, 2],
+            "phi":              angles[:, 0],
+            "theta":            angles[:, 1],
+            "psi":              angles[:, 2],
+            "subtomo_idx":      self.df["qp_subtomo_id"].to_numpy(),
+            "subtomo_nn_idx":   self.df["nn_subtomo_id"].to_numpy(),
+        })
+        out["type"] = "nn"
+        return out
+
+
+# =============================================================================
+# Layer 2 — motl-accepting wrappers (backward compatible)
+# =============================================================================
+
+
+def get_feature_nn_indices(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    nn_number: int = 1,
+    remove_qp: bool = False,
+    column_name: MotlColumn = "tomo_id",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """k-nearest-neighbor indices and distances for two motls.
+
+    Thin wrapper around :func:`find_nn_indices` that accepts motl paths or
+    objects instead of raw coordinate arrays.
+
+    Parameters
+    ----------
+    motl_a : str or Motl
+        Query motl.
+    motl_nn : str or Motl
+        Neighbor motl.
+    nn_number : int, default=1
+        Number of neighbors to retrieve per query point.
+    remove_qp : bool, default=False
+        Drop self-matches (use when query and neighbor are the same motl).
+    column_name : str, default='tomo_id'
+        Not used by this function; kept for API symmetry.
+
+    Returns
+    -------
+    qp_idx : numpy.ndarray
+    nn_idx : numpy.ndarray, shape ``(N, nn_number)``
+    nn_dist : numpy.ndarray, shape ``(N, nn_number)``
+    k_eff : int
+    """
+    motl_a = cryomotl.Motl.load(motl_a)
+    motl_nn = cryomotl.Motl.load(motl_nn)
+    return find_nn_indices(motl_a.get_coordinates(), motl_nn.get_coordinates(),
+                           k=nn_number, remove_qp=remove_qp)
+
+
+def get_feature_nn_within_radius(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    radius: float,
+    remove_qp: bool = False,
+) -> tuple[list[int], list[np.ndarray]]:
+    """Radius search for two motls.
+
+    Thin wrapper around :func:`find_nn_within_radius` that accepts motl paths
+    or objects instead of raw coordinate arrays.
+
+    Parameters
+    ----------
+    motl_a : str or Motl
+        Query motl.
+    motl_nn : str or Motl
+        Neighbor motl.
+    radius : float
+        Search radius in voxels.
+    remove_qp : bool, default=False
+        Drop self-matches.
+
+    Returns
+    -------
+    qp_idx : list of int
+    nn_idx : list of numpy.ndarray
+    """
+    motl_a = cryomotl.Motl.load(motl_a)
+    motl_nn = cryomotl.Motl.load(motl_nn)
+    return find_nn_within_radius(motl_a.get_coordinates(), motl_nn.get_coordinates(),
+                                 radius=radius, remove_qp=remove_qp)
+
+
+def get_nn_within_distance(
+    feature_motl: MotlSource,
+    radius: float,
+    unique_only: bool = True,
+) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Self-NN within a radius for a single motl.
+
+    Thin wrapper around :func:`find_nn_within_self`.
+
+    Parameters
+    ----------
+    feature_motl : str or Motl
+        Particle list.
+    radius : float
+        Search radius in voxels.
+    unique_only : bool, default=True
+        Deduplicate symmetric pairs so ``(i, j)`` is reported once.
 
     Returns
     -------
     center_idx : numpy.ndarray
-        An array of indices representing the center particles for which neighbors are found.
-    nn_idx : list of list of int
-        A list where each element is a list of indices of the nearest neighbors corresponding to each center index.
-
-    Notes
-    -----
-    This function uses a KDTree for efficient spatial querying of nearest neighbors. If `unique_only` is set to True,
-    it ensures that each neighbor is unique by removing duplicates.
+    nn_idx : list of numpy.ndarray
     """
-
-    def remove_duplicates(list_of_arrays):
-        unique_arrays = []
-        seen_tuples = set()
-
-        for la in list_of_arrays:
-            array_tuple = tuple(la)
-            if array_tuple not in seen_tuples:
-                unique_arrays.append(la)
-                seen_tuples.add(array_tuple)
-
-        return unique_arrays
-
-    coord = feature_motl.get_coordinates()
-    kdt_nn = sn.KDTree(coord)
-    nn_idx = kdt_nn.query_radius(coord, radius)
-
-    # create id array to check where the NN was the same particle
-    ordered_idx = np.arange(0, nn_idx.shape[0], 1)
-
-    # each particle is also part of the results -> keep only those that have more than 1 particle
-    ordered_idx = [i for i, row in zip(ordered_idx, nn_idx) if len(row) > 1]
-    nn_indices = nn_idx[ordered_idx]
-
-    if unique_only:
-        # remove duplicates: first sort in each row, then find the unique idx
-        sorted_idx = [np.sort(row) for row in nn_indices]
-        nn_indices = remove_duplicates(sorted_idx)
-        center_idx = np.array([row[0] for row in nn_indices])
-        nn_idx = [row[1:] for row in nn_indices]
-    else:
-        center_idx = ordered_idx
-        nn_idx = [[elem for elem in row if elem != center_idx[i]] for i, row in enumerate(nn_indices)]
-
-    return center_idx, nn_idx
+    feature_motl = cryomotl.Motl.load(feature_motl)
+    return find_nn_within_self(feature_motl.get_coordinates(), radius, unique_only=unique_only)
 
 
-def get_feature_nn_indices(fm_a, fm_nn, nn_number=1, remove_qp=False):
-    """Get the indices and distances of nearest neighbors for given feature coordinates.
-
-    Parameters
-    ----------
-    fm_a : cryomotl.Motl
-        A motl for which nearest neighbors are to be found.
-    fm_nn : cryomotl.Motl
-        A motl in which the nearest neighbors will be searched for.
-    nn_number : int, default=1
-        The number of nearest neighbors to retrieve for each feature. Default is 1.
-
-    Returns
-    -------
-    ordered_idx : ndarray
-        An array of indices corresponding to the ordered features in `fm_a`.
-    nn_idx : ndarray
-        A 2D array of shape (n_features, nn_count) containing the indices of the nearest neighbors for each feature
-        in `fm_a`.
-    nn_dist : ndarray
-        A 2D array of shape (n_features, nn_count) containing the distances to the nearest neighbors for each feature
-        in `fm_a`.
-    nn_count : int
-        The actual number of nearest neighbors retrieved, which is the minimum of `nn_number` and the number of
-        available neighbors.
-    remove_qp: bool, default=False
-        Whether to remove nn correspodning to the query point. Should be set to True, if the function is called on the same
-        motl.
-
-    Notes
-    -----
-    This function uses a KDTree for efficient nearest neighbor search.
-    """
-
-    coord_a = fm_a.get_coordinates()
-    coord_nn = fm_nn.get_coordinates()
-
-    query_k = nn_number + 1 if remove_qp else nn_number
-    query_k = min(query_k, coord_nn.shape[0])
-
-    kdt_nn = sn.KDTree(coord_nn)
-    nn_dist, nn_idx = kdt_nn.query(coord_a, k=query_k)
-
-    # Ensure 2D shape even if k=1
-    nn_dist = np.atleast_2d(nn_dist)
-    nn_idx = np.atleast_2d(nn_idx)
-    ordered_idx = np.arange(nn_idx.shape[0])
-
-    if remove_qp:
-        # Remove the first neighbor (distance 0) assumed to be the query point
-        nn_dist = nn_dist[:, 1 : nn_number + 1]
-        nn_idx = nn_idx[:, 1 : nn_number + 1]
-        nn_count = nn_dist.shape[1]
-    else:
-        nn_count = nn_dist.shape[1]
-
-    return ordered_idx, nn_idx, nn_dist, nn_count
-
-
-def get_nn_stats(motl_a, motl_nn, pixel_size=1.0, feature_id="tomo_id", nn_number=1, rotation_type="angular_distance"):
-    """For each particle in motl_a, this function computes nn_number nearest neighbors in motl_nn and returns the
-    associated data: distance of neighbor to query point, coordinates of nearest neighbors, coordinates of nearest neighbors
-    after being rotated with respect to the coordinate frame of the query point, angular distance between query point and
-    nearest neighbor, representations of associated rotation via rotated unit vector + Euler angles, subtomogram-id of query point
-    of its associated nearest neighbors.
-
-    Parameters
-    ----------
-    motl_a : cryocat.cryomotl.Motl or str
-        Input particle list of query points.
-    motl_nn : cryocat.cryomotl.Motl or str
-        Input particle list of with nearest neighbors of interest.
-    pixel_size : float, default=1.0
-        Pixel size. Defaults to 1.0.
-    feature_id : str, default='tomo_id'
-        Particle list feature to distinguish between subsets of input motls. Defaults to "tomo_id".
-    nn_number : int, default=1
-        Number of requested nearest neighbors in motl_nn for each particle in motl_a. Defaults to 1.
-    rotation_type : str, default='angular_distance'
-        For comparison of rotations. Choice between "all", "angular_distance",
-        "cone_distance", and "in_plane_distance". Defaults to "angular_distance".
-
-    Returns
-    -------
-    pandas dataframe
-        Contains statistics of nearest neighbors analysis between input particle lists.
-    """
-    (
-        centered_coord,
-        rotated_coord,
-        nn_dist,
-        ang_dst,
-        subtomo_idx,
-        subtomo_idx_nn,
-    ) = get_nn_distances(
-        motl_a, motl_nn, nn_number=nn_number, pixel_size=pixel_size, feature=feature_id, rotation_type=rotation_type
-    )
-
-    coord_rot, angles = get_nn_rotations(motl_a, motl_nn, feature=feature_id, nn_number=nn_number)
-
-    nn_stats = pd.DataFrame(
-        np.hstack(
-            (
-                nn_dist.reshape((nn_dist.shape[0], 1)),
-                centered_coord,
-                rotated_coord,
-                ang_dst.reshape((nn_dist.shape[0], 1)),
-                coord_rot,
-                angles,
-                subtomo_idx.reshape((nn_dist.shape[0], 1)),
-                subtomo_idx_nn.reshape((nn_dist.shape[0], 1)),
-            )
-        ),
-        columns=[
-            "distance",
-            "coord_x",
-            "coord_y",
-            "coord_z",
-            "coord_rx",
-            "coord_ry",
-            "coord_rz",
-            "angular_distance",
-            "rot_x",
-            "rot_y",
-            "rot_z",
-            "phi",
-            "theta",
-            "psi",
-            "subtomo_idx",
-            "subtomo_nn_idx",
-        ],
-    )
-
-    nn_stats["type"] = "nn"
-
-    return nn_stats
-
-
-def get_nn_distances(motl_a, motl_nn, pixel_size=1.0, nn_number=1, feature="tomo_id", rotation_type="angular_distance"):
-    """Get nearest neighbor distances and related information between two sets of particles.
+def get_nn_within_radius(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    nn_radius: float,
+    pixel_size: float = 1.0,
+    column_name: MotlColumn = "tomo_id",
+) -> np.ndarray:
+    """Per-particle count of neighbors within *nn_radius*, grouped by column_name.
 
     Parameters
     ----------
     motl_a : str or Motl
-        Path to the first motl file or a Motl object containing the first set of particles.
+        Query motl.
     motl_nn : str or Motl
-        Path to the second motl file or a Motl object containing the second set of particles.
+        Neighbor motl.
+    nn_radius : float
+        Search radius in physical units (voxels × *pixel_size*).
     pixel_size : float, default=1.0
-        The size of a pixel in the same units as the coordinates. Default is 1.0.
-    nn_number : int, default=1
-        The number of nearest neighbors to consider. Default is 1.
-    feature : str, default='tomo_id'
-        The feature to use for splitting the particles. Default is 'tomo_id'.
-    rotation_type : str, default='angular_distance'
-        The type of rotation distance to compute. Default is 'angular_distance'.
+        Scale factor applied to coordinates before the radius search.
+    column_name : str, default='tomo_id'
+        Column used to split particles into groups before searching.
 
     Returns
     -------
-    centered_coord : np.ndarray
-        The coordinates of the nearest neighbors centered around the reference particles.
-    rotated_coord : np.ndarray
-        The coordinates of the nearest neighbors after applying the rotation.
-    nn_dist : np.ndarray
-        The distances to the nearest neighbors.
-    angular_distances : np.ndarray
-        The angular distances between the reference particles and their nearest neighbors.
-    subtomo_idx : np.ndarray
-        The subtomo IDs of the reference motifs.
-    subtomo_idx_nn : np.ndarray
-        The subtomo IDs of the nearest neighbors.
-
-    Notes
-    -----
-    This function assumes that the input motifs have angle information and that the
-    motl files are compatible with the Motl class. The function will only work with
-    the intersection of features present in both motls.
+    numpy.ndarray
+        Shape ``(N,)`` — number of neighbors within *nn_radius* for each
+        query particle, ordered by column_name then by row position in the motl.
     """
+    motl_a = cryomotl.Motl.load(motl_a)
+    motl_nn = cryomotl.Motl.load(motl_nn)
 
-    if isinstance(motl_a, str):
-        motl_a = cryomotl.Motl(motl_path=motl_a)
-
-    if isinstance(motl_nn, str):
-        motl_nn = cryomotl.Motl(motl_path=motl_nn)
-
-    # Get unique feature idx
-    features_a = np.unique(motl_a.df.loc[:, feature].values)
-    features_nn = np.unique(motl_nn.df.loc[:, feature].values)
-
-    # Work only with intersection
+    features_a = np.unique(motl_a.df.loc[:, column_name].values)
+    features_nn = np.unique(motl_nn.df.loc[:, column_name].values)
     features = np.intersect1d(features_a, features_nn, assume_unique=True)
 
-    centered_coord = []
-    nn_dist = []
-    angular_distances = []
-    rotated_coord = []
-    subtomo_idx = []
-    subtomo_idx_nn = []
-
+    counts = []
     for f in features:
-        fm_a = motl_a.get_motl_subset(f, feature_id=feature)
-        fm_nn = motl_nn.get_motl_subset(f, feature_id=feature)
-
-        idx, nn_idx, dist, nn_count = get_feature_nn_indices(fm_a, fm_nn, nn_number)
-
-        if len(idx) == 0:
-            continue
-
-        coord_nn = fm_nn.get_coordinates() * pixel_size
+        fm_a = motl_a.get_motl_subset(f, column_name=column_name)
+        fm_nn = motl_nn.get_motl_subset(f, column_name=column_name)
         coord_a = fm_a.get_coordinates() * pixel_size
+        coord_nn = fm_nn.get_coordinates() * pixel_size
+        kdt = sn.KDTree(coord_nn)
+        counts.append(kdt.query_radius(coord_a, r=nn_radius, count_only=True))
 
-        # get angles
-        angles_a = fm_a.get_angles()
-        angles_a = angles_a[idx, :]
-        angles_nn = fm_nn.get_angles()
-        rotations = srot.from_euler("zxz", angles=angles_a, degrees=True)
+    return np.concatenate(counts, axis=0) if counts else np.array([])
 
-        angles = -fm_a.df[["psi", "theta", "phi"]].values
-        angles = angles[idx, :]
-        rot = srot.from_euler("zxz", angles=angles, degrees=True)
 
-        subtomos_nn = fm_nn.df["subtomo_id"].to_numpy()
-        subtomos_a = fm_a.df["subtomo_id"].to_numpy()
+def recover_columns_by_coordinates(
+    source_motl: "cryomotl.Motl",
+    target_motl: "cryomotl.Motl",
+    columns: ListLike[MotlColumn],
+    coord_tolerance: float,
+    tomo_id_column: MotlColumn = "tomo_id",
+) -> "cryomotl.Motl":
+    """Recover columns from `source_motl` into a copy of `target_motl`.
 
-        for i in range(nn_count):
-            c_coord = coord_nn[nn_idx[:, i], :] - coord_a[idx, :]
-            centered_coord.append(c_coord)
-            nn_dist.append(dist[:, i] * pixel_size)
+    Matches particles by `tomo_id_column` plus coordinate proximity (nearest
+    neighbor within `coord_tolerance`), then copies `columns` from the matched
+    source particle onto the corresponding target particle. `target_motl` may
+    represent the same particles as `source_motl` or a subset of them.
+    `source_motl` and `target_motl` may have different pixel sizes/binning:
+    coordinates are compared in physical units (voxels x each motl's own
+    ``pixel_size``), not raw voxel counts.
 
-            angles_nn_sel = angles_nn[nn_idx[:, i], :]
+    Parameters
+    ----------
+    source_motl : Motl
+        Motl to recover `columns` from. Must expose a `pixel_size` attribute
+        (true for any RelionMotl-family instance).
+    target_motl : Motl
+        Motl to recover `columns` into. Must also expose `pixel_size`. Not
+        modified in place; a copy is returned.
+    columns : MotlColumn or list of MotlColumn
+        Column name(s) to copy from `source_motl.df` onto the returned motl.
+    coord_tolerance : float
+        Matching tolerance in Angstrom (physical units).
+    tomo_id_column : MotlColumn, default='tomo_id'
+        Column used to group particles before the per-group nearest-neighbor
+        search.
 
-            rotations_nn = srot.from_euler("zxz", angles=angles_nn_sel, degrees=True)
-            angular_distances.append(geom.compare_rotations(rotations, rotations_nn, rotation_type=rotation_type))
+    Returns
+    -------
+    Motl
+        A copy of `target_motl` with `columns` filled in for particles that
+        found a source match within `coord_tolerance`. Target particles with
+        no match keep the columns' existing values in the copy (0.0 for a
+        column that didn't already exist on `target_motl`, matching the
+        standard motl-schema default).
 
-            rotated_coord.append(rot.apply(c_coord))
+    Raises
+    ------
+    ValueError
+        If any requested column is not present in `source_motl.df`.
 
-            subtomo_idx_nn.append(subtomos_nn[nn_idx[:, i]])
-            subtomo_idx.append(subtomos_a[idx])
+    Warns
+    -----
+    UserWarning
+        If any target particle has no source match within `coord_tolerance`.
+    """
+    columns = classutils.as_list(columns)
+    for col in columns:
+        if col not in source_motl.df.columns:
+            raise ValueError(f"Column '{col}' not present in source_motl.df.")
 
-    return (
-        np.vstack(centered_coord),
-        np.vstack(rotated_coord),
-        np.concatenate(nn_dist),
-        np.concatenate(angular_distances),
-        np.concatenate(subtomo_idx),
-        np.concatenate(subtomo_idx_nn),
+    result = copy.deepcopy(target_motl)
+    for col in columns:
+        if col not in result.df.columns:
+            result.df[col] = 0.0
+
+    unmatched_idx = []
+    tomo_ids = np.intersect1d(
+        source_motl.df[tomo_id_column].unique(), target_motl.df[tomo_id_column].unique()
     )
+    for tomo in tomo_ids:
+        src_subset = source_motl.get_motl_subset(tomo, column_name=tomo_id_column)
+        tgt_subset = target_motl.get_motl_subset(tomo, column_name=tomo_id_column, reset_index=False)
+
+        src_coords_ang = src_subset.get_coordinates() * source_motl.pixel_size
+        tgt_coords_ang = tgt_subset.get_coordinates() * target_motl.pixel_size
+
+        kdt = sn.KDTree(src_coords_ang)
+        distances, nn_idx = kdt.query(tgt_coords_ang, k=1)
+
+        for tgt_row_idx, dist, src_i in zip(tgt_subset.df.index, distances[:, 0], nn_idx[:, 0]):
+            if dist <= coord_tolerance:
+                result.df.loc[tgt_row_idx, columns] = src_subset.df.iloc[src_i][columns].values
+            else:
+                unmatched_idx.append(tgt_row_idx)
+
+    # target particles whose tomo_id has no particles at all in source
+    unmatched_idx.extend(target_motl.df.index[~target_motl.df[tomo_id_column].isin(tomo_ids)].tolist())
+
+    if unmatched_idx:
+        warnings.warn(
+            f"{len(unmatched_idx)} target particle(s) had no source match within "
+            f"{coord_tolerance} Angstrom and kept their existing value for {columns}."
+        )
+
+    return result
 
 
-def get_nn_rotations(motl_a, motl_nn, nn_number=1, feature="tomo_id", type_id="geom1"):
-    """Get nearest neighbor rotations based on specified features from two motl objects.
+def get_nn_stats(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    pixel_size: float = 1.0,
+    column_name: MotlColumn = "tomo_id",
+    nn_number: int = 1,
+    rotation_type: RotationDistanceType = "angular_distance",
+    paired: bool = False,
+    remove_duplicates: bool = False,
+) -> pd.DataFrame:
+    """Return a per-pair statistics DataFrame for two motls.
 
     Parameters
     ----------
     motl_a : str or Motl
-        The path to the first motl file or a Motl object containing the first set of data.
+        Query motl.
     motl_nn : str or Motl
-        The path to the second motl file or a Motl object containing the nearest neighbor data.
+        Neighbor motl.
+    pixel_size : float, default=1.0
+        Pixel size in Å; applied to distances and coordinates.
+    column_name : str, default='tomo_id'
+        Column used to group particles before searching.
     nn_number : int, default=1
-        The number of nearest neighbors to consider for each feature. Dfault is 1.
-    feature : str, default='tomo_id'
-        The feature used to identify unique elements in the motl data. Default is 'tomo_id'.
-    type_id : str, default='geom1'
-        The type identifier for the geometry. Default is 'geom1'.
-
-    Returns
-    -------
-    points_on_sphere : ndarray
-        An array of points on the sphere representing the rotations.
-    angles : ndarray
-        An array of Euler angles corresponding to the computed rotations in degrees.
-
-    Notes
-    -----
-    This function assumes that the input motl objects or paths contain the necessary data
-    and that the `get_motl_subset` and `get_angles` methods are available for the Motl class.
-    """
-
-    if isinstance(motl_a, str):
-        motl_a = cryomotl.Motl(motl_path=motl_a)
-
-    if isinstance(motl_nn, str):
-        motl_nn = cryomotl.Motl(motl_path=motl_nn)
-
-    # Get unique feature idx
-    features_a = np.unique(motl_a.df.loc[:, feature].values)
-    features_nn = np.unique(motl_nn.df.loc[:, feature].values)
-
-    # Work only with intersection
-    features = np.intersect1d(features_a, features_nn, assume_unique=True)
-
-    nn_rotations = []
-
-    for f in features:
-        fm_a = motl_a.get_motl_subset(f, feature_id=feature)
-        fm_nn = motl_nn.get_motl_subset(f, feature_id=feature)
-
-        idx, idx_nn, _, nn_count = get_feature_nn_indices(fm_a, fm_nn, nn_number)
-
-        angles_nn = fm_nn.get_angles()
-        angles_ref_to_zero = -fm_a.get_feature(["psi", "theta", "phi"])
-        rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero[idx, :], degrees=True)
-
-        for i in range(nn_count):
-            rot_nn = srot.from_euler("zxz", angles=angles_nn[idx_nn[:, i], :], degrees=True)
-            nn_rotations.append(rot_to_zero * rot_nn)
-
-    nn_rotations = srot.concatenate(nn_rotations)
-    points_on_sphere = geom.visualize_rotations(nn_rotations, plot_rotations=False)
-    angles = nn_rotations.as_euler("zxz", degrees=True)
-
-    return points_on_sphere, angles
-
-
-def filter_nn_radial_stats(input_stats, binary_mask):
-    """Filter nearest neighbor radial statistics based on a binary mask.
-
-    Parameters
-    ----------
-    input_stats : pandas.DataFrame
-        A DataFrame containing the nearest neighbor statistics, which must include
-        columns for coordinates and a grouping identifier.
-
-    binary_mask : str
-        Path to a binary mask file that will be read to create a boolean mask for filtering.
+        Number of nearest neighbors per query particle.
+    rotation_type : str, default='angular_distance'
+        Angular metric: ``"angular_distance"``, ``"cone_distance"``, or
+        ``"in_plane_distance"``.
+    paired : bool, default=False
+        When ``True``, angles are taken from *motl_a* for both sides
+        (entry/exit pair convention).
+    remove_duplicates : bool, default=False
+        Drop symmetric ``(a, b)`` / ``(b, a)`` pairs.
 
     Returns
     -------
     pandas.DataFrame
-        A DataFrame containing the filtered nearest neighbor statistics, with rows
-        removed based on the provided binary mask.
-
-    Notes
-    -----
-    The function adjusts the coordinates of the input statistics, ensuring they
-    fall within the bounds of the binary mask. It then applies the mask to filter
-    the statistics for each group defined by the 'qp_subtomo_id' column.
+        See :meth:`NearestNeighbors.to_stats_dataframe` for column details.
     """
+    nn = NearestNeighbors(
+        input_data=[motl_a, motl_nn],
+        column_name=column_name,
+        nn_type="closest_dist",
+        type_param=nn_number,
+        paired=paired,
+        remove_duplicates=remove_duplicates,
+    )
+    return nn.to_stats_dataframe(pixel_size=pixel_size, rotation_type=rotation_type)
 
-    # Prepare the mask
+
+def get_nn_distances(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    pixel_size: float = 1.0,
+    nn_number: int = 1,
+    column_name: MotlColumn = "tomo_id",
+    rotation_type: RotationDistanceType = "angular_distance",
+    paired: bool = False,
+    remove_duplicates: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return per-pair geometry as a flat tuple (backward-compatible).
+
+    Parameters
+    ----------
+    motl_a : str or Motl
+        Query motl.
+    motl_nn : str or Motl
+        Neighbor motl.
+    pixel_size : float, default=1.0
+        Pixel size in Å.
+    nn_number : int, default=1
+        Number of nearest neighbors per query particle.
+    column_name : str, default='tomo_id'
+        Column used to group particles before searching.
+    rotation_type : str, default='angular_distance'
+        Angular metric for the returned angular-distance array.
+    paired : bool, default=False
+        When ``True``, angles are taken from *motl_a* for both sides.
+    remove_duplicates : bool, default=False
+        Drop symmetric pairs.
+
+    Returns
+    -------
+    centered : numpy.ndarray, shape ``(N, 3)``
+        ``nn - qp`` displacement in physical units.
+    rotated : numpy.ndarray, shape ``(N, 3)``
+        Displacement rotated into the qp local frame.
+    nn_dist : numpy.ndarray, shape ``(N,)``
+        Euclidean distances in physical units.
+    ang : numpy.ndarray, shape ``(N,)``
+        Angular distances in degrees.
+    qp_subtomo_id : numpy.ndarray, shape ``(N,)``
+    nn_subtomo_id : numpy.ndarray, shape ``(N,)``
+    """
+    nn = NearestNeighbors(
+        input_data=[motl_a, motl_nn],
+        column_name=column_name,
+        nn_type="closest_dist",
+        type_param=nn_number,
+        paired=paired,
+        remove_duplicates=remove_duplicates,
+    )
+    centered = nn.get_normalized_coord(add_to_df=False) * pixel_size
+    rotated = rotated_nn_coords(centered, nn.df[nn._QP_ANGLE_COLS].to_numpy())
+    ang = angular_distances(
+        nn.df[nn._QP_ANGLE_COLS].to_numpy(),
+        nn.df[nn._NN_ANGLE_COLS].to_numpy(),
+        rotation_type=rotation_type,
+    )
+    nn_dist = nn.df["nn_dist"].to_numpy() * pixel_size
+    return (centered, rotated, nn_dist, ang,
+            nn.df["qp_subtomo_id"].to_numpy(), nn.df["nn_subtomo_id"].to_numpy())
+
+
+def get_nn_rotations(
+    motl_a: MotlSource,
+    motl_nn: MotlSource,
+    nn_number: int = 1,
+    column_name: MotlColumn = "tomo_id",
+    paired: bool = False,
+    remove_duplicates: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return the qp→nn relative rotations as unit vectors and Euler angles.
+
+    Parameters
+    ----------
+    motl_a : str or Motl
+        Query motl.
+    motl_nn : str or Motl
+        Neighbor motl.
+    nn_number : int, default=1
+        Number of nearest neighbors per query particle.
+    column_name : str, default='tomo_id'
+        Column used to group particles before searching.
+    paired : bool, default=False
+        When ``True``, angles are taken from *motl_a* for both sides.
+    remove_duplicates : bool, default=False
+        Drop symmetric pairs.
+
+    Returns
+    -------
+    points_on_sphere : numpy.ndarray, shape ``(N, 3)``
+    euler_angles : numpy.ndarray, shape ``(N, 3)``
+        zxz Euler angles in degrees.
+    """
+    nn = NearestNeighbors(
+        input_data=[motl_a, motl_nn],
+        column_name=column_name,
+        nn_type="closest_dist",
+        type_param=nn_number,
+        paired=paired,
+        remove_duplicates=remove_duplicates,
+    )
+    return rotations_to_unit_vectors(nn.get_relative_rotations())
+
+
+def get_nn_stats_within_radius(
+    input_motl: MotlSource,
+    nn_radius: float,
+    column_name: MotlColumn = "tomo_id",
+    index_by_feature: bool = True,
+) -> pd.DataFrame:
+    """Build a per-pair stats DataFrame for all self-NN pairs within a radius.
+
+    Unlike :func:`get_nn_stats`, this function uses the same motl for both
+    query particles and neighbors (self-NN) and collects *all* neighbors
+    within ``nn_radius`` rather than a fixed number.
+
+    Parameters
+    ----------
+    input_motl : str or Motl
+        Input motl; loaded with :meth:`~cryocat.core.cryomotl.Motl.load` if a
+        path string is given.
+    nn_radius : float
+        Search radius in voxels.
+    column_name : str, default='tomo_id'
+        Column used to partition particles before searching.
+    index_by_feature : bool, default=True
+        When ``True``, row indices in the returned DataFrame refer to the
+        per-column_name subset; when ``False``, they refer to the global motl index.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per (query-particle, neighbor) pair with columns:
+
+        ``qp_subtomo_id``, ``nn_subtomo_id``
+            ``subtomo_id`` values of the query particle and its neighbor.
+        ``coord_x``, ``coord_y``, ``coord_z``
+            Centered displacement vector (neighbor − query) in voxels.
+        ``coord_rx``, ``coord_ry``, ``coord_rz``
+            Displacement rotated into the query-particle reference frame.
+        ``angular_distance``, ``cone_distance``, ``inplane_distance``
+            Angular distances in degrees.
+        ``rot_x``, ``rot_y``, ``rot_z``
+            Unit-vector representation of the relative rotation.
+        ``phi``, ``theta``, ``psi``
+            zxz Euler angles of the relative rotation in degrees.
+        ``qp_motl_id``, ``nn_motl_idx``
+            Row indices (column_name-local or global) of the two particles.
+    """
+    input_motl = cryomotl.Motl.load(input_motl)
+    features = np.unique(input_motl.df.loc[:, column_name].values)
+
+    rows = []
+    for f in features:
+        fm = input_motl.get_motl_subset(f, column_name=column_name)
+        coord = fm.get_coordinates()
+        center_idx, nn_idx_list = find_nn_within_self(coord, nn_radius, unique_only=False)
+
+        if len(center_idx) == 0:
+            continue
+
+        angles_all = fm.get_angles()
+        subtomos = fm.df["subtomo_id"].to_numpy()
+        motl_idx = (fm.df.index.to_numpy() if index_by_feature
+                    else input_motl.df.index[input_motl.df[column_name] == f].to_numpy())
+
+        for i, c in enumerate(center_idx):
+            for n in nn_idx_list[i]:
+                qp_ang = angles_all[c:c + 1]
+                nn_ang = angles_all[n:n + 1]
+                centered = (coord[n] - coord[c]).reshape(1, 3)
+                rotated = rotated_nn_coords(centered, qp_ang)
+                ang_dist, cone_dist, inplane_dist = angular_distances(qp_ang, nn_ang, rotation_type="all")
+                rel = relative_rotations(qp_ang, nn_ang)
+                pts, eul = rotations_to_unit_vectors(rel)
+
+                rows.append({
+                    "qp_subtomo_id":    subtomos[c],
+                    "nn_subtomo_id":    subtomos[n],
+                    "coord_x":          centered[0, 0],
+                    "coord_y":          centered[0, 1],
+                    "coord_z":          centered[0, 2],
+                    "coord_rx":         rotated[0, 0],
+                    "coord_ry":         rotated[0, 1],
+                    "coord_rz":         rotated[0, 2],
+                    "angular_distance": np.atleast_1d(ang_dist)[0],
+                    "cone_distance":    np.atleast_1d(cone_dist)[0],
+                    "inplane_distance": np.atleast_1d(inplane_dist)[0],
+                    "rot_x":            pts[0, 0],
+                    "rot_y":            pts[0, 1],
+                    "rot_z":            pts[0, 2],
+                    "phi":              eul[0, 0],
+                    "theta":            eul[0, 1],
+                    "psi":              eul[0, 2],
+                    "qp_motl_id":       motl_idx[c],
+                    "nn_motl_idx":      motl_idx[n],
+                })
+
+    return pd.DataFrame(rows)
+
+
+def filter_nn_radial_stats(
+    input_stats: pd.DataFrame,
+    binary_mask: MapSource,
+) -> pd.DataFrame:
+    """Keep only rows whose rotated coordinate falls inside a binary mask.
+
+    Pairs whose ``(coord_rx, coord_ry, coord_rz)`` maps to a voxel outside
+    the mask or outside the mask array bounds are dropped.
+
+    Parameters
+    ----------
+    input_stats : pandas.DataFrame
+        Output of :func:`get_nn_stats_within_radius`; must contain columns
+        ``coord_rx``, ``coord_ry``, ``coord_rz``.
+    binary_mask : str or numpy.ndarray
+        3-D binary volume.  Values ≥ 0.5 are treated as *inside*.  If a path
+        string is given the file is loaded with :func:`~cryocat.core.cryomap.read`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Filtered copy of ``input_stats`` (index reset), with the temporary
+        integer-coordinate columns removed.
+    """
     if isinstance(binary_mask, np.ndarray):
         boolean_mask = binary_mask
     else:
@@ -712,501 +2062,602 @@ def filter_nn_radial_stats(input_stats, binary_mask):
     boolean_mask = np.where(boolean_mask < 0.5, False, True)
     dx, dy, dz = np.asarray(boolean_mask.shape) // 2
 
-    # Get copy of the stats and compute integer coordinates
     nn_stats = input_stats.copy()
     nn_stats["x_int"] = (nn_stats["coord_rx"] + dx).astype(int)
     nn_stats["y_int"] = (nn_stats["coord_ry"] + dy).astype(int)
     nn_stats["z_int"] = (nn_stats["coord_rz"] + dz).astype(int)
 
-    # Filter to rows whose relative coordinates fall within the mask bounds
     in_bounds = (
-        (nn_stats["x_int"] >= 0)
-        & (nn_stats["x_int"] < 2 * dx)
-        & (nn_stats["y_int"] >= 0)
-        & (nn_stats["y_int"] < 2 * dy)
-        & (nn_stats["z_int"] >= 0)
-        & (nn_stats["z_int"] < 2 * dz)
+        (nn_stats["x_int"] >= 0) & (nn_stats["x_int"] < 2 * dx)
+        & (nn_stats["y_int"] >= 0) & (nn_stats["y_int"] < 2 * dy)
+        & (nn_stats["z_int"] >= 0) & (nn_stats["z_int"] < 2 * dz)
     )
     nn_stats = nn_stats[in_bounds]
-
-    # Apply the boolean mask and drop temporary columns
     mask_values = boolean_mask[nn_stats["x_int"], nn_stats["y_int"], nn_stats["z_int"]]
-    result_df = nn_stats[mask_values].drop(columns=["x_int", "y_int", "z_int"]).reset_index(drop=True)
-
-    return result_df
+    return nn_stats[mask_values].drop(columns=["x_int", "y_int", "z_int"]).reset_index(drop=True)
 
 
-def get_nn_stats_within_radius(input_motl, nn_radius, feature="tomo_id", index_by_feature=True):
-    """Get nearest neighbor statistics within a specified radius from a given input motl.
+# =============================================================================
+# Convenience wrapper for class-assignment by NN
+# =============================================================================
+
+
+def assign_class_by_nn(
+    motl_unassigned: MotlSource,
+    motl_list: list[MotlSource],
+    starting_class: int = 1,
+    dist_threshold: float = 20,
+    output_motl: PathOrStr | None = None,
+    unassigned_class: int = 0,
+    update_coord: bool = False,
+) -> "cryomotl.Motl":
+    """Assign each particle in ``motl_unassigned`` the class of its nearest neighbor.
+
+    For every motl in ``motl_list`` the nearest particle in ``motl_unassigned``
+    (within ``dist_threshold`` voxels) is found and labeled with the
+    corresponding class index.  Particles with no neighbor within the threshold
+    remain labeled ``unassigned_class``.
 
     Parameters
     ----------
-    input_motl : str or Motl object
-        Path to the input motl file or Motl object to be loaded.
-    nn_radius : float
-        The radius within which to search for nearest neighbors.
-    feature : str, default='tomo_id'
-        The feature to index by. Default is 'tomo_id'.
-    index_by_feature : bool, default=True
-        If True, the output will be indexed by the specified feature; otherwise, it will be indexed by the original
-        df of the motl. Default is True.
+    motl_unassigned : str or Motl
+        Motl whose particles are to be classified.
+    motl_list : list of str or Motl
+        Ordered list of motls, one per class.  The first motl gets class
+        ``starting_class``, the second gets ``starting_class + 1``, and so on.
+    starting_class : int, default=1
+        Class label assigned to particles matched by ``motl_list[0]``.
+    dist_threshold : float, default=20
+        Maximum distance (voxels) for a match to be accepted.
+    output_motl : str, optional
+        If given, the result is saved to this path.
+    unassigned_class : int, default=0
+        Class label for particles that are not matched by any motl.
+    update_coord : bool, default=False
+        When ``True``, overwrite coordinates and orientations of matched
+        particles with the values from the matching classified motl.
 
     Returns
     -------
-    pd.DataFrame
-        A DataFrame containing the nearest neighbor statistics, including:
-        - qp_subtomo_id: Subtomo ID of the query point.
-        - nn_subtomo_id: Subtomo ID of the nearest neighbor.
-        - coord_x, coord_y, coord_z: Coordinates of the centered neighbor.
-        - coord_rx, coord_ry, coord_rz: Rotated coordinates of the neighbor.
-        - angular_distance: Angular distance between the query and nearest neighbor.
-        - cone_distance: Cone distance between the query and nearest neighbor.
-        - inplane_distance: In-plane distance between the query and nearest neighbor.
-        - rot_x, rot_y, rot_z: Rotation angles of the nearest neighbor.
-        - phi, theta, psi: Euler angles of the nearest neighbor.
-        - qp_motl_id: Motl index of the query point.
-        - nn_motl_idx: Motl index of the nearest neighbor.
+    Motl
+        Copy of ``motl_unassigned`` with updated ``class`` column (and
+        optionally updated coordinates).  Overlap counts are printed to
+        stdout.
     """
+    motl = cryomotl.Motl.load(motl_unassigned)
+    motl.df["class"] = unassigned_class
+    classified, overlaps, cl = 0, 0, starting_class
+    _tomo_pos = dict(motl.df.groupby("tomo_id").indices)
 
-    input_motl = cryomotl.Motl.load(input_motl)
+    for m in motl_list:
+        cm = cryomotl.Motl.load(m)
+        classified += cm.df.shape[0]
+        for t in np.unique(cm.df.loc[:, "tomo_id"].values):
+            tomo_rows = _tomo_pos[t]
+            tm_coord = cm.get_coordinates(t)
+            all_coord = motl.get_coordinates(t)
+            tm = cm.get_motl_subset(t, return_df=True, reset_index=False)
+            tm_all = motl.df.iloc[tomo_rows].copy()
+            tm_idx = np.arange(tm.shape[0])
 
-    # Get unique feature idx
-    features = np.unique(input_motl.df.loc[:, feature].values)
+            kdt = sn.KDTree(all_coord)
+            dist, idx = kdt.query(tm_coord, k=1)
+            dist = np.atleast_1d(dist).ravel()
+            idx = np.atleast_1d(idx).ravel()
 
-    query_points = []
-    query_motl_idx = []
-    nn_motl_idx = []
-    nn_rotations = []
-    centered_coord = []
-    rotated_coord = []
-    angular_distances = []
-    cone_distances = []
-    inplane_distances = []
-    nn_points = []
+            keep = dist < dist_threshold
+            idx = idx[keep]
+            tm_idx = tm_idx[keep]
 
-    for f in features:
-        fm = input_motl.get_motl_subset(f, feature_id=feature)
+            unique_idx, counts = np.unique(idx, return_counts=True)
+            duplicates = unique_idx[counts > 1]
+            if duplicates.size > 0:
+                identical = np.concatenate([np.where(idx == d) for d in duplicates]).flatten()
+                subtomo_idx = tm.loc[tm.index[identical], ["subtomo_id"]].values.flatten()
+                print(f"Following particles in motl {m} are identical: {subtomo_idx}")
+                overlaps += np.sum(counts) - counts.size
 
-        coord = fm.get_coordinates()
-        center_idx, nn_idx = get_nn_within_distance(fm, nn_radius, unique_only=False)
+            tm_all.loc[tm_all.index[idx], ["geom1"]] += 1
+            tm_all.loc[tm_all["geom1"] > 1, ["geom2"]] = tm_all.loc[tm_all["geom1"] > 1, ["class"]]
+            tm_all.loc[tm_all.index[idx], ["class"]] = cl
 
-        angles_nn = fm.get_angles()
-        angles_ref_to_zero = -fm.get_feature(["psi", "theta", "phi"])
-
-        rotations = fm.get_rotations()
-
-        subtomos_idx = fm.df["subtomo_id"].to_numpy()
-
-        if index_by_feature:
-            motl_idx = fm.df.index.to_numpy()
-        else:
-            motl_idx = input_motl.df.index[input_motl.df[feature] == f].to_numpy()
-
-        for i, c in enumerate(center_idx):
-            rot_to_zero = srot.from_euler("zxz", angles=angles_ref_to_zero[c, :], degrees=True)
-
-            for n in nn_idx[i]:
-                rot_nn = srot.from_euler("zxz", angles=angles_nn[n, :], degrees=True)
-                nn_rotations.append(rot_to_zero * rot_nn)
-
-                c_coord = coord[n, :] - coord[c, :]
-                centered_coord.append(c_coord)
-
-                rotated_coord.append(rot_to_zero.apply(c_coord))
-
-                rotations_nn = srot.from_euler("zxz", angles=angles_nn[n, :], degrees=True)
-                ang_dist, cone_dist, inplane_dist = geom.compare_rotations(
-                    rotations[c], rotations_nn, rotation_type="all"
+            if update_coord:
+                tm_all.loc[tm_all.index[idx], ["phi", "psi", "theta"]] = (
+                    tm.loc[tm.index[tm_idx], ["phi", "psi", "theta"]].values
                 )
-                angular_distances.append(ang_dist)
-                cone_distances.append(cone_dist)
-                inplane_distances.append(inplane_dist)
-                query_points.append(subtomos_idx[c])
-                query_motl_idx.append(motl_idx[c])
-                nn_points.append(subtomos_idx[n])
-                nn_motl_idx.append(motl_idx[n])
+                tm_all.loc[tm_all.index[idx], ["geom3", "geom4", "geom5"]] = (
+                    tm.loc[tm.index[tm_idx], ["x", "y", "z"]].values
+                    + tm.loc[tm.index[tm_idx], ["shift_x", "shift_y", "shift_z"]].values
+                )
+            motl.df.iloc[tomo_rows] = tm_all.values
+        cl += 1
 
-    nn_rotations = srot.concatenate(nn_rotations)
-    points_on_sphere = geom.visualize_rotations(nn_rotations, plot_rotations=False)
-    angles = nn_rotations.as_euler("zxz", degrees=True)
+    assigned = motl.df.loc[motl.df["geom1"] > 0].shape[0]
+    print(f"Particles in classified motls: {classified}, "
+          f"number of assigned particles: {assigned}, number of overlaps: {overlaps}")
 
-    centered_coord = np.vstack(centered_coord)
-    rotated_coord = np.vstack(rotated_coord)
-    angular_distances = np.atleast_2d(np.concatenate(angular_distances)).T
-    cone_distances = np.atleast_2d(np.concatenate(cone_distances)).T
-    inplane_distances = np.atleast_2d(np.concatenate(inplane_distances)).T
-    query_points = [np.atleast_1d(arr) for arr in query_points]
-    query_points = np.atleast_2d(np.concatenate(query_points)).T
-    query_motl_idx = [np.atleast_1d(arr) for arr in query_motl_idx]
-    query_motl_idx = np.atleast_2d(np.concatenate(query_motl_idx)).T
-    nn_points = [np.atleast_1d(arr) for arr in nn_points]
-    nn_points = np.atleast_2d(np.concatenate(nn_points)).T
-    nn_motl_idx = [np.atleast_1d(arr) for arr in nn_motl_idx]
-    nn_motl_idx = np.atleast_2d(np.concatenate(nn_motl_idx)).T
+    if update_coord:
+        motl.df.loc[motl.df["class"] != unassigned_class, ["x", "y", "z"]] = (
+            motl.df.loc[motl.df["class"] != unassigned_class, ["geom3", "geom4", "geom5"]].values
+        )
+        motl.df.loc[motl.df["class"] != unassigned_class, ["shift_x", "shift_y", "shift_z"]] = 0.0
+        motl.df["geom3"] = 0.0
 
-    nn_stats = pd.DataFrame(
-        np.hstack(
-            (
-                query_points,
-                nn_points,
-                centered_coord,
-                rotated_coord,
-                angular_distances,
-                cone_distances,
-                inplane_distances,
-                points_on_sphere,
-                angles,
-                query_motl_idx,
-                nn_motl_idx,
-            )
-        ),
-        columns=[
-            "qp_subtomo_id",
-            "nn_subtomo_id",
-            "coord_x",
-            "coord_y",
-            "coord_z",
-            "coord_rx",
-            "coord_ry",
-            "coord_rz",
-            "angular_distance",
-            "cone_distance",
-            "inplane_distance",
-            "rot_x",
-            "rot_y",
-            "rot_z",
-            "phi",
-            "theta",
-            "psi",
-            "qp_motl_id",
-            "nn_motl_idx",
-        ],
-    )
+    motl.df["geom4"] = motl.df["geom2"].values
+    motl.df["geom5"] = motl.df["geom1"].values
+    motl.df[["geom1", "geom2"]] = 0.0
+    motl.update_coordinates()
 
-    return nn_stats
+    if output_motl is not None:
+        motl.write_to_emfile(output_motl)
+    return motl
 
 
-def get_nn_within_radius(
-    motl_a,
-    motl_nn,
-    nn_radius,
-    pixel_size=1.0,
-    feature="tomo_id",
-):
-    """Get the number of nearest neighbors within a specified radius for features in two motls.
+# =============================================================================
+# Standalone chain tracing
+# =============================================================================
+
+
+def _get_nn_dist(
+    kdt: sn.KDTree,
+    query_point: np.ndarray,
+    dist_max: float,
+    dist_min: float,
+    active_points: np.ndarray,
+    test_value: bool,
+) -> tuple[int, float | list]:
+    """Return the nearest active point within ``[dist_min, dist_max]``.
+
+    Queries *kdt* within *dist_max*, then filters by *active_points* and
+    *dist_min*, returning the closest point that passes both criteria.
 
     Parameters
     ----------
-    motl_a : str or Motl
-        Path to the first Motl file or a Motl object containing the particles to analyze.
-    motl_nn : str or Motl
-        Path to the second Motl file or a Motl object containing the particles for NN search.
-    nn_radius : float
-        The radius within which to count the nearest neighbors.
-    pixel_size : float, default=1.0
-        The size of the pixel/voxel that corresponds to the motls. Default is 1.0.
-    feature : str, default='tomo_id'
-        The feature identifier to use for matching between the two motls. Default is 'tomo_id'.
+    kdt : sklearn.neighbors.KDTree
+        KD-tree built on the candidate coordinate set.
+    query_point : numpy.ndarray, shape ``(1, 3)``
+        The coordinate to search from.
+    dist_max : float
+        Maximum search radius.
+    dist_min : float
+        Minimum distance threshold; results closer than this are excluded.
+    active_points : numpy.ndarray of bool, shape ``(N,)``
+        Mask of which points are still available (not yet used in a chain).
+    test_value : bool
+        Expected value of *active_points* at candidate indices; only points
+        where ``active_points[idx] == test_value`` are considered.
 
     Returns
     -------
-    numpy.ndarray
-        An array containing the count of nearest neighbors for each particle in the first motl within the specified radius.
+    idx : int
+        Index of the nearest valid neighbor, or ``-1`` if none was found.
+    dist : float or list
+        Distance to the neighbor, or ``[]`` if none was found.
     """
+    id_max, dist = kdt.query_radius(query_point, dist_max,
+                                    return_distance=True, sort_results=True)
+    id_max = id_max[0]
+    dist = dist[0]
+    if id_max.size == 0:
+        return -1, []
 
-    if isinstance(motl_a, str):
-        motl_a = cryomotl.Motl(motl_path=motl_a)
+    rp_idx = id_max[active_points[id_max] == test_value]
+    rp_dist = dist[active_points[id_max] == test_value]
 
-    if isinstance(motl_nn, str):
-        motl_nn = cryomotl.Motl(motl_path=motl_nn)
+    if rp_idx.size == 0:
+        return -1, []
+    if dist_min > 0:
+        rp_idx = rp_idx[rp_dist > dist_min]
+        rp_dist = rp_dist[rp_dist > dist_min]
 
-    # Get unique feature idx
-    features_a = np.unique(motl_a.df.loc[:, feature].values)
-    features_nn = np.unique(motl_nn.df.loc[:, feature].values)
-
-    # Work only with intersection
-    features = np.intersect1d(features_a, features_nn, assume_unique=True)
-
-    nn_count = []
-
-    for f in features:
-        fm_a = motl_a.get_motl_subset(f, feature_id=feature)
-        fm_nn = motl_nn.get_motl_subset(f, feature_id=feature)
-
-        coord_a = fm_a.get_coordinates() * pixel_size
-        coord_nn = fm_nn.get_coordinates() * pixel_size
-
-        kdt_nn = sn.KDTree(coord_nn)
-        fm_nn_count = kdt_nn.query_radius(coord_a, r=nn_radius, count_only=True)
-
-        nn_count.append(fm_nn_count)
-
-    return np.concatenate(nn_count, axis=0)
+    if rp_idx.size == 0:
+        return -1, []
+    return rp_idx[0], rp_dist[0]
 
 
-def plot_nn_coord_df(
-    df,
-    circle_radius,
-    output_name=None,
-    displ_threshold=None,
-    title=None,
-    marker_size=20,
-):
-    """Plot 2D scatter plots of nearest neighbor coordinates.
+def _add_chain_suffix(
+    ch_cls: int,
+    ch_orders: list,
+    nfm_idx1: np.ndarray,
+    nfm_idx2: np.ndarray,
+    nfm_dist: np.ndarray,
+    pos_of_sub: dict,
+    cls_to_rows: dict,
+    exit_subtomos: np.ndarray,
+    subtomo_id: int,
+    current_dist: float,
+) -> int | None:
+    """Append the current chain after an existing one.
+
+    Looks up the particle at *subtomo_id* in the nfm arrays, finds the chain
+    it belongs to, and — if the link is the last in that chain and the new
+    distance is shorter — re-assigns the tail of the old chain to the current
+    chain or vice versa.  All lookups are O(1) via *pos_of_sub* / *cls_to_rows*.
 
     Parameters
     ----------
-    df : pandas.DataFrame
-        DataFrame containing the coordinates with columns 'coord_x', 'coord_y', and 'coord_z'.
-    circle_radius : float
-        Radius of the circles to be drawn on the plots.
-    output_name : str, optional
-        Name of the file to save the figure. If None, the figure will not be saved. Default is None.
-    displ_threshold : float, optional
-        Threshold for displaying limits on the axes. If None, limits will not be set. Default is None.
-    title : str, optional
-        Title for the entire figure. If None, no title will be set. Default is None.
-    marker_size : int, default=20
-        Size of the markers in the scatter plots. Default is 20.
+    ch_cls : int
+        Current chain-class id of the chain being built.
+    ch_orders : list of int
+        Within-chain position values for each row in the chain (modified in place).
+    nfm_idx1 : numpy.ndarray
+        store_idx1 (class) column for committed nfm rows (modified in place).
+    nfm_idx2 : numpy.ndarray
+        store_idx2 (order) column for committed nfm rows (modified in place).
+    nfm_dist : numpy.ndarray
+        store_dist column for committed nfm rows (modified in place).
+    pos_of_sub : dict
+        subtomo_id → row position in the nfm arrays (O(1) lookup).
+    cls_to_rows : dict
+        class_id → list of row positions (modified in place).
+    exit_subtomos : numpy.ndarray
+        ``subtomo_id`` values for the exit motl, indexed by row position.
+    subtomo_id : int
+        Row index (within exit motl) of the particle whose chain we append to.
+    current_dist : float
+        Distance of the new link being considered.
 
     Returns
     -------
-    None
-        The function displays the plots and optionally saves the figure to a file.
+    int or None
+        New ``ch_cls`` on success; ``None`` if the existing link was shorter
+        and the append was aborted.
     """
+    particle_id = int(exit_subtomos[subtomo_id])
+    row_pos = pos_of_sub[particle_id]
+    temp_cl_id = int(nfm_idx1[row_pos])
+    order_id = int(nfm_idx2[row_pos])
+    previous_dist = float(nfm_dist[row_pos])
+    chain_rows = cls_to_rows[temp_cl_id]
+    chain_max_order = int(nfm_idx2[chain_rows].max())
 
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].set_title("XY distribution")
-    sns.scatterplot(ax=axs[0], data=df, x="coord_x", y="coord_y", s=marker_size)
-    axs[1].set_title("XZ distribution")
-    sns.scatterplot(ax=axs[1], data=df, x="coord_x", y="coord_z", s=marker_size)
-    axs[2].set_title("YZ distribution")
-    sns.scatterplot(ax=axs[2], data=df, x="coord_y", y="coord_z", s=marker_size)
+    if chain_max_order != order_id:
+        if previous_dist <= current_dist:
+            return None
+        head = [r for r in chain_rows if nfm_idx2[r] <= order_id]
+        tail = [r for r in chain_rows if nfm_idx2[r] > order_id]
+        for r in tail:
+            nfm_idx1[r] = ch_cls
+        cls_to_rows[temp_cl_id] = head
+        cls_to_rows.setdefault(ch_cls, []).extend(tail)
+        for new_pos, r in enumerate(cls_to_rows[ch_cls]):
+            nfm_idx2[r] = new_pos + 1
+        chain_max_order = int(nfm_idx2[head].max()) if head else 0
 
-    # sns.move_legend(axs[0], "upper right")
-    # sns.move_legend(axs[1], "upper right")
-    # sns.move_legend(axs[2], "upper right")
-
-    circle1 = plt.Circle((0, 0), circle_radius, color="gold", alpha=0.4, fill=True)
-    circle2 = plt.Circle((0, 0), circle_radius, color="gold", alpha=0.4, fill=True)
-    circle3 = plt.Circle((0, 0), circle_radius, color="gold", alpha=0.4, fill=True)
-
-    axs[0].set_aspect("equal", "box")
-    axs[1].set_aspect("equal", "box")
-    axs[2].set_aspect("equal", "box")
-
-    if displ_threshold is not None:
-        limits = [-displ_threshold, displ_threshold]
-        axs[0].set(xlim=limits, ylim=limits)
-        axs[1].set(xlim=limits, ylim=limits)
-        axs[2].set(xlim=limits, ylim=limits)
-
-    if title is not None:
-        fig.suptitle(title)
-
-    axs[0].add_patch(circle1)
-    axs[1].add_patch(circle2)
-    axs[2].add_patch(circle3)
-
-    if output_name is not None:
-        plt.savefig(output_name, transparent=True)
+    nfm_dist[row_pos] = current_dist
+    for k_i in range(len(ch_orders)):
+        ch_orders[k_i] += chain_max_order
+    return temp_cl_id
 
 
-def plot_nn_rot_coord_df(df, output_name=None, displ_threshold=None, title=None, marker_size=20):
-    """Plot 2D scatter plots of nearest neighbor coordinates that are rotated to the reference frame.
+def _add_chain_prefix(
+    ch_cls: int,
+    ch_orders: list,
+    ch_dists: list,
+    nfm_idx1: np.ndarray,
+    nfm_idx2: np.ndarray,
+    nfm_dist: np.ndarray,
+    pos_of_sub: dict,
+    cls_to_rows: dict,
+    entry_subtomos: np.ndarray,
+    subtomo_id: int,
+    current_dist: float,
+    class_max: tuple[int, int] | None = None,
+) -> int | None:
+    """Prepend the current chain before an existing one.
+
+    Looks up the particle at *subtomo_id* in the nfm arrays and inserts the
+    current chain fragment at the beginning of that particle's chain, shifting
+    existing within-chain positions accordingly.  All lookups are O(1).
 
     Parameters
     ----------
-    df : pandas.DataFrame
-        DataFrame containing the coordinates with columns 'coord_x', 'coord_y', and 'coord_z'.
-    output_name : str, optional
-        Name of the file to save the figure. If None, the figure will not be saved. Default is None.
-    displ_threshold : float, optional
-        Threshold for displaying limits on the axes. If None, limits will not be set. Default is None.
-    title : str, optional
-        Title for the entire figure. If None, no title will be set. Default is None.
-    marker_size : int, default=20
-        Size of the markers in the scatter plots. Default is 20.
+    ch_cls : int
+        Current chain-class id of the chain being built.
+    ch_orders : list of int
+        Within-chain position values for each row in the chain.
+    ch_dists : list of float
+        Distance values for each row in the chain (last element modified in place).
+    nfm_idx1 : numpy.ndarray
+        store_idx1 (class) column for committed nfm rows (modified in place).
+    nfm_idx2 : numpy.ndarray
+        store_idx2 (order) column for committed nfm rows (modified in place).
+    nfm_dist : numpy.ndarray
+        store_dist column for committed nfm rows (modified in place).
+    pos_of_sub : dict
+        subtomo_id → row position in the nfm arrays.
+    cls_to_rows : dict
+        class_id → list of row positions (modified in place).
+    entry_subtomos : numpy.ndarray
+        ``subtomo_id`` values for the entry motl, indexed by row position.
+    subtomo_id : int
+        Row index (within entry motl) of the particle at the start of the
+        existing chain.
+    current_dist : float
+        Distance of the new link being considered.
+    class_max : tuple of int or None, default=None
+        When not ``None``, a ``(max_order, fallback_class)`` pair used when
+        both a suffix and prefix merge happen simultaneously.
 
     Returns
     -------
-    None
-        The function displays the plots and optionally saves the figure to a file.
+    int or None
+        New ``ch_cls`` on success; ``None`` if the existing link was shorter
+        and the operation was aborted.
     """
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].set_title("XY distribution")
-    sns.scatterplot(ax=axs[0], data=df, x="coord_rx", y="coord_ry", hue="type", s=marker_size)
-    axs[1].set_title("XZ distribution")
-    sns.scatterplot(ax=axs[1], data=df, x="coord_rx", y="coord_rz", hue="type", s=marker_size)
-    axs[2].set_title("YZ distribution")
-    sns.scatterplot(ax=axs[2], data=df, x="coord_ry", y="coord_rz", hue="type", s=marker_size)
+    particle_id = int(entry_subtomos[subtomo_id])
+    row_pos_nm = pos_of_sub[particle_id]
+    class_to_change = int(nfm_idx1[row_pos_nm])
+    order_id = int(nfm_idx2[row_pos_nm])
+    cut_off_size = 0
 
-    sns.move_legend(axs[0], "upper right")
-    sns.move_legend(axs[1], "upper right")
-    sns.move_legend(axs[2], "upper right")
+    if order_id != 1:
+        ctc_rows = cls_to_rows[class_to_change]
+        prev_row = next(r for r in ctc_rows if nfm_idx2[r] == order_id - 1)
+        if nfm_dist[prev_row] <= current_dist:
+            return None
+        cut_rows = [r for r in ctc_rows if nfm_idx2[r] < order_id]
+        cut_off_size = len(cut_rows)
+        sentinel = ch_cls if class_max is None else -1
+        for r in cut_rows:
+            nfm_idx1[r] = sentinel
+        cls_to_rows.setdefault(sentinel, []).extend(cut_rows)
+        cls_to_rows[class_to_change] = [r for r in ctc_rows if nfm_idx2[r] >= order_id]
 
-    axs[0].set_aspect("equal", "box")
-    axs[1].set_aspect("equal", "box")
-    axs[2].set_aspect("equal", "box")
+    ctc_remain = cls_to_rows[class_to_change]
 
-    if displ_threshold is not None:
-        limits = [-displ_threshold, displ_threshold]
-        axs[0].set(xlim=limits, ylim=limits)
-        axs[1].set(xlim=limits, ylim=limits)
-        axs[2].set(xlim=limits, ylim=limits)
+    if class_max is None:
+        new_ch_cls = class_to_change
+        class_max_val = max(ch_orders) if ch_orders else 0
+        offset = class_max_val - cut_off_size
+        for r in ctc_remain:
+            nfm_idx2[r] += offset
+    else:
+        temp_cl_id = ch_cls
+        offset = class_max[0] - cut_off_size
+        for r in ctc_remain:
+            nfm_idx2[r] += offset
+            nfm_idx1[r] = temp_cl_id
+        if temp_cl_id != class_to_change:
+            cls_to_rows.setdefault(temp_cl_id, []).extend(ctc_remain)
+            del cls_to_rows[class_to_change]
+        if order_id != 1:
+            neg_rows = cls_to_rows.pop(-1, [])
+            for r in neg_rows:
+                nfm_idx1[r] = class_max[1]
+            cls_to_rows.setdefault(class_max[1], []).extend(neg_rows)
+        new_ch_cls = ch_cls
 
-    if title is not None:
-        fig.suptitle(title)
-
-    plt.tight_layout()
-    if output_name is not None:
-        plt.savefig(output_name, transparent=True)
+    ch_dists[-1] = current_dist
+    return new_ch_cls
 
 
-def plot_nn_coord(coord, displ_threshold=None, marker_size=20):
-    """Plot 2D scatter distributions of 3D coordinates.
+@gui_exposed(
+    label="Trace chains",
+    returns="motl",
+    hide=("output_motl",),
+    path_arg="output_motl",
+)
+def trace_chains(
+    motl_entry: cryomotl.MotlSource,
+    motl_exit: cryomotl.MotlSource | None = None,
+    max_distance: float | None = None,
+    min_distance: float = 0,
+    column_name: MotlColumn = "tomo_id",
+    output_motl: PathOrStr | None = None,
+    store_idx1: str = "object_id",
+    store_idx2: str = "geom2",
+    store_dist: str = "geom4",
+) -> "cryomotl.Motl":
+    """Build chains by linking the exit of particle A to the entry of particle B.
+
+    Iterates over particles sorted by their exit positions and greedily links
+    each to the closest unvisited entry particle within ``[min_distance,
+    max_distance]``.  Chain stitching (suffix- and prefix-merging) handles
+    cases where a new chain can extend or prepend an existing one.
 
     Parameters
     ----------
-    coord : numpy.ndarray
-        A 2D array of shape (n, 3) where n is the number of points and each row represents a point in 3D space (x, y, z).
-    displ_threshold : float, optional
-        A threshold value to set the limits of the scatter plots. If provided, the x and y limits of each subplot will
-        be set to [-displ_threshold, displ_threshold]. Default is None.
-    marker_size : int, default=20
-        The size of the markers in the scatter plots. Default is 20.
+    motl_entry : str or Motl
+        Motl representing particle *entry* points.
+    motl_exit : str or Motl, optional
+        Motl representing particle *exit* points.  When ``None``, ``motl_entry``
+        is used for both sides (single-motl / symmetric mode).
+    max_distance : float
+        Maximum allowed link distance in voxels.  **Required.**
+    min_distance : float, default=0
+        Minimum allowed link distance in voxels.
+    column_name : str, default='tomo_id'
+        Column used to partition the motl before tracing (usually ``'tomo_id'``).
+    output_motl : str, optional
+        If given, the resulting motl is written to this path.
+    store_idx1 : str, default='object_id'
+        Column in which the chain identifier is stored.
+    store_idx2 : str, default='geom2'
+        Column in which the within-chain position (1-based) is stored.
+    store_dist : str, default='geom4'
+        Column in which the distance to the next particle is stored.
 
     Returns
     -------
-    None
-        This function does not return any value. It displays the scatter plots of the coordinates.
+    Motl
+        A copy of ``motl_entry`` with ``store_idx1``, ``store_idx2``, and
+        ``store_dist`` populated according to the traced chains.
+
+    Raises
+    ------
+    ValueError
+        If ``max_distance`` is ``None`` or if the two motls have different
+        column_name sets.
     """
+    if max_distance is None:
+        raise ValueError("max_distance must be specified")
 
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].set_title("XY distribution")
-    axs[0].scatter(coord[:, 0], coord[:, 1], s=marker_size)
-    axs[1].set_title("XZ distribution")
-    axs[1].scatter(coord[:, 0], coord[:, 2], s=marker_size)
-    axs[2].set_title("YZ distribution")
-    axs[2].scatter(coord[:, 1], coord[:, 2], s=marker_size)
+    motl_entry = cryomotl.Motl.load(motl_entry)
+    motl_exit = motl_entry if motl_exit is None else cryomotl.Motl.load(motl_exit)
 
-    axs[0].set_aspect("equal", "box")
-    axs[1].set_aspect("equal", "box")
-    axs[2].set_aspect("equal", "box")
+    features1 = np.unique(motl_entry.df.loc[:, column_name])
+    features2 = np.unique(motl_exit.df.loc[:, column_name])
+    if not np.array_equal(features1, features2):
+        raise ValueError("Provided motls have different features sets!")
 
-    if displ_threshold is not None:
-        limits = [-displ_threshold, displ_threshold]
-        axs[0].set(xlim=limits, ylim=limits)
-        axs[1].set(xlim=limits, ylim=limits)
-        axs[2].set(xlim=limits, ylim=limits)
+    traced_motl = cryomotl.Motl.create_empty_motl_df()
+
+    for f in features1:
+        fm_entry = motl_entry.get_motl_subset(f, column_name, reset_index=False)
+        fm_exit  = motl_exit.get_motl_subset(f, column_name, reset_index=False)
+
+        fm_size = fm_entry.df.shape[0]
+        remain_entry = np.full(fm_size, True)
+        remain_exit  = np.full(fm_size, True)
+        class_c = 1
+
+        coord_entry = fm_entry.get_coordinates()
+        coord_exit  = fm_exit.get_coordinates()
+        kdt_entry = sn.KDTree(coord_entry)
+        kdt_exit  = sn.KDTree(coord_exit)
+
+        entry_subtomos = fm_entry.df["subtomo_id"].values
+        exit_subtomos  = fm_exit.df["subtomo_id"].values
+
+        # Pre-allocate nfm working arrays (filled row-by-row as chains complete).
+        _nfm_rows = np.empty(fm_size, dtype=int)   # positional index into fm_entry.df
+        _nfm_idx1 = np.zeros(fm_size, dtype=int)   # store_idx1 (chain class)
+        _nfm_idx2 = np.zeros(fm_size, dtype=int)   # store_idx2 (within-chain order)
+        _nfm_dist = np.zeros(fm_size, dtype=float)  # store_dist
+        _nfm_filled = 0
+        _pos_of_sub  = {}   # subtomo_id → nfm row position (O(1) lookup)
+        _cls_to_rows = {}   # class_id   → list of nfm row positions
+
+        for i, current_point in enumerate(coord_exit):
+            if not remain_exit[i]:
+                continue
+
+            ch_row_idxs = []   # positional indices into fm_entry.df
+            ch_orders   = []   # store_idx2 values (1-based within-chain positions)
+            ch_dists    = []   # store_dist values (0.0 until a next link is found)
+            chain_id    = 1
+            trace_chain = True
+            p_idx       = i
+            used_idx    = []
+
+            while trace_chain:
+                ch_row_idxs.append(p_idx)
+                ch_orders.append(chain_id)
+                ch_dists.append(0.0)
+                chain_id += 1
+
+                remain_entry[p_idx] = False
+                remain_exit[p_idx]  = False
+                used_idx.append(p_idx)
+
+                p_coord = coord_exit[p_idx, None, :]
+
+                if np.all(remain_entry == False):
+                    np_idx = -1
+                else:
+                    np_idx, np_dist = _get_nn_dist(
+                        kdt_entry, p_coord, max_distance, min_distance, remain_entry, True
+                    )
+
+                if np_idx != -1:
+                    p_idx = np_idx
+                    ch_dists[-1] = np_dist
+                else:
+                    ch_cls  = class_c
+                    class_c += 1
+
+                    if _nfm_filled > 0:
+                        first_pos = ch_row_idxs[0]
+                        first_row = fm_entry.df.iloc[first_pos]
+                        first_coord = (
+                            first_row[["x", "y", "z"]].values
+                            + first_row[["shift_x", "shift_y", "shift_z"]].values
+                        ).reshape(1, 3)
+                        remain_entry[used_idx] = True
+                        remain_exit[used_idx]  = True
+                        nm_idx, nm_dist = _get_nn_dist(
+                            kdt_entry, p_coord, max_distance, min_distance, remain_entry, False
+                        )
+                        first_idx, first_dist = _get_nn_dist(
+                            kdt_exit, first_coord, max_distance, min_distance, remain_exit, False
+                        )
+                        remain_entry[used_idx] = False
+                        remain_exit[used_idx]  = False
+
+                        if first_idx == nm_idx and first_idx != -1 and len(ch_row_idxs) == 1:
+                            if first_dist <= nm_dist:
+                                nm_idx = -1
+                            else:
+                                first_idx = -1
+                        elif first_idx != -1 and nm_idx != -1:
+                            part1 = int(exit_subtomos[first_idx])
+                            part2 = int(entry_subtomos[nm_idx])
+                            cl1 = int(_nfm_idx1[_pos_of_sub[part1]])
+                            cl2 = int(_nfm_idx1[_pos_of_sub[part2]])
+                            if cl1 == cl2:
+                                if first_dist <= nm_dist:
+                                    nm_idx = -1
+                                else:
+                                    first_idx = -1
+
+                        ch_changed = False
+                        if first_idx != -1:
+                            result = _add_chain_suffix(
+                                ch_cls, ch_orders,
+                                _nfm_idx1, _nfm_idx2, _nfm_dist,
+                                _pos_of_sub, _cls_to_rows,
+                                exit_subtomos, first_idx, first_dist,
+                            )
+                            if result is not None:
+                                ch_cls     = result
+                                ch_changed = True
+                        if nm_idx != -1:
+                            class_max = None
+                            if ch_changed:
+                                current_class = class_c - 1
+                                cl_max = max(ch_orders) if ch_orders else 0
+                                if cl_max > 1:
+                                    class_max = (cl_max, current_class)
+                            result = _add_chain_prefix(
+                                ch_cls, ch_orders, ch_dists,
+                                _nfm_idx1, _nfm_idx2, _nfm_dist,
+                                _pos_of_sub, _cls_to_rows,
+                                entry_subtomos, nm_idx, nm_dist,
+                                class_max=class_max,
+                            )
+                            if result is not None:
+                                ch_cls = result
+
+                    # Commit this chain's rows to the nfm working arrays.
+                    start = _nfm_filled
+                    for k_i, p in enumerate(ch_row_idxs):
+                        sub_id = int(entry_subtomos[p])
+                        _nfm_rows[_nfm_filled] = p
+                        _nfm_idx1[_nfm_filled] = ch_cls
+                        _nfm_idx2[_nfm_filled] = ch_orders[k_i]
+                        _nfm_dist[_nfm_filled] = ch_dists[k_i]
+                        _pos_of_sub[sub_id]    = _nfm_filled
+                        _nfm_filled += 1
+                    _cls_to_rows.setdefault(ch_cls, []).extend(range(start, start + len(ch_row_idxs)))
+
+                    trace_chain = False
+
+        # Reconstruct the feature's nfm DataFrame from the pre-allocated arrays.
+        if _nfm_filled > 0:
+            nfm_df = fm_entry.df.iloc[_nfm_rows[:_nfm_filled]].copy().reset_index(drop=True)
+            nfm_df[store_idx1] = _nfm_idx1[:_nfm_filled]
+            nfm_df[store_idx2] = _nfm_idx2[:_nfm_filled]
+            nfm_df[store_dist] = _nfm_dist[:_nfm_filled]
+            traced_motl = pd.concat([traced_motl, nfm_df])
+
+    traced_motl = cryomotl.Motl(motl_df=traced_motl)
+    _df = traced_motl.df.sort_values(
+        [column_name, store_idx1, store_idx2]
+    ).reset_index(drop=True)
+    traced_motl = cryomotl.Motl(motl_df=_df)
+    if output_motl is not None:
+        traced_motl.write_out(output_motl)
+    return traced_motl
 
 
-def plot_nn_rot_coord_df_plotly(
-    df, coord_columns, desc, displ_threshold=None, title=None, marker_size=5, output_name=None
-):
-    """
-    Create 2D scatter plots of rotated NN coordinates using Plotly (XY, XZ, YZ).
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        DataFrame with columns 'coord_rx', 'coord_ry', 'coord_rz', and 'type'.
-    coord_columns : list
-        List of names with columns to use for display, in x, y, z order.
-    desc : str
-        Name of the column to use as description for the points.
-    displ_threshold : float, optional
-        Axis limit for all plots (symmetric), default: None.
-    title : str, optional
-        Overall figure title.
-    marker_size : int
-        Size of scatter markers.
-    output_name : str, optional
-        If given, saves the figure as HTML or image.
-
-    Returns
-    -------
-    plotly.graph_objects.Figure
-        A Plotly figure with 3 subplots.
-    """
-    fig = make_subplots(
-        rows=1,
-        cols=3,
-        subplot_titles=["XY Distribution", "XZ Distribution", "YZ Distribution"],
-        shared_yaxes=False,
-        horizontal_spacing=0.08,
-    )
-
-    coord_x = df[coord_columns[0]]
-    coord_y = df[coord_columns[1]]
-    coord_z = df[coord_columns[2]]
-
-    # Add XY
-    fig.add_trace(
-        go.Scattergl(
-            x=coord_x,
-            y=coord_y,
-            mode="markers",
-            marker=dict(size=marker_size),
-            name="XY",
-            text=df[desc],
-            showlegend=False,
-        ),
-        row=1,
-        col=1,
-    )
-
-    # Add XZ
-    fig.add_trace(
-        go.Scattergl(
-            x=coord_x,
-            y=coord_z,
-            mode="markers",
-            marker=dict(size=marker_size),
-            name="XZ",
-            text=df[desc],
-            showlegend=False,
-        ),
-        row=1,
-        col=2,
-    )
-
-    # Add YZ
-    fig.add_trace(
-        go.Scattergl(
-            x=coord_y,
-            y=coord_z,
-            mode="markers",
-            marker=dict(size=marker_size),
-            name="YZ",
-            text=df[desc],
-            showlegend=False,
-        ),
-        row=1,
-        col=3,
-    )
-
-    if displ_threshold is not None:
-        limits = [-displ_threshold, displ_threshold]
-        fig.update_xaxes(range=limits, row=1, col=1)
-        fig.update_yaxes(range=limits, row=1, col=1)
-        fig.update_xaxes(range=limits, row=1, col=2)
-        fig.update_yaxes(range=limits, row=1, col=2)
-        fig.update_xaxes(range=limits, row=1, col=3)
-        fig.update_yaxes(range=limits, row=1, col=3)
-
-    fig.update_layout(
-        # title=title or "Rotated Coordinate Distributions",
-        height=400,
-        margin=dict(t=40, b=30, l=30, r=30),
-        plot_bgcolor="white",
-    )
-
-    # Save to file if needed
-    if output_name:
-        if output_name.endswith(".html"):
-            fig.write_html(output_name)
-        else:
-            fig.write_image(output_name)
-
-    return fig

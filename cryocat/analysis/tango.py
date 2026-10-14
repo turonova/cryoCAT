@@ -23,43 +23,65 @@ import sklearn.neighbors as sn
 
 from cryocat.utils import geom
 from cryocat.analysis import nnana
+from cryocat.analysis import clustering as clustering_mod
 from cryocat.core import cryomotl
 from cryocat.core import cryomap
 from cryocat.utils.geom import Matrix
 from cryocat.utils.classutils import get_classes_from_names, get_class_names_by_parent
+from cryocat.utils import symmetry
+from cryocat.utils.symmetry import SYMMETRY_GROUPS
+from cryocat._types import Symmetry
+from typing import Literal
 from cryocat.analysis import visplot
-import pandas as pd
-import plotly.graph_objects as go
-
-from matplotlib.colors import LinearSegmentedColormap, to_hex
-
-### Utility functions ###
 
 
-def get_colormap_color(cmap, val):
-    """
-    Get a color from a colormap based on a value.
+def _check_numeric_param(
+    value: int | float | np.integer | np.floating | None,
+    name: str,
+    return_int: bool = True,
+) -> int | float | None:
+    """Validate that *value* is a numeric scalar and return it, optionally as ``int``.
 
     Parameters
     ----------
-    cmap : matplotlib.colors.Colormap
-        The colormap to use.
-    val : float
-        The value to map to a color. Should be in the range [0, 1].
+    value : int, float, np.integer, np.floating, or None
+        The value to validate.  ``None`` is accepted and returned unchanged.
+    name : str
+        Parameter name inserted into the ``TypeError`` message.
+    return_int : bool, default True
+        When ``True``, return ``int(value)``; when ``False``, return *value*
+        unchanged.
+
+        .. note::
+            ``float('nan')`` passes the type check (it is a ``float``) but
+            ``int(float('nan'))`` raises ``ValueError``.  NaN with
+            ``return_int=False`` is returned as-is; with ``return_int=True``
+            it raises ``ValueError`` from the cast, not ``TypeError`` from
+            this function.
 
     Returns
     -------
-    str
-        The color in hexadecimal format.
+    int or float or None
+        Validated *value*.
+
+    Raises
+    ------
+    TypeError
+        If *value* is not ``None`` and not one of ``int``, ``float``,
+        ``numpy.integer``, or ``numpy.floating``.
     """
-    rgba = cmap(val)
-    return to_hex(rgba, keep_alpha=False)
-
-
-###
+    if value is None:
+        return None
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return int(value) if return_int else value
+    raise TypeError(f"A param {name} has to be a float or an int.")
 
 
 class Particle:
+    """Single rigid-body particle with rotation, position, and optional identifiers.
+
+    See :meth:`__init__` for parameter details.
+    """
 
     # TODO: include check for unit quaternions and range of Euler angles
 
@@ -76,7 +98,7 @@ class Particle:
         tomo_id : int, optional
             An optional identifier for the tomography, must be an integer or float. Default is None.
         motl_fid : str, optional
-            An optional motl feature_id for the particle that will be used as additional label. Default is None.
+            An optional motl column name for the particle that will be used as additional label. Default is None.
         degrees : bool, default=True
             A flag indicating whether the rotation is provided in degrees. Ddefault is True.
         particle_id : int, default=0
@@ -122,45 +144,17 @@ class Particle:
 
         self.position = position.reshape(3)
 
-        def check_type(input_param, param_desc, return_int=True):
-            """
-            Check if the input parameter is of type int or float and return it as an int or float.
-
-            Parameters
-            ----------
-            input_param : int, float, None
-                The input parameter to check.
-            param_desc : str
-                A description of the parameter for error messages.
-            return_int : bool, default=True
-                If True, integer is returned. Defaults to True.
-
-            Raises
-            ------
-            TypeError
-                If the input parameter is not of type int or float.
-
-            Returns
-            -------
-            int or float or None
-            """
-
-            if input_param is not None:
-                if isinstance(input_param, (int, float)):
-                    if return_int:
-                        return int(input_param)
-                    else:
-                        return input_param
-                else:
-                    raise TypeError(f"A param {param_desc} has to be a float or an int.")
-            else:
-                return None
-
-        self.tomo_id = check_type(tomo_id, "tomo_id")
+        self.tomo_id = _check_numeric_param(tomo_id, "tomo_id")
         self.motl_fid = motl_fid
-        self.id = check_type(particle_id, "particle_id")
+        self.id = _check_numeric_param(particle_id, "particle_id")
 
     def __str__(self):
+        """Return a string representation showing the rotation-translation matrix, tomo_id, and motl_fid.
+
+        Returns
+        -------
+        str
+        """
 
         rototranslation = np.hstack((self.rotation, self.position.reshape(-1, 1)))
 
@@ -176,6 +170,23 @@ class Particle:
         # return f"Particle at position \n{self.position} \nwith orientation\n{self.rotation}"
 
     def __mul__(self, other):
+        """Compose two particles via group multiplication in SE(3).
+
+        Parameters
+        ----------
+        other : Particle
+            Right-hand factor.
+
+        Raises
+        ------
+        ValueError
+            If ``other`` is not a :class:`Particle`.
+
+        Returns
+        -------
+        Particle
+            New particle representing ``self * other``.
+        """
         if isinstance(other, Particle):
             rot_product = self.rotation @ other.rotation
             pos_product = self.rotation @ other.position + self.position
@@ -184,6 +195,22 @@ class Particle:
             raise ValueError("Invalid input. Both factors need to be Particle objects.")
 
     def __eq__(self, other):
+        """Test approximate equality of rotation and exact equality of position.
+
+        Parameters
+        ----------
+        other : Particle
+            Particle to compare against.
+
+        Raises
+        ------
+        ValueError
+            If ``other`` is not a :class:`Particle`.
+
+        Returns
+        -------
+        bool
+        """
         if isinstance(other, Particle):
             rot_1 = R.from_matrix(self.rotation)
             rot_2 = R.from_matrix(other.rotation)
@@ -194,6 +221,12 @@ class Particle:
             raise ValueError("Invalid input. Both objects need to be Particle objects.")
 
     def __hash__(self):
+        """Hash based on rotation, position, and tomo_id.
+
+        Returns
+        -------
+        int
+        """
 
         rot_part = tuple(self.rotation.flatten())
         pos_part = tuple(self.position)
@@ -201,8 +234,13 @@ class Particle:
         return hash((rot_part, pos_part, self.tomo_id))
 
     def inv(self):
-        """
-        Compute inverse of input particle.
+        """Compute the group inverse of this particle in SE(3).
+
+        Returns
+        -------
+        Particle
+            New particle whose rotation is ``self.rotation.T`` and whose
+            position satisfies ``inv * self == identity``.
         """
         rot_new = self.rotation.T
         pos_new = -rot_new @ self.position
@@ -230,7 +268,7 @@ class Particle:
         If overwrite == False, Particle is returned.
         """
 
-        if isinstance(scaling_factor, (int, float)):
+        if isinstance(scaling_factor, (int, float, np.integer, np.floating)):
 
             scaled_position = scaling_factor * self.position
 
@@ -248,30 +286,38 @@ class Particle:
             raise TypeError("'scaling_factor' needs to be of type int or float.")
 
     def tangent_at_identity(self):
-        """
-        Compute tangent from identity in SE(3) pointing in direction of
-        self.
+        """Compute the tangent vector at the identity pointing toward ``self``.
+
+        Concretely returns ``logm(self.rotation)`` assembled into a 6-element
+        twist vector ``[so3_x, so3_y, so3_z, tx, ty, tz]``.
 
         Returns
         -------
-        numpy ndarray (6,)
+        numpy.ndarray of shape (6,)
+            SE(3) twist vector at the identity.
         """
         log = logm(self.rotation)
         log = log.real
         return Matrix(log).twist_from_skew_translation(self.position)
 
     def twist_vector(self, other):
-        """
-        Compute twist vector describing relative pose of input particles.
+        """Compute the twist vector describing the relative pose from ``self`` to ``other``.
+
+        Parameters
+        ----------
+        other : Particle
+            The target particle.
 
         Raises
         ------
         ValueError
-            If the input is not a Particle object.
+            If ``other`` is not a :class:`Particle` instance.
 
         Returns
         -------
-        numpy ndarray (6,)
+        numpy.ndarray of shape (6,)
+            SE(3) twist vector from ``self`` to ``other`` expressed in the
+            local frame of ``self``.
         """
         if isinstance(other, Particle):
             shift = self.inv()
@@ -458,18 +504,22 @@ class Particle:
 
     @classmethod
     def random(cls, x_range, y_range, z_range):
-        """
-        Generates a random particle with a translation vector position within bounds.
+        """Generate a random particle with position uniformly drawn from the given ranges.
 
         Parameters
         ----------
-        - x_range: Tuple of (min_x, max_x)
-        - y_range: Tuple of (min_y, max_y)
-        - z_range: Tuple of (min_z, max_z)
+        x_range : tuple of float
+            ``(min_x, max_x)`` bounds for the x position.
+        y_range : tuple of float
+            ``(min_y, max_y)`` bounds for the y position.
+        z_range : tuple of float
+            ``(min_z, max_z)`` bounds for the z position.
 
         Returns
         -------
         Particle
+            A new particle with a random SO(3) rotation and a position drawn
+            uniformly within the specified ranges.
         """
         x = np.random.uniform(x_range[0], x_range[1])
         y = np.random.uniform(y_range[0], y_range[1])
@@ -500,83 +550,231 @@ class Particle:
         return eulers[0]
 
 
+def _inplane_angles_from_rotations(rotations: R, stored_phi: np.ndarray, atol_deg: float = 1e-6) -> np.ndarray:
+    """In-plane angles (degrees) read from the rotations, written close to the stored phi.
+
+    The in-plane angle is the first ``zxz`` Euler angle, phi, as computed by
+    :meth:`scipy.spatial.transform.Rotation.as_euler` from each rotation (the
+    same value :meth:`Particle.in_plane_angle` and
+    :func:`cryocat.utils.symmetry.angular_score` use). The stored phi is only
+    used to choose how the angle is written: the result is
+    ``stored + wrap(derived - stored)``, with the difference brought into
+    [-180, 180), so a stored 270 that means the same spin as the derived -90
+    stays 270.
+
+    Parameters
+    ----------
+    rotations : scipy.spatial.transform.Rotation
+        ``N`` particle rotations.
+    stored_phi : numpy.ndarray
+        ``(N,)`` phi angles (degrees) as stored in the particle list.
+    atol_deg : float, default=1e-6
+        Differences below this (degrees) are treated as rounding and the stored
+        value is kept exactly.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(N,)`` in-plane angles in degrees. Equal to *stored_phi* except where
+        the stored phi describes a different spin than the rotation: theta
+        stored as exactly 0 or 180 with psi not 0 (phi and psi then turn about
+        the same axis, and scipy puts the whole spin into phi), or theta stored
+        outside [0, 180].
+    """
+    stored_phi = np.asarray(stored_phi, dtype=float)
+    derived_phi = np.atleast_2d(rotations.as_euler("zxz", degrees=True))[:, 0]
+    diff = np.mod(derived_phi - stored_phi + 180.0, 360.0) - 180.0
+    diff[np.abs(diff) < atol_deg] = 0.0
+    return stored_phi + diff
+
+
 ##### Subclass for symmetric particles #####
 
 
+#: Legacy free-text words formerly accepted by SymmParticle, mapped to the
+#: canonical Symmetry group letter and geom.Polyhedron "kind" name. No longer
+#: accepted as input (removed 2026-09-28) — kept only to build a helpful
+#: migration error message when one of these words is detected in `symm`.
+_LEGACY_SYMM_WORDS: dict[str, tuple[str, str]] = {
+    "tetra": ("T", "tetrahedron"),
+    "octa": ("O", "octahedron"),
+    "cube": ("O", "cube"),
+    "ico": ("I", "icosahedron"),
+    "dodeca": ("I", "dodecahedron"),
+}
+
+#: Default geom.Polyhedron "kind" for each Platonic group letter, used when
+#: *kind* is not given (mirrors SymmGroup.to_polyhedron()'s own defaults).
+_DEFAULT_KIND: dict[str, str] = {"T": "tetrahedron", "O": "octahedron", "I": "icosahedron"}
+
+_VALID_KINDS = frozenset({"tetrahedron", "octahedron", "cube", "icosahedron", "dodecahedron"})
+
+
+def _parse_symm_spec(symm: Symmetry | None, kind: str | None):
+    """Resolve a (symm, kind) pair to a cyclic order or a Platonic (letter, kind).
+
+    Parameters
+    ----------
+    symm : Symmetry or None
+        Symmetry specification, in the canonical :data:`cryocat._types.Symmetry`
+        form: ``"T"``, ``"O"``, ``"I"`` for Platonic solids, or ``"CN"``/a bare
+        int for cyclic C_N symmetry. Parsed via :func:`cryocat.utils.geom.as_symmetry`.
+        The legacy free-text words this module used to accept (``'tetra'``,
+        ``'octa'``, ``'cube'``, ``'ico'``, ``'dodeca'``) are no longer valid
+        input; passing one raises a :class:`ValueError` naming its canonical
+        replacement.
+    kind : str or None
+        For O/I, which :mod:`cryocat.utils.geom` solid to use:
+        ``"octahedron"``/``"cube"`` for O, ``"icosahedron"``/``"dodecahedron"``
+        for I. Ignored (must be None) for cyclic symmetry.
+
+    Returns
+    -------
+    tuple
+        ``("cyclic", n)`` or ``("platonic", letter, kind_name)``.
+
+    Raises
+    ------
+    ValueError
+        If *symm* is not a recognised :data:`Symmetry` specification (this
+        includes the removed legacy words, which get a message naming their
+        canonical replacement), or if *kind* is given for cyclic symmetry.
+    NotImplementedError
+        If *symm* specifies dihedral symmetry (not supported here yet).
+    """
+    resolved_kind = None
+    if kind is not None:
+        resolved_kind = kind.strip().lower()
+        if resolved_kind not in _VALID_KINDS:
+            raise ValueError(f"Unknown kind {kind!r}; expected one of {sorted(_VALID_KINDS)}.")
+
+    if isinstance(symm, str):
+        word = symm.strip().lower()
+        for prefix, (letter, kind_name) in _LEGACY_SYMM_WORDS.items():
+            if prefix in word:
+                hint = f"symm={letter!r}" + ("" if letter == "T" else f", kind={kind_name!r}")
+                raise ValueError(
+                    f"symm={symm!r}: legacy word-based symmetry specifications are no longer "
+                    f"accepted; use the canonical Symmetry form instead ({hint})."
+                )
+
+    letter, order = geom.as_symmetry(symm)
+    if letter == "D":
+        raise NotImplementedError(
+            f"Dihedral symmetry ({symm!r}) is not supported by SymmParticle yet; only C, T, O, I are."
+        )
+    if letter == "C":
+        if resolved_kind is not None:
+            raise ValueError(f"kind={kind!r} is only applicable to Platonic (T/O/I) symmetry, not cyclic.")
+        return "cyclic", order
+    return "platonic", letter, (resolved_kind or _DEFAULT_KIND[letter])
+
+
 class SymmParticle(Particle):
+    """Particle subclass that additionally encodes point-group symmetry.
 
-    def __init__(self, rotation, position, tomo_id=None, motl_fid=None, particle_id=None, symm=None, custom_rot=None):
-        """
-        Initialize Particle with a rotation and a position.
+    See :meth:`__init__` for parameter details.
+    """
 
-        The input rotation can be:
-        - A scipy Rotation object
-        - Euler angles (sequence of three floats in 'zxz' convention)
-        - A unit quaternion (4-element array-like)
-        - A rotation matrix (3x3 array-like)
-        The input position can be:
-        - A numpy.ndarray of size 3
-        The input tomo_id (optional) can be:
-        - An integer
-        - Default is None
-        The input motl_fid (optional) can be:
-        - A float/ an int
-        - Default is None
-        The input particle_id (optional) can be:
-        - A float/ an int
-        - Default is None
-        The input symm (optional) can be:
-        - A string containing one of ['tetra', 'octa', 'cube', 'ico', 'dodeca']
-        - An integer n > 1 referring to C_n symmetry
-        - Default is None
-        The input custom_rot (optional) can be a rotation matrix for the case that
-        the given particle symmetry does not align with the canonical options
-        for platonic solids presented here. This is not needed in the case where sym == n >1.
-        Default is None.
+    def __init__(
+        self,
+        rotation,
+        position,
+        tomo_id=None,
+        motl_fid=None,
+        particle_id=None,
+        symm: Symmetry | None = None,
+        kind: str | None = None,
+        custom_rot=None,
+    ):
+        """Initialize a SymmParticle with rotation, position, and symmetry.
+
+        Parameters
+        ----------
+        rotation : R, list, tuple, np.ndarray
+            Rotation as a scipy.Rotation object, Euler angles (3 values, 'zxz'
+            convention), a unit quaternion (4 values), or a 3×3 rotation matrix.
+        position : np.ndarray
+            1-D array of size 3 representing the particle position.
+        tomo_id : int, optional
+            Tomogram identifier.  Default is None.
+        motl_fid : str, optional
+            Column name used as an additional label.  Default is None.
+        particle_id : int, optional
+            Particle identifier.  Default is None.
+        symm : Symmetry, optional
+            Symmetry specification, in the canonical
+            :data:`cryocat._types.Symmetry` form: ``"T"``, ``"O"``, ``"I"``
+            for Platonic solids, ``"CN"`` or a bare integer ``n > 1`` for
+            cyclic C_n symmetry. Parsed via :func:`cryocat.utils.geom.as_symmetry`.
+            Dihedral symmetry is not supported yet.
+
+            The legacy free-text words this module used to accept (``'tetra'``,
+            ``'octa'``, ``'cube'``, ``'ico'``, ``'dodeca'``) are no longer
+            valid input; passing one raises a :class:`ValueError` naming its
+            canonical replacement (e.g. ``'octa'`` -> ``symm="O"``). Default
+            is None.
+        kind : str, optional
+            For ``symm="O"``/``"I"``, which :mod:`cryocat.utils.geom` solid to
+            use: ``"octahedron"`` (default) or ``"cube"`` for O,
+            ``"icosahedron"`` (default) or ``"dodecahedron"`` for I. Mirrors
+            :meth:`cryocat.utils.symmetry.SymmGroup.to_polyhedron`'s ``kind``.
+            Not applicable to cyclic symmetry. Default is None (the default
+            kind for the given group).
+
+            ``kind="dodecahedron"`` uses :class:`cryocat.utils.geom.Dodecahedron`,
+            whose canonical orientation is aligned with ``kind="icosahedron"``
+            (same symmetry axes). Before this alignment (2026-09-24) the
+            dodecahedron was turned 90° about z, so similarity scores computed
+            with earlier versions differ. The previous frame can be recovered
+            with ``custom_rot`` set to a rotation of -90° about z.
+        custom_rot : np.ndarray or scipy.spatial.transform.Rotation, optional
+            Rotation applied (once) to Platonic-solid vertices before orienting
+            them with the particle rotation.  Only valid for Platonic (T/O/I)
+            symmetry; passing it for cyclic symmetry raises ValueError.  Stored as the ``(3, 3)`` matrix ``self.custom_rot``
+            (None if not given), so :meth:`similarity_symm` can rebuild the
+            full orientation of the solid.  Default is None.
 
         Raises
         ------
         ValueError
-            If the symmetry type is invalid or if the custom rotation is not a valid rotation object or matrix.
+            If ``symm`` is not a recognised :data:`Symmetry` specification
+            (including a removed legacy word), if ``kind`` is unknown or given
+            for cyclic symmetry, if ``custom_rot`` is given for cyclic
+            symmetry, or if ``custom_rot`` is not a valid rotation object or
+            matrix.
+        NotImplementedError
+            If ``symm`` specifies dihedral symmetry.
         """
         super().__init__(rotation, position, tomo_id, motl_fid, particle_id=particle_id)
 
         ## take care of symmetric part:
         platonic = False
         self.category = None
+        self.kind = None
+        self.custom_rot = None
 
-        if isinstance(symm, str):
-            if symm.__contains__("tetra"):
-                self.category = "tetrahedron"  # 1
-                vertices = geom.tetrahedron()
+        if symm is not None:
+            spec = _parse_symm_spec(symm, kind)
+            if spec[0] == "cyclic":
+                self.category = spec[1]
+                vertices = geom.n_gon_points(self.category)  # vertices lie in plane
+            else:
+                _, letter, kind_name = spec
+                self.category = letter
+                self.kind = kind_name
+                vertices = SYMMETRY_GROUPS[letter]().to_polyhedron(kind=kind_name).vertices
                 platonic = True
-            elif symm.__contains__("octa"):
-                self.category = "octahedron"  # 2
-                vertices = geom.octahedron()
-                platonic = True
-            elif symm.__contains__("cube"):
-                self.category = "cube"  # 3
-                vertices = geom.cube()
-                platonic = True
-            elif symm.__contains__("ico"):
-                self.category = "icosahedron"  # 4
-                vertices = geom.icosahedron()
-                platonic = True
-            elif symm.__contains__("dodeca"):
-                self.category = "dodecahedron"  # 5
-                vertices = geom.dodecahedron()
-                platonic = True
-            elif symm.startswith("c"):
-                self.category = int(re.findall(r"\d+", symm)[-1])
-                vertices = self.category
-
-        elif isinstance(symm, (int, float)):
-            self.category = int(symm)
-            vertices = geom.n_gon_points(symm)  # vertices lie in plane
 
         if self.category is None or (not platonic and self.category == 1):
             raise ValueError(
                 f"{symm} is an invalid symmetry type. It must refer to a platonic solid or be an integer > 1."
+            )
+
+        if not platonic and custom_rot is not None:
+            raise ValueError(
+                f"custom_rot is only applicable to Platonic (T/O/I) symmetry, not cyclic ({symm!r}): "
+                "a cyclic particle is described by its in-plane angle alone."
             )
 
         if platonic and custom_rot is None:
@@ -584,13 +782,12 @@ class SymmParticle(Particle):
         elif custom_rot is not None:
 
             if isinstance(custom_rot, R):
-
+                # Convert only; the rotation is applied once in the branch below.
                 custom_rot = custom_rot.as_matrix()
-                vertices = vertices @ custom_rot.T
-                self.solid = vertices @ self.rotation.T
 
             if Matrix(custom_rot).is_SO3():
 
+                self.custom_rot = np.asarray(custom_rot, dtype=float)
                 vertices = vertices @ custom_rot.T
                 self.solid = vertices @ self.rotation.T
 
@@ -609,31 +806,32 @@ class SymmParticle(Particle):
         Given the input particle's symmetry type, this function returns the associated maximum
         angular dissimilarity.
 
+        Notes
+        -----
+        Delegates to :func:`cryocat.utils.symmetry.max_angular_mismatch`:
+        ``pi / n`` for cyclic C_n, and for Platonic symmetry the angle from a
+        corner of the solid to the nearest face centre (70.53° for T, 54.74°
+        for O, 37.38° for I, the same for both solids of a group).
+
+        Until 2026-09-29 this returned "180° minus the angle between two
+        hand-picked corners", which is correct only for the tetrahedron; for
+        the octahedron (90.00°), cube (109.47°), icosahedron (116.57°) and
+        dodecahedron (138.19°) it was too large, so :meth:`similarity_symm`
+        scores for these solids could never drop to 0. Scores computed with
+        the default maximum before that date differ for O/I.
+
         Returns
         -------
         float
         """
-        if self.category in ["cube", "icosahedron"]:
-
-            p1, p2 = self.solid[0], self.solid[2]
-            return np.pi - geom.great_circle_distance(p1, p2)
-
-        elif self.category in ["tetrahedron", "octahedron", "dodecahedron"]:
-
-            p1, p2 = self.solid[0], self.solid[1]
-            return np.pi - geom.great_circle_distance(p1, p2)
-
-        else:  # cyclic symmetry
-
-            n = self.category
-            return np.pi / n
+        return symmetry.max_angular_mismatch(self.category, kind=self.kind)
 
     def similarity_symm(self, other, max=None):
         """
         Compute angular similarity between two symmetric particles in an unambiguous manner.
 
         Parameters
-        -----------
+        ----------
         max : float, optional
             If not None, the maximum dissimilarity is set to the input value.
             This is designed to accelerate computations by computing max only once.
@@ -642,32 +840,55 @@ class SymmParticle(Particle):
         Raises
         ------
         ValueError
-            If the symmetry types of the input particles don't match.
+            If the symmetry types of the input particles don't match. For
+            Platonic symmetry, both ``category`` (group letter) and ``kind``
+            (specific solid) must match, e.g. an Octahedron- and a
+            Cube-equipped particle both have ``category == "O"`` but are not
+            comparable.
 
         Returns
         -------
         float
+            Score in [0, 1]; values within ``1e-5`` of 1 are set to 1 and
+            values below ``1e-5`` (including negative values, possible only
+            when *max* is smaller than the actual mismatch) to 0.
+
+        Notes
+        -----
+        Delegates to :func:`cryocat.utils.symmetry.angular_score`, the single
+        implementation also used for twist descriptors. For Platonic symmetry
+        each particle's solid is turned by ``self.rotation @ self.custom_rot``
+        (or ``self.rotation`` alone without ``custom_rot``), exactly as
+        ``self.solid`` was built. For cyclic symmetry the score compares the
+        spin left after tilting the other particle's z-axis onto this one's;
+        the flat polygon in ``self.solid`` (turned by phi) is not used, and
+        matches the score only for particles with the same z-axis (since
+        2026-10-09).
         """
-        if self.category != other.category:
-
+        if self.category != other.category or self.kind != other.kind:
             raise ValueError("The symmetry tpyes of the input particles don't match!")
-        else:
 
-            sim_measure = geom.hausdorff_distance_sphere(
-                self.solid, other.solid
-            )  # min_great_circle_distance(self.solid, other.solid)
+        max_val = max if max is not None else self.max_dissimilarity()
+        score = symmetry.angular_score(
+            self._solid_rotation(), other._solid_rotation(), self.category, kind=self.kind, max_val=max_val
+        )
+        return float(score[0])
 
-            if max is not None:
+    def _solid_rotation(self) -> np.ndarray:
+        """Return the rotation that turns the canonical solid into ``self.solid``.
 
-                max_val = max
+        Returns
+        -------
+        numpy.ndarray
+            ``(3, 3)`` matrix ``self.rotation @ self.custom_rot``, or
+            ``self.rotation`` when no ``custom_rot`` was given.
+        """
+        if self.custom_rot is None:
+            return self.rotation
+        return self.rotation @ self.custom_rot
 
-            else:
-                max_val = self.max_dissimilarity()
-
-            return 1 - sim_measure / max_val
-
-    @classmethod
-    def equip_symmetry(input_particle: Particle, symm, custom_rot=None):
+    @staticmethod
+    def equip_symmetry(input_particle: Particle, symm: Symmetry, kind: str | None = None, custom_rot=None):
         """
         Equip an existing particle object with symmetry information.
 
@@ -675,10 +896,11 @@ class SymmParticle(Particle):
         ----------
         input_particle : Particle
             The input particle to be equipped with symmetry information.
-        symm : str or int
-            Refers to symmetry type. Can be one of the following:
-            - 'tetra', 'octa', 'cube', 'ico', 'dodeca' for platonic solids
-            - An integer n > 1 for cyclic groups C_n.
+        symm : Symmetry
+            Symmetry specification; see :meth:`SymmParticle.__init__`.
+        kind : str, optional
+            Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+            :meth:`SymmParticle.__init__`. Default is None.
         custom_rot : numpy ndarray (3,3) or rotation object, optional
             Rotation matrix or rotation object describing the symmetry of the particle in the case of a platonic solid.
             Default is None.
@@ -693,14 +915,17 @@ class SymmParticle(Particle):
             input_particle.tomo_id,
             input_particle.motl_fid,
             input_particle.id,
-            symm,
-            custom_rot,
+            symm=symm,
+            kind=kind,
+            custom_rot=custom_rot,
         )
         return result
 
 
 # TODO - move as a function to cryomotl
-def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, symm=None, custom_rot=None):
+def convert_to_particle_list(
+    input_motl, motl_fid=None, subset_tomo_id=None, symm: Symmetry | None = None, kind: str | None = None, custom_rot=None
+):
     """Convert a Motl object to a list of Particle objects.
 
     Parameters
@@ -709,14 +934,17 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
         The path to the input Motl file or Motl object to be loaded.
     motl_fid : str, optional
         The column name in the Motl dataframe that should be used as motl_fid.
-        If None, motl_fids will be set to None for all particles. Default is None.
+        If None, the motl_fid attribute will be set to None for all particles. Default is None.
     subset_tomo_id : int or list, optional
         A tomo_id(s) that should be used. If None, the entire Motl will be used. Default is None.
-    symm: int or str, optional
-        Specifies symmetry of a particle. If int is passed, cyclic (C) symmetry is assumed. See SymParticle for more
-        details on str specifications. If specified, list of SymmParticle objects is created, instead of list of
-        Particle objects. Default is None.
-    custom_rot: np.array, optional
+    symm : Symmetry, optional
+        Specifies symmetry of a particle; see :meth:`SymmParticle.__init__`.
+        If specified, a list of SymmParticle objects is created, instead of a
+        list of Particle objects. Default is None.
+    kind : str, optional
+        Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+        :meth:`SymmParticle.__init__`. Default is None.
+    custom_rot : np.array, optional
         The input custom_rot can be a rotation matrix for the case that the given particle symmetry does not align with
         the canonical options for platonic solids as defined in geom. This is not needed in the case where sym == n >1.
         It is used only if symm is specified. Default to None.
@@ -732,7 +960,7 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
     tm = cryomotl.Motl.load(input_motl)
 
     if subset_tomo_id is not None:
-        tm = tm.get_motl_subset(subset_tomo_id, feature_id="tomo_id")
+        tm = tm.get_motl_subset(subset_tomo_id, column_name="tomo_id")
 
     coord = tm.get_coordinates()
     angles = tm.get_angles()
@@ -764,6 +992,7 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
                     motl_fid=features[i],
                     particle_id=tm.df.iloc[i]["subtomo_id"],
                     symm=symm,
+                    kind=kind,
                     custom_rot=custom_rot,
                 )
             )
@@ -775,6 +1004,11 @@ def convert_to_particle_list(input_motl, motl_fid=None, subset_tomo_id=None, sym
 
 
 class Descriptor:
+    """Base class for TANGO descriptors.
+
+    Stores per-particle descriptor data in ``self.df`` and optionally a
+    condensed representation in ``self.desc``.
+    """
 
     def __init__(self):
         """
@@ -805,13 +1039,7 @@ class Descriptor:
         -------
         pandas.DataFrame
         """
-
-        if axis_type == "row":
-            return df.dropna(axis=0)
-        elif axis_type == "column":
-            return df.dropna(axis=1)
-        else:
-            raise ValueError("axis_type must be either 'row' or 'column'")
+        return clustering_mod.drop_nans(df, axis_type=axis_type)
 
     @staticmethod
     def build_descriptor_feature_map(desc_list, feat_list):
@@ -836,7 +1064,8 @@ class Descriptor:
                 continue  # skip invalid entries
             base = desc[: -len("Descriptor")]
             matches = [b for b in feat_list if b.endswith(base)]
-            result[desc] = matches
+            if matches:
+                result[desc] = matches
         return result
 
     @staticmethod
@@ -879,24 +1108,10 @@ class Descriptor:
 
         Returns
         -------
-        pandas.DataFrame
-            A DataFrame containing the feature importance scores.
+        pandas.Series
+            Feature importance scores sorted descending.
         """
-
-        # Square of loadings → proportion of variance that each feature contributes to each PC
-        components_matrix = pca.components_  # shape: (n_components, n_features)
-        loadings = components_matrix[:n_components, :] ** 2
-
-        # Sum contributions across selected components
-        feature_scores = loadings.sum(axis=0)
-
-        # Create a series with feature names
-        feature_importance = pd.Series(feature_scores, index=input_df.columns)
-
-        # Sort if you want to see most important features
-        important_features = feature_importance.sort_values(ascending=False)
-
-        return important_features
+        return clustering_mod.pca_feature_importance(pca, list(input_df.columns))
 
     def pca_analysis(
         self, variance_threshold=0.95, show_fig=True, nan_drop="row", scatter_kwargs=None, bar_kwargs=None
@@ -981,25 +1196,7 @@ class Descriptor:
         pandas.DataFrame
             The filtered DataFrame containing only the specified features.
         """
-
-        if isinstance(feature_ids, str):
-            if feature_ids == "all":
-                filtered_df = input_df
-            elif feature_ids in input_df.columns:
-                filtered_df = input_df[[feature_ids, "qp_id"]]
-            else:
-                raise ValueError(f"{feature_ids} is not a valid option for feature_ids parameter.")
-        elif isinstance(feature_ids, list):
-            features = [feature for feature in feature_ids if feature in input_df.columns]
-            features.append("qp_id")
-            if len(features) <= 1:
-                raise ValueError("None of the provided features (columns) is in this descriptor catalogue.")
-            else:
-                filtered_df = input_df[features]
-        else:
-            raise ValueError("The feature_ids has to be a name of a computed feature, list of features or 'all'.")
-
-        return filtered_df
+        return clustering_mod.filter_feature_columns(input_df, feature_ids=feature_ids, id_columns=("qp_id",))
 
     def compute_pca(self, pca_components=None, feature_ids="all", nan_drop="row"):
         """Compute PCA on the descriptor DataFrame.
@@ -1009,8 +1206,8 @@ class Descriptor:
         pca_components : int, optional
             The number of PCA components to compute. Default is None.
         feature_ids : str or list, default="all"
-            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns from input_df.
-            Default is "all".
+            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns of
+            ``self.desc``. Default is "all".
         nan_drop : str, {"row", "column"}
             The axis to drop NaN values from. Default is "row".
 
@@ -1022,26 +1219,12 @@ class Descriptor:
         - qp_ids : numpy.ndarray
             The array of query point indices corresponding to the PCA components.
         """
-
-        pca_df = self.remove_nans(self.desc, axis_type=nan_drop)
-        pca_df = self.filter_features(pca_df, feature_ids=feature_ids)
-
-        pca_components = pca_components or self.pca_components
-        pca_components = min(pca_components, len(pca_df.columns) - 1)
-
-        qp_ids = pca_df["qp_id"].to_numpy()
-        pca_df = pca_df.drop(columns=["qp_id"])
-
-        if "nn_id" in pca_df.columns:
-            pca_df = pca_df.drop(columns=["nn_id"])
-
-        pca = PCA(n_components=pca_components)
-        X_pca = pca.fit_transform(pca_df)
-
-        important_features = self.get_important_features(pca, pca_df, n_components=pca_components)
-        columns = important_features.head(pca_components).index.tolist()
-
-        return pd.DataFrame(X_pca, columns=columns), qp_ids
+        return clustering_mod.compute_pca(
+            self.desc,
+            n_components=pca_components or self.pca_components,
+            feature_ids=feature_ids,
+            nan_drop=nan_drop,
+        )
 
     def k_means_clustering(self, n_clusters, nan_drop="row", pca_dict=None, feature_ids="all", scale_data=True):
         """Perform k-means clustering on the descriptor DataFrame.
@@ -1054,9 +1237,11 @@ class Descriptor:
             The axis to drop NaN values from. Default is "row".
         pca_dict : dict, optional
             A dictionary containing PCA parameters. If None, PCA is not applied. Default is None.
+            Keys map to :func:`~cryocat.analysis.clustering.compute_pca` kwargs; use
+            ``"n_components"`` for the number of components.
         feature_ids : str or list, default="all"
-            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns from input_df.
-            Default is "all".
+            The feature IDs to filter by. Can be "all" or a list of feature names corresponding to columns of
+            ``self.desc``. Default is "all".
         scale_data : bool, default=True
             Whether to scale the data before clustering. Default is True.
 
@@ -1065,44 +1250,61 @@ class Descriptor:
         pandas.DataFrame
             A DataFrame containing the clustering results, including the cluster labels and query point IDs.
         """
+        return clustering_mod.kmeans_cluster(
+            self.desc,
+            n_clusters=n_clusters,
+            feature_ids=feature_ids,
+            nan_drop=nan_drop,
+            pca_dict=pca_dict,
+            scale_data=scale_data,
+        )
 
-        if pca_dict is None:
-            km_data = self.remove_nans(self.desc, axis_type=nan_drop)
-            km_data = self.filter_features(km_data, feature_ids=feature_ids)
-            qp_ids = km_data["qp_id"].to_numpy()
-            km_data = km_data.drop(columns=["qp_id"])
-            if "nn_id" in km_data.columns:
-                km_data = km_data.drop(columns=["nn_id"])
-        else:
-            km_data, qp_ids = self.compute_pca(**pca_dict, feature_ids=feature_ids, nan_drop=nan_drop)
+    def dbscan_clustering(
+        self, eps, min_samples=5, nan_drop="row", pca_dict=None, feature_ids="all", metric="euclidean"
+    ):
+        """Perform DBSCAN clustering on the descriptor DataFrame.
 
-        # sanity check:
-        print(f"Num clusters: {n_clusters}, {type(n_clusters)}")
+        Parameters
+        ----------
+        eps : float
+            Maximum distance between two samples for one to be in the same
+            neighbourhood (in standardised feature space).
+        min_samples : int, default 5
+            Minimum number of samples in a neighbourhood for a core point.
+        nan_drop : {"row", "column"}, default "row"
+            Axis along which to drop NaN values before clustering.
+        pca_dict : dict, optional
+            If given, PCA is applied before clustering.  Keys map to keyword
+            arguments of :func:`~cryocat.analysis.clustering.compute_pca`;
+            ``feature_ids``, ``nan_drop``, and ``id_columns`` are forwarded
+            automatically.
+        feature_ids : str or list of str, default "all"
+            Feature columns to include; forwarded to
+            :func:`~cryocat.analysis.clustering.dbscan_cluster`.
+        metric : str, default "euclidean"
+            Distance metric used by DBSCAN.
 
-        # Run k-means
-        kmeans = KMeans(n_clusters=n_clusters, n_init="auto")
+        Returns
+        -------
+        pandas.DataFrame
+            Feature columns + ``"cluster"`` (``-1`` marks noise) + ``qp_id``.
+        """
+        return clustering_mod.dbscan_cluster(
+            self.desc,
+            eps=eps,
+            min_samples=min_samples,
+            feature_ids=feature_ids,
+            nan_drop=nan_drop,
+            pca_dict=pca_dict,
+            metric=metric,
+        )
 
-        # Scale data
-        if scale_data:
-            scaler = StandardScaler()
-            scaled_data = scaler.fit_transform(km_data)
-            clusters = kmeans.fit_predict(scaled_data)
-        else:
-            clusters = kmeans.fit_predict(km_data)
-
-        # Make DataFrame
-        result_df = pd.DataFrame(km_data, columns=km_data.columns)
-        result_df["cluster"] = clusters
-        result_df["qp_id"] = qp_ids
-
-        return result_df
-
-    def plot_k_means(self, color_column):
+    def plot_k_means(self, color_column_name):
         """Plot the k-means clustering results in 3D.
 
         Parameters
         ----------
-        color_column : str
+        color_column_name : str
             The column name in the DataFrame to use for coloring the points.
         """
 
@@ -1111,22 +1313,12 @@ class Descriptor:
         else:
             merged_df = pd.merge(self.desc, self.df, on="qp_id", how="left")
 
-        fig = go.Figure(
-            data=[
-                go.Scatter3d(
-                    x=merged_df["twist_x"],
-                    y=merged_df["twist_y"],
-                    z=merged_df["twist_z"],
-                    mode="markers",
-                    marker=dict(size=3, opacity=1, color=merged_df[color_column], colorbar=dict(title="Group")),
-                )
-            ]
-        )
-
-        fig.update_layout(
+        fig = visplot.plot_scatter_3d(
+            merged_df,
+            coord_columns=["twist_x", "twist_y", "twist_z"],
+            color_column_name=color_column_name,
+            color_label="Group",
             title="K-means analysis",
-            scene=dict(xaxis_title="X", yaxis_title="Y", zaxis_title="Z"),
-            margin=dict(l=0, r=0, b=0, t=30),
         )
 
         fig.show()
@@ -1148,32 +1340,12 @@ class Descriptor:
         list
             A list of connected components, each represented as a subgraph of the original graph.
         """
-
-        qp_idx = self.df["qp_id"]
-        nn_idx = self.df["nn_id"]
-
-        edges = list(zip(qp_idx, nn_idx))
-
-        G = nx.Graph()
-
-        G.add_edges_from(edges)
-
-        n = nx.number_connected_components(G)
-
-        if size_connected_components is None or not isinstance(size_connected_components, int):
-
-            if num_connected_components >= n:
-                num_connected_components = n
-
-            S = [G.subgraph(c).copy() for c in sorted(nx.connected_components(G), key=len, reverse=True)]
-
-            return S[:num_connected_components]
-
-        elif isinstance(size_connected_components, int):
-
-            S = [G.subgraph(c).copy() for c in nx.connected_components(G) if len(c) >= size_connected_components]
-
-            return S
+        return clustering_mod.connected_component_clusters(
+            self.df["qp_id"],
+            self.df["nn_id"],
+            num_components=num_connected_components,
+            min_size=size_connected_components,
+        )
 
     def build_descriptor(self):
         """Builds a descriptor DataFrame by merging computed features based on unique 'qp_id' values.
@@ -1217,16 +1389,21 @@ class Descriptor:
 
 
 class TwistDescriptor(Descriptor):
+    """Descriptor based on local twist (relative rotation + position) between NN pairs.
+
+    See :meth:`__init__` for parameter details.
+    """
 
     def __init__(
         self,
         input_twist=None,
         input_motl=None,
-        nn_radius=None,
-        feature_id="tomo_id",
-        symm=None,
-        remove_qp=False,
-        remove_duplicates=False,
+        nn_radius: float | None = None,
+        column_name: Literal["tomo_id", "object_id", "class", "geom1", "geom2", "geom3", "geom4", "geom5"] = "tomo_id",
+        symm: Symmetry | None = None,
+        kind: str | None = None,
+        remove_qp: bool = False,
+        remove_duplicates: bool = False,
         build_unique_desc=True,
     ):
         """
@@ -1244,15 +1421,18 @@ class TwistDescriptor(Descriptor):
         nn_radius : float, optional
             The radius within which to compute the twist descriptors. If input_motl is passed as a parameter, the radius
             has to be specified. Default is None.
-        feature_id : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
+        column_name : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
             The identifier for the motl feature which specifies the level of comparison. For instance, if "tomo_id" is
             specified the NN analysis will be computed at the tomogram level. If "object_id" is specified, the nearest
             neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
             numbering among all tomograms in case "tomo_id" is not set, otherwise objects from different tomograms might
             be incorrectly grouped together. Default is "tomo_id".
-        symm : int or str, optional
+        symm : Symmetry, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
-            values see :class:`cryocat.tango.SymmParticle`. Default is None.
+            values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
+        kind : str, optional
+            Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+            :meth:`SymmParticle.__init__`. Default is None.
         remove_qp : bool, default=False
             Specifies whether to remove the query point during the nearest neighbor analysis. The parameter is relevant
             only if two motls are specified and it can happen that the nearest point is identical to the query point or
@@ -1277,10 +1457,29 @@ class TwistDescriptor(Descriptor):
                 self.df = input_twist
             elif isinstance(input_twist, str):
                 self.df = self.read_in(input_twist)
-        elif input_motl is not None and isinstance(nn_radius, (float, int)):
+            # Store or derive nn_radius so downstream code (clustering, GUI) can use it.
+            if nn_radius is not None:
+                self.nn_radius: float | None = float(nn_radius)
+                self.radius_source: str = "given"
+            else:
+                try:
+                    self.nn_radius = TwistDescriptor.derive_nn_radius(self.df)
+                    self.radius_source = "computed"
+                except Exception:
+                    self.nn_radius = None
+                    self.radius_source = "unknown"
+        elif input_motl is not None and isinstance(nn_radius, (float, int, np.floating, np.integer)):
             self.df = TwistDescriptor.get_nn_twist_stats_within_radius(
-                input_motl, nn_radius, feature_id, symm, remove_qp=remove_qp, remove_duplicates=remove_duplicates
+                input_motl,
+                nn_radius,
+                column_name,
+                symm,
+                kind=kind,
+                remove_qp=remove_qp,
+                remove_duplicates=remove_duplicates,
             )
+            self.nn_radius = float(nn_radius)
+            self.radius_source = "given"
         else:
             raise ValueError(
                 "One has to specify (at least) either input_twist or input_motl in combination with nn_radius."
@@ -1295,63 +1494,69 @@ class TwistDescriptor(Descriptor):
 
         return self.df[item]
 
-    def write_out(self, output_file):
-        """
-        Save self.df to CSV or Pickle depending on file extension.
+    def write_out(self, output_path):
+        """Save ``self.df`` to CSV or Pickle depending on the file extension.
+
+        Parameters
+        ----------
+        output_path : str
+            Destination file path.  Must end with ``.csv`` or ``.pkl``.
 
         Raises
         ------
         ValueError
-            If the file type is not supported.
-
-        Parameters
-        ----------
-        output_file : str
-            File path. Must end with `.csv` or `.pkl`.
+            If the file extension is not ``.csv`` or ``.pkl``.
         """
-        if output_file.endswith(".csv"):
-            self.df.to_csv(output_file, index=False)
-        elif output_file.endswith(".pkl"):
-            self.df.to_pickle(output_file)
+        if output_path.endswith(".csv"):
+            self.df.to_csv(output_path, index=False)
+        elif output_path.endswith(".pkl"):
+            self.df.to_pickle(output_path)
         else:
             raise ValueError("Unsupported file type. Use .csv or .pkl")
 
     @staticmethod
-    def read_in(input_file):
-        """
-        Reads in a pandas DataFrame from a CSV or Pickle file depending on file extension.
+    def read_in(input_path):
+        """Read a pandas DataFrame from a CSV or Pickle file.
+
+        Parameters
+        ----------
+        input_path : str
+            Source file path.  Must end with ``.csv`` or ``.pkl``.
 
         Raises
         ------
         ValueError
-            If the file type is not supported.
+            If the file extension is not ``.csv`` or ``.pkl``.
 
-        Parameters
-        ----------
-        input_file : str
-            File path. Must end with `.csv` or `.pkl`.
+        Returns
+        -------
+        pandas.DataFrame
         """
-        if input_file.endswith(".csv"):
-            return pd.read_csv(input_file)
-        elif input_file.endswith(".pkl"):
-            return pd.read_pickle(input_file)
+        if input_path.endswith(".csv"):
+            return pd.read_csv(input_path)
+        elif input_path.endswith(".pkl"):
+            return pd.read_pickle(input_path)
         else:
             raise ValueError("Unsupported file type. Use .csv or .pkl")
 
     @classmethod
     def load(cls, input_data):
-        """
-        Create a TwistDescriptor object from input data
-
-        Raises
-        ------
-        ValueError
-            If the input data is not a valid type (TwistDescriptor or str).
+        """Create a :class:`TwistDescriptor` from a file path or an existing instance.
 
         Parameters
         ----------
         input_data : str or TwistDescriptor
-            File path or TwistDescriptor object.
+            A file path (``.csv`` or ``.pkl``) or an existing
+            :class:`TwistDescriptor` object (which is deep-copied).
+
+        Raises
+        ------
+        ValueError
+            If ``input_data`` is neither a :class:`TwistDescriptor` nor a ``str``.
+
+        Returns
+        -------
+        TwistDescriptor
         """
 
         if isinstance(input_data, TwistDescriptor):
@@ -1431,7 +1636,26 @@ class TwistDescriptor(Descriptor):
         return columns
 
     @staticmethod
-    def process_tomo_twist(t_nn, symm=None, symm_max_value=None, symm_category=None):
+    def default_feature_columns(df: "pd.DataFrame") -> list[str]:
+        """Columns of *df* that are meaningful as clustering / PCA features."""
+        return [c for c in TwistDescriptor.get_all_feature_ids() if c in df.columns]
+
+    @staticmethod
+    def derive_nn_radius(df: "pd.DataFrame") -> float:
+        """Compute nn_radius as the max twist-vector magnitude found in df."""
+        import numpy as np
+
+        mags = (df["twist_x"] ** 2 + df["twist_y"] ** 2 + df["twist_z"] ** 2) ** 0.5
+        return float(np.max(mags))
+
+    @staticmethod
+    def check_twist_columns(df: "pd.DataFrame", symm: bool = False) -> list[str]:
+        """Return column names required by TwistDescriptor that are missing from df."""
+        required = TwistDescriptor.get_all_feature_ids(symm=symm)
+        return [c for c in required if c not in df.columns]
+
+    @staticmethod
+    def process_tomo_twist(t_nn, symm=None, symm_max_value=None, symm_category=None, symm_kind: str | None = None):
         """Compute twist descriptors for a single tomogram.
 
         Parameters
@@ -1440,11 +1664,44 @@ class TwistDescriptor(Descriptor):
             Contains nearest neighbors data for a single tomogram.
         symm : int or str, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
-            values see :class:`cryocat.tango.SymmParticle`. Default is None.
+            values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
         symm_max_value : float, optional
             Maximum dissimilarity for symmetry. Default is None.
-        symm_category : str, optional
-            Type of symmetry. Default is None.
+        symm_category : int or str, optional
+            Symmetry category as returned by :meth:`get_symm_parameters`
+            (i.e. ``SymmParticle.category``): an int for cyclic symmetry, or
+            the group letter ``"T"``/``"O"``/``"I"`` for Platonic symmetry.
+            Default is None.
+        symm_kind : str, optional
+            For Platonic symmetry, the solid used for the angular score
+            (``SymmParticle.kind``, e.g. ``"cube"``); None for the group's
+            default solid. Ignored for cyclic symmetry. Default is None.
+
+        Notes
+        -----
+        ``angular_score`` is computed with
+        :func:`cryocat.utils.symmetry.angular_score` from the query-point and
+        neighbour rotations, for every symmetry: cyclic symmetry compares the
+        spin left after tilting the neighbour's z-axis onto the query point's,
+        Platonic symmetry the full rotations. This is the same function
+        :meth:`SymmParticle.similarity_symm` uses, and
+        :meth:`symmetry_statistics` scores the same spin (from the stored
+        relative rotation).
+
+        ``qp_inplane``/``nn_inplane`` hold the in-plane angle (phi) read from
+        each rotation, written close to the stored phi (see
+        :func:`_inplane_angles_from_rotations`). They equal the stored phi
+        except where it describes a different spin: theta stored as exactly 0
+        or 180 with psi not 0, or theta outside [0, 180]. They are descriptive
+        features; the cyclic score does not use them.
+
+        Until 2026-10-09 the cyclic score and these columns used the stored
+        phi as is. For the cases above the stored phi ignores part of the spin
+        (e.g. ``(10, 0, 50)`` vs ``(10, 0, 0)`` scored 1 for C4 although the
+        particles are 50 degrees apart, true score 0.11), so in-plane columns
+        computed before that date can differ there. Cyclic scores computed
+        before that date also differ whenever the two z-axes are not the same
+        (see :func:`cryocat.utils.symmetry.angular_score`).
 
         Returns
         -------
@@ -1455,15 +1712,20 @@ class TwistDescriptor(Descriptor):
         norm_coord = t_nn.get_normalized_coord()
         rotations_qp = t_nn.get_qp_rotations()
         rotations_nn = t_nn.get_nn_rotations()
-        phi_qp = t_nn.df["qp_angles_phi"].to_numpy()
-        phi_nn = t_nn.df["nn_angles_phi"].to_numpy()
+        phi_qp = _inplane_angles_from_rotations(rotations_qp, t_nn.df["qp_angles_phi"].to_numpy())
+        phi_nn = _inplane_angles_from_rotations(rotations_nn, t_nn.df["nn_angles_phi"].to_numpy())
         subtomo_qp = t_nn.df["qp_subtomo_id"].to_numpy()
         subtomo_nn = t_nn.df["nn_subtomo_id"].to_numpy()
-        tomo_idx = t_nn.df[t_nn.feature_id].to_numpy() 
+        tomo_idx = t_nn.df[t_nn.column_name].to_numpy()
 
         if symm is not None:
-            ang_scores = geom.angular_score_for_c_symmetry(
-                np.deg2rad(phi_qp), np.deg2rad(phi_nn), symm_category, symm_max_value
+            # One scoring path for every symmetry; kind applies to Platonic symmetry only.
+            ang_scores = symmetry.angular_score(
+                rotations_qp,
+                rotations_nn,
+                symm_category,
+                kind=symm_kind if isinstance(symm_category, str) else None,
+                max_val=symm_max_value,
             )
 
         # Compute relative quantities
@@ -1476,7 +1738,7 @@ class TwistDescriptor(Descriptor):
         if symm is None:
             twist_df = pd.DataFrame(
                 data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_qp, phi_nn)),
-                columns=["qp_id", "nn_id", t_nn.feature_id] 
+                columns=["qp_id", "nn_id", t_nn.column_name]
                 + TwistDescriptor.get_mixed_feature_ids()
                 + ["qp_inplane", "nn_inplane"],
             )
@@ -1484,7 +1746,7 @@ class TwistDescriptor(Descriptor):
         else:
             twist_df = pd.DataFrame(
                 data=np.column_stack((subtomo_qp, subtomo_nn, tomo_idx, twists, phi_qp, phi_nn, ang_scores)),
-                columns=["qp_id", "nn_id", t_nn.feature_id] 
+                columns=["qp_id", "nn_id", t_nn.column_name]
                 + TwistDescriptor.get_mixed_feature_ids()
                 + ["qp_inplane", "nn_inplane", "angular_score"],
             )
@@ -1492,24 +1754,29 @@ class TwistDescriptor(Descriptor):
         return twist_df
 
     @staticmethod
-    def get_symm_parameters(input_motl, symm=None):
+    def get_symm_parameters(input_motl, symm: Symmetry | None = None, kind: str | None = None):
         """Get symmetry parameters (symmetry type, maximum dissimilarity) for a given input_motl.
 
         Parameters
         ----------
         input_motl : str or Motl
             The path to the input Motl file or Motl object to be loaded.
-        symm : int or str, optional
+        symm : Symmetry, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
-            values see :class:`cryocat.tango.SymmParticle`. Default is None.
+            values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
+        kind : str, optional
+            Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+            :meth:`SymmParticle.__init__`. Default is None.
 
         Returns
         -------
         tuple
         - max_dissimilarity : float
             The maximum dissimilarity for the given symmetry type.
-        - category : str
-            The symmetry type (e.g., 'tetrahedron', 'octahedron', etc.).
+        - category : int or str
+            The symmetry category (``SymmParticle.category``): an int for
+            cyclic symmetry, or the group letter ``"T"``/``"O"``/``"I"`` for
+            Platonic symmetry.
 
         """
         if not symm:
@@ -1520,13 +1787,19 @@ class TwistDescriptor(Descriptor):
         else:
             motl = cryomotl.Motl.load(input_motl)
 
-        pm = motl.get_motl_subset(feature_values=motl.df["subtomo_id"].iloc[0], feature_id="subtomo_id")
-        part = convert_to_particle_list(pm, symm=symm)
+        pm = motl.get_motl_subset(column_values=motl.df["subtomo_id"].iloc[0], column_name="subtomo_id")
+        part = convert_to_particle_list(pm, symm=symm, kind=kind)
         return part[0].max_dissimilarity(), part[0].category
 
     @staticmethod
     def get_nn_twist_stats_within_radius(
-        input_motl, nn_radius, feature_id="tomo_id", symm=None, remove_qp=None, remove_duplicates=False
+        input_motl,
+        nn_radius,
+        column_name="tomo_id",
+        symm: Symmetry | None = None,
+        kind: str | None = None,
+        remove_qp=None,
+        remove_duplicates=False,
     ):
         """Compute twist descriptor for a given input_motl within a specified radius.
 
@@ -1536,15 +1809,18 @@ class TwistDescriptor(Descriptor):
             The path to the input Motl file or Motl object to be loaded.
         nn_radius : float
             The radius within which to compute the twist descriptor.
-        feature_id : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
+        column_name : str, {"tomo_id","object_id","class","geom1","geom2","geom3","geom4","geom5"}
             The identifier for the motl feature which specifies the level of comparison. For instance, if "tomo_id" is
             specified the NN analysis will be computed at the tomogram level. If "object_id" is specified, the nearest
             neighbors will be searched in the objects with same "object_id". Note that one should ensure unique
             numbering among all tomograms in case "tomo_id" is not set, otherwise objects from different tomograms might
             be incorrectly grouped together. Default is "tomo_id".
-        symm : int or str, optional
+        symm : Symmetry, optional
             Specifies whether to use symmetry information. If None, no symmetry will be used. For allowed
-            values see :class:`cryocat.tango.SymmParticle`. Default is None.
+            values see :class:`cryocat.analysis.tango.SymmParticle`. Default is None.
+        kind : str, optional
+            Which :mod:`cryocat.utils.geom` solid to use for O/I symmetry; see
+            :meth:`SymmParticle.__init__`. Default is None.
         remove_qp : bool, optional
             If True, the query point is removed from the nearest neighbors in the DataFrame. Default is None.
         remove_duplicates : bool, default=False
@@ -1559,21 +1835,23 @@ class TwistDescriptor(Descriptor):
 
         nn = nnana.NearestNeighbors(
             input_motl,
-            feature_id=feature_id,
+            column_name=column_name,
             nn_type="radius",
             type_param=nn_radius,
             remove_qp=remove_qp,
             remove_duplicates=remove_duplicates,
         )
-        symm_max_value, symm_category = TwistDescriptor.get_symm_parameters(input_motl=input_motl, symm=symm)
+        symm_max_value, symm_category = TwistDescriptor.get_symm_parameters(input_motl=input_motl, symm=symm, kind=kind)
         tomo_idx = nn.get_unique_values()
 
         results = []
 
         for tomo_id in tomo_idx:
-            t_nn = nn.get_nn_subset(motl_values=1, feature_values=tomo_id)
+            t_nn = nn.get_nn_subset(motl_id_values=1, column_values=tomo_id)
             if t_nn.df.shape[0] > 0:
-                results.append(TwistDescriptor.process_tomo_twist(t_nn, symm, symm_max_value, symm_category))
+                results.append(
+                    TwistDescriptor.process_tomo_twist(t_nn, symm, symm_max_value, symm_category, symm_kind=kind)
+                )
 
         # if len(tomo_idx) == 1:
         #     work_opt = 1
@@ -1607,12 +1885,12 @@ class TwistDescriptor(Descriptor):
         return twist_df
 
     @staticmethod
-    def get_axis_feature_id(feature_id, axis="z"):
+    def get_axis_feature_id(column_name, axis="z"):
         """Get the feature ID for a specific axis.
 
         Parameters
         ----------
-        feature_id : str
+        column_name : str
             The base feature ID (e.g., "twist_so").
         axis : str, {"z", "x", "y"}
             The axis to use. Default is "z".
@@ -1629,12 +1907,12 @@ class TwistDescriptor(Descriptor):
         """
         if isinstance(axis, str):
             if axis.endswith(("x", "y", "z")):
-                column = f"{feature_id}_{axis}"
+                column = f"{column_name}_{axis}"
             else:
                 raise ValueError("Axis should refer to x-, y-, or z-axis.")
         else:
             print("Invalid choise; default axis is used.")
-            column = "{feature_id}_so_z"
+            column = "{column_name}_so_z"
 
         return column
 
@@ -1754,7 +2032,6 @@ class TwistDescriptor(Descriptor):
 
         return weighted_data
 
-    # TODO: change for general feature_id from t_nn object
     def get_qp_twist_desc(self, query_particle, tomo_id=None):
         """Get twist descriptor for a specific query particle from a twist dataframe.
 
@@ -1781,7 +2058,7 @@ class TwistDescriptor(Descriptor):
         This function assumes that `twist_df` contains a column named "qp_id" for particle IDs and "tomo_id" for tomography IDs.
         """
 
-        if isinstance(query_particle, (int, float)) or isinstance(query_particle, Particle):
+        if isinstance(query_particle, (int, float, np.integer, np.floating)) or isinstance(query_particle, Particle):
 
             if isinstance(query_particle, Particle):
                 ind = query_particle.id
@@ -1891,8 +2168,9 @@ class TwistDescriptor(Descriptor):
         Parameters
         ----------
         c_range : int, float, or range, optional
-            The range of C_n symmetries to consider. If None, defaults to range(2, 10). If a single integer or float is provided,
-            it will be converted to a range from 2 to that value. Default is None.
+            The range of C_n symmetries to consider. If None, defaults to range(2, 10) (C2 to C9). If a single integer
+            or float is provided, it is converted to the range from 2 up to and including that value (e.g. 6 gives
+            C2 to C6; before 2026-09-29 the value itself was left out). Default is None.
         plot_graph : bool, default=True
             Whether to plot the graph. If True, the graph will be displayed. Default is True
 
@@ -1900,69 +2178,55 @@ class TwistDescriptor(Descriptor):
         -------
         fig : plotly.graph_objects.Figure
             A Plotly figure containing the box plot of angular scores for different C_n symmetries.
+
+        Notes
+        -----
+        Each pair is scored as by :func:`cryocat.utils.symmetry.angular_score`
+        for C_n: the neighbour is tilted so its z-axis lies on the query
+        point's, and the spin left about that axis is compared. The spin is read
+        from the stored relative rotation (``twist_so_x/y/z``), on which it
+        depends exclusively, so descriptors loaded from a table work too. Until
+        2026-10-09 the stored in-plane angles (``qp_inplane``, ``nn_inplane``)
+        were compared directly, which is only meaningful for pairs with the same
+        z-axis; results differ otherwise.
         """
-        qp_inplane = np.deg2rad(self.df["qp_inplane"].values)
-        nn_inplane = np.deg2rad(self.df["nn_inplane"].values)
+        # The relative rotation R_qp^-1 * R_nn as seen from the query point (identity).
+        # (writable float copy: scipy rejects the read-only view pandas may return)
+        relative = R.from_rotvec(np.array(self.get_twist_rot_np(), dtype=float))
+        spin = geom.inplane_angle_after_alignment(R.identity(len(relative)), relative)
 
         if c_range is None:
             c_range = range(2, 10)
-        elif isinstance(c_range, (int, float)):
-            c_range = range(2, int(c_range))
+        elif isinstance(c_range, (int, float, np.integer, np.floating)):
+            c_range = range(2, int(c_range) + 1)
 
         symmetries_dict = {}
-
         for n in c_range:
             max_val = np.pi / n
-            scores = geom.angular_score_for_c_symmetry(qp_inplane, nn_inplane, n, max_val=max_val)
+            scores = geom.angular_score_for_c_symmetry(np.zeros_like(spin), spin, n, max_val=max_val)
             symmetries_dict[n] = scores
 
         df_symmetries = pd.DataFrame(symmetries_dict)
         df_melted = df_symmetries.melt(var_name="Column", value_name="Value")
 
-        color_list = [
-            (0.0, "#AEC684"),
-            (0.25, "#4EACB6"),
-            (0.5, "#C0A3BA"),
-            (0.75, "#7D82AB"),
-            (1.0, "#865B96"),
-        ]
-        positions, colors = zip(*color_list)
-        cmap = LinearSegmentedColormap.from_list("custom_cmap", list(zip(positions, colors)))
-
-        fig = go.Figure()
-        unique_cols = sorted(df_melted["Column"].unique())
-        n_cols = len(unique_cols)
-
-        # For each symmetry type, add a box trace
-        for i, col in enumerate(unique_cols):
-            val = i / (n_cols - 1) if n_cols > 1 else 0  # normalise index to [0,1]
-            colour = get_colormap_color(cmap, val)
-
-            fig.add_trace(
-                go.Box(
-                    y=df_melted.loc[df_melted["Column"] == col, "Value"],
-                    name=str(col),
-                    boxpoints="outliers",
-                    marker_color=colour,
-                )
-            )
-
-        fig.update_layout(
+        fig = visplot.plot_grouped_box(
+            df_melted,
+            group_column_name="Column",
+            value_column_name="Value",
             title="Rotational Symmetry Angular Scores",
             xaxis_title="Rotational symmetry type",
             yaxis_title="Angular score",
-            font=dict(size=12),
-            xaxis=dict(tickangle=45),
+            colorscale="Monet",
         )
 
         if plot_graph:
-
             fig.show()
 
         return fig
 
 
 class Filter:
+    """Base class for filtering operations on twist descriptors."""
 
     def __init__(self):
         """Initialize a Filter object.
@@ -1989,9 +2253,9 @@ class AxisRot(Filter):
 
         """
 
-        feature_id = TwistDescriptor.get_axis_feature_id("rot_angle", axis=axis)
+        column_name = TwistDescriptor.get_axis_feature_id("rot_angle", axis=axis)
         self.filter = TwistDescriptor.get_data_range(
-            twist_desc=twist_desc, twist_descriptor_id=feature_id, min_value=min_angle, max_value=max_angle
+            twist_desc=twist_desc, twist_descriptor_id=column_name, min_value=min_angle, max_value=max_angle
         )
 
 
@@ -2048,18 +2312,34 @@ class AngularScoreNN(Filter):
     def __init__(self, twist_desc, num_neighbors=1):
         """Filter twist descriptor based on the angular score.
 
+        For each query point, keeps the *num_neighbors* neighbours with the
+        highest ``angular_score``, i.e. the best orientational fits (the score
+        is a similarity: 1 = identical up to symmetry, 0 = as different as
+        possible).
+
         Parameters
         ----------
         twist_desc : TwistDescriptor
-            The original TwistDescriptor instance.
+            The original TwistDescriptor instance. Must contain the
+            ``angular_score`` column (computed with ``symm``).
         num_neighbors : int, default=1
             The number of nearest neighbors to consider. Default is 1.
+
+        Notes
+        -----
+        Until 2026-09-29 the scores were sorted in ascending order, so the
+        *least* similar neighbours were kept.
         """
-        twist_df = twist_desc.df.sort_values(by=["qp_id", "angular_score"]).groupby("qp_id").head(num_neighbors)
+        twist_df = (
+            twist_desc.df.sort_values(by=["qp_id", "angular_score"], ascending=[True, False])
+            .groupby("qp_id")
+            .head(num_neighbors)
+        )
         self.filter = TwistDescriptor(twist_df)
 
 
 class Support:
+    """Base class for geometric support regions used to filter twist descriptors."""
 
     def __init__(self):
         """Initialize a Support object.
@@ -2100,8 +2380,16 @@ class Support:
 
                 if axis is None:
                     axis = np.array([0, 0, 1])
-                elif not isinstance(axis, np.ndarray) or axis.size != 3:
-                    raise ValueError("'axis' needs to be numpy.ndarray of size 3.")
+                else:
+                    if isinstance(axis, str):
+                        try:
+                            axis = np.array([float(x.strip()) for x in axis.split(",")])
+                        except ValueError:
+                            raise ValueError("'axis' must be a comma-separated list of 3 numbers, e.g. '0,0,1'.")
+                    else:
+                        axis = np.asarray(axis, dtype=float)
+                    if axis.size != 3:
+                        raise ValueError("'axis' needs to be an array of size 3.")
 
                 if mode == "position":
                     columns = TwistDescriptor.get_pos_feature_ids()
@@ -2114,8 +2402,16 @@ class Support:
 
                 if axis is None:
                     axis = np.array([0, 0, 0, 0, 0, 1])
-                elif not isinstance(axis, np.ndarray) or axis.size != 6:
-                    raise ValueError("'axis' needs to be numpy.ndarray of size 6.")
+                else:
+                    if isinstance(axis, str):
+                        try:
+                            axis = np.array([float(x.strip()) for x in axis.split(",")])
+                        except ValueError:
+                            raise ValueError("'axis' must be a comma-separated list of 6 numbers.")
+                    else:
+                        axis = np.asarray(axis, dtype=float)
+                    if axis.size != 6:
+                        raise ValueError("'axis' needs to be an array of size 6.")
 
         else:
             raise ValueError(
@@ -2179,7 +2475,7 @@ class CustomSupport(Support):
 
 class Sphere(Support):
 
-    def __init__(self, twist_desc, radius=None):
+    def __init__(self, twist_desc, radius: float | None = None):
         """Crop the initial twist descriptor support to a sphere of a given radius.
 
         Parameters
@@ -2199,7 +2495,7 @@ class Sphere(Support):
 
 class Shell(Support):
 
-    def __init__(self, twist_desc, radius_min, radius_max):
+    def __init__(self, twist_desc, radius_min: float, radius_max: float):
         """Crop the initial twist descriptor support to a shell given two radii.
 
         Parameters
@@ -2218,7 +2514,7 @@ class Shell(Support):
 
 class Cone(Support):
 
-    def __init__(self, twist_desc: TwistDescriptor, cone_height: float, cone_radius: float, axis=None, mode="position"):
+    def __init__(self, twist_desc: TwistDescriptor, cone_height: float, cone_radius: float, axis: list | None = None, mode: Literal["position", "orientation", "mixed"] = "position"):
         """Crop the initial twist descriptor support to a cone of a given height and radius.
         The cone is defined by its height and radius, and the axis of revolution.
 
@@ -2278,8 +2574,8 @@ class Torus(Support):
         twist_desc: TwistDescriptor,
         inner_radius: float,
         outer_radius: float,
-        axis=None,
-        mode="position",
+        axis: list | None = None,
+        mode: Literal["position", "orientation", "mixed"] = "position",
     ):
         """Crop the initial twist descriptor support to a torus defined by inner and outer radius.
         The torus is defined by its inner and outer radius, and the axis of revolution.
@@ -2336,7 +2632,7 @@ class Torus(Support):
 
 class Cylinder(Support):
     def __init__(
-        self, twist_desc: TwistDescriptor, radius: float, height: float, axis=None, mode="position", symmetric=True
+        self, twist_desc: TwistDescriptor, radius: float, height: float, axis: list | None = None, mode: Literal["position", "orientation", "mixed"] = "position", symmetric: bool = True
     ):
         """Crop the initial twist descriptor support to a cylinder defined by radius and height.
         The cylinder is defined by its radius and height, and the axis of revolution.
@@ -2395,6 +2691,13 @@ class Cylinder(Support):
 
 
 class Feature:
+    """Base class for computing scalar features from twist descriptor DataFrames.
+
+    Parameters
+    ----------
+    desc_df : pandas.DataFrame
+        Twist descriptor DataFrame (typically ``TwistDescriptor.df``).
+    """
 
     def __init__(self, desc_df):
         """Initialize a Feature object.
@@ -2403,10 +2706,32 @@ class Feature:
         self.df = desc_df
 
     def compute(self):
+        """Compute the feature.
+
+        Subclasses must override this method.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Per-particle feature values.
+        """
         pass
 
     def compute_stats(self, column_name):
+        """Compute per-query-particle summary statistics for a single column.
 
+        Parameters
+        ----------
+        column_name : str
+            Column in ``self.df`` over which to compute statistics.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per unique ``qp_id`` with columns
+            ``[qp_id, <ClassName>Mean, <ClassName>Median, <ClassName>Std, <ClassName>Var]``.
+            Returns an empty DataFrame if ``self.df`` is empty.
+        """
         if self.df.empty:
             print("The descriptor is empty")
             return pd.DataFrame()
@@ -2917,9 +3242,9 @@ class PLComplexDescriptor(Descriptor):
         self.ordered_vertices = {}
         self.ordered_nn = {}
         self.triangles = {}
-        self.pl_df = pd.DataFrame()
 
         # Group input_twist by 'qp_id'
+        _pl_frames = []
         for qp_id, group in twist_df.groupby("qp_id"):
 
             self.ordered_vertices[qp_id], sorted_indices = geom.order_points_on_circle(
@@ -2928,7 +3253,8 @@ class PLComplexDescriptor(Descriptor):
             self.ordered_nn[qp_id] = group["nn_id"].to_numpy()[sorted_indices]
             self.triangles[qp_id] = self.compute_triangles(qp_id)
             if self.triangles[qp_id] is not None:
-                self.pl_df = pd.concat([self.pl_df, self.compute_features(qp_id)])
+                _pl_frames.append(self.compute_features(qp_id))
+        self.pl_df = pd.concat(_pl_frames) if _pl_frames else pd.DataFrame()
 
         self.df = twist_df
 
@@ -3021,7 +3347,7 @@ class PLComplexDescriptor(Descriptor):
 
 class SHOTDescriptor(Descriptor):
 
-    def __init__(self, twist_df, cone_number=6, shell_number=1, north_pole_axis=None, build_unique_desc=True):
+    def __init__(self, twist_df, cone_number: int = 6, shell_number: int = 1, north_pole_axis=None, build_unique_desc=True):
         """The SHOTDescriptor computes a 3D histogram describing the occupancy of nearest neighbors
         within a subdivided spherical support.
 
@@ -3044,9 +3370,10 @@ class SHOTDescriptor(Descriptor):
         max_radius = twist_df["euclidean_distance"].max()
         self.cone_number = cone_number
         self.shell_number = shell_number
+        self._cone_dirs = self.generate_rotated_axes(cone_number, north_pole_axis)
 
-        self.shot_df = pd.DataFrame()
         # Group input_twist by 'qp_id'
+        _shot_frames = []
         for qp_id, group_df in twist_df.groupby("qp_id"):
             coord = group_df[["twist_x", "twist_y", "twist_z"]].to_numpy()
             assigned_df = self.assign_shell_and_cone_ids(
@@ -3054,7 +3381,8 @@ class SHOTDescriptor(Descriptor):
             )
             assigned_df["qp_id"] = qp_id
             assigned_df["nn_id"] = group_df["nn_id"].values
-            self.shot_df = pd.concat([self.shot_df, assigned_df])
+            _shot_frames.append(assigned_df)
+        self.shot_df = pd.concat(_shot_frames) if _shot_frames else pd.DataFrame()
 
         self.df = twist_df
         if build_unique_desc:
@@ -3203,8 +3531,9 @@ class SHOTDescriptor(Descriptor):
         shell_edges = np.linspace(0, radius, num_shells + 1)
         shell_id = np.digitize(r_norms, shell_edges) - 1
 
-        # Get predefined cone directions
-        cone_dirs = self.generate_rotated_axes(num_cones, north_pole_axis=north_pole_axis)
+        # Use pre-computed directions if available (set by __init__), else compute on demand.
+        _cached = getattr(self, "_cone_dirs", None)
+        cone_dirs = _cached if _cached is not None else self.generate_rotated_axes(num_cones, north_pole_axis=north_pole_axis)
 
         # Normalize points and cone directions
         normed_points = points / np.linalg.norm(points, axis=1, keepdims=True)
@@ -3227,7 +3556,7 @@ class SHOTDescriptor(Descriptor):
 
 class AlphaComplexDescriptor(Descriptor):
 
-    def __init__(self, twist_df, alpha_param=200.0, build_unique_desc=True):
+    def __init__(self, twist_df, alpha_param: float = 200.0, build_unique_desc=True):
         """The AlphaComplexDescriptor computes geometric and topological properties describing the links and stars of vertices in an alpha complex.
 
         Parameters
@@ -3247,9 +3576,9 @@ class AlphaComplexDescriptor(Descriptor):
         self.stars = {}
         self.triangles = {}
         self.link_edges = {}
-        self.alpha_df = pd.DataFrame()
 
         # Group input_twist by 'qp_id'
+        _alpha_frames = []
         for qp_id, group in twist_df.groupby("qp_id"):
             coord = group[["twist_x", "twist_y", "twist_z"]].to_numpy()
             if coord.shape[0] < 2:
@@ -3258,7 +3587,8 @@ class AlphaComplexDescriptor(Descriptor):
             self.triangles[qp_id], self.link_edges[qp_id] = self.compute_alpha_complex(coord)
 
             if self.triangles[qp_id] is not None:
-                self.alpha_df = pd.concat([self.alpha_df, self.compute_features(qp_id)])
+                _alpha_frames.append(self.compute_features(qp_id))
+        self.alpha_df = pd.concat(_alpha_frames) if _alpha_frames else pd.DataFrame()
 
         self.df = twist_df
         if build_unique_desc:
@@ -3352,6 +3682,7 @@ class AlphaComplexDescriptor(Descriptor):
 
 
 class Catalog:
+    """Base class for TANGO catalogs that enumerate available subclasses."""
 
     def __init__(self):
         """Initialize a Catalog object.
@@ -3412,6 +3743,21 @@ class FilterCatalog(Catalog):
 
 
 class CustomDescriptor(Descriptor):
+    """Descriptor built from an existing twist DataFrame with user-specified features and support.
+
+    Parameters
+    ----------
+    twist_df : pandas.DataFrame
+        Pre-computed twist descriptor DataFrame.
+    feature_list : list of str, optional
+        Names of :class:`Feature` subclasses to compute.
+    feature_kwargs : dict, optional
+        Keyword arguments forwarded to each feature constructor.
+    support_class : str, optional
+        Name of a :class:`Support` subclass used to filter the descriptor.
+    support_kwargs : dict, optional
+        Keyword arguments forwarded to the support constructor.
+    """
 
     def __init__(self, twist_df, feature_list=None, feature_kwargs=None, support_class=None, support_kwargs=None):
         """Initialize a CustomDescriptor object.
@@ -3437,6 +3783,11 @@ class CustomDescriptor(Descriptor):
         dc = CustomDescriptor(None)
         dc.desc = desc_df
         return dc
+
+    @staticmethod
+    def default_feature_columns(df: "pd.DataFrame") -> list[str]:
+        """Columns of *df* that are meaningful as clustering / PCA features."""
+        return [c for c in df.columns if c != "qp_id"]
 
     def create_additional_descriptors(self, support_df, feature_list, feature_kwargs):
         """Create additional descriptors based on the provided feature list and support.

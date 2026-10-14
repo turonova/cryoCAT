@@ -3,10 +3,11 @@ from io import StringIO
 
 from cryocat.core.cryomotl import Motl
 
-from cryocat.core.cryomask import get_correct_format
+from cryocat.utils.geom import as_triplet
 from matplotlib import pyplot as plt
 from scipy.fft import fftn, ifftn, fftshift
 from cryocat.core.cryomap import *
+from cryocat.utils.imageutils import calculate_conjugates, calculate_flcf, compute_ctf_1d
 import pytest
 import numpy as np
 import os
@@ -228,13 +229,13 @@ def test_write(file_path):
 def test_invert_contrast(tmp_path):
     # Assuming we have a real .mrc file for this test
     input_file = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
-    output_file = str(Path(__file__).parent / "test_data" / "test_invert.mrc")
+    output_path = str(Path(__file__).parent / "test_data" / "test_invert.mrc")
     # Read the original map
     original_map = read(input_file)
     # Invert contrast and save to a new file
-    inverted_map = invert_contrast(input_file, output_path=output_file)
+    inverted_map = invert_contrast(input_file, output_path=output_path)
     # Read the saved inverted map
-    saved_inverted_map = read(output_file)
+    saved_inverted_map = read(output_path)
 
     # Check if the inverted map matches the manually inverted one
     np.testing.assert_array_equal(inverted_map, saved_inverted_map)
@@ -246,23 +247,23 @@ def test_invert_contrast(tmp_path):
     else:
         assert saved_inverted_map.dtype == original_map.dtype
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
 
 def test_em2mrc():
     input_file = str(Path(__file__).parent / "test_data" / "au_1.em")
-    output_file = str(Path(__file__).parent / "test_data" / "au_12.mrc")
+    output_path = str(Path(__file__).parent / "test_data" / "au_12.mrc")
 
-    em2mrc(input_file, output_path=output_file)
-    assert os.path.exists(output_file), "Output file was not created"
+    em2mrc(input_file, output_path=output_path)
+    assert os.path.exists(output_path), "Output file was not created"
 
     input_data = read(input_file)
-    output_data = read(output_file)
+    output_data = read(output_path)
     assert np.allclose(input_data, output_data, atol=1e-6, rtol=1e-6), "Output data does not match input data"
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
     # Test default output naming
     em2mrc(input_file)
@@ -286,16 +287,16 @@ def test_em2mrc():
 
 def test_mrc2em():
     input_file = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
-    output_file = str(Path(__file__).parent / "test_data" / "tilt_stack1.em")
+    output_path = str(Path(__file__).parent / "test_data" / "tilt_stack1.em")
 
-    mrc2em(input_file, output_path=output_file)
-    assert os.path.exists(output_file)
+    mrc2em(input_file, output_path=output_path)
+    assert os.path.exists(output_path)
     input_data = read(input_file)
-    output_data = read(output_file)
+    output_data = read(output_path)
     assert np.allclose(input_data, output_data, atol=1e-6, rtol=1e-6)
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
     mrc2em(input_file)
     expected_path = str(Path(__file__).parent / "test_data" / "tilt_stack.em")
@@ -431,24 +432,24 @@ def test_crop():
     original_shape = np.array(input_map.shape)
 
     crop_size = original_shape // 2
-    crop_coord = get_correct_format(original_shape) // 2
+    crop_coord = as_triplet(original_shape) // 2
     cropped_volume = crop(MRC_TEST_FILE, crop_size)
 
     vs, ve, _, _ = get_start_end_indices(crop_coord, original_shape, crop_size)
-    obtained_center = vs + get_correct_format(cropped_volume.shape) // 2
+    obtained_center = vs + as_triplet(cropped_volume.shape) // 2
     assert cropped_volume.shape == tuple(crop_size), "Cropped volume has incorrect shape"
 
     assert np.any(cropped_volume), "Cropped volume is empty"
 
     assert np.allclose(crop_coord, obtained_center, atol=1), "Center alignment incorrect"
 
-    output_file = str(Path(__file__).parent / "test_output.mrc")
-    crop(MRC_TEST_FILE, crop_size, output_file)
-    with mrcfile.open(output_file, mode="r") as mrc:
+    output_path = str(Path(__file__).parent / "test_output.mrc")
+    crop(MRC_TEST_FILE, crop_size, output_path)
+    with mrcfile.open(output_path, mode="r") as mrc:
         assert mrc.data.shape == tuple(crop_size)[::-1], "Saved cropped file has incorrect shape"
 
-    if os.path.exists(output_file):
-        os.remove(output_file)
+    if os.path.exists(output_path):
+        os.remove(output_path)
 
 
 def test_shift():
@@ -582,13 +583,13 @@ def test_extract_subvolume():
 
 
 def test_pad():
-    input_volume = np.ones((3, 3, 3))
+    input_map = np.ones((3, 3, 3))
     new_size = (5, 5, 5)
-    padded_volume = pad(input_volume, new_size)
+    padded_volume = pad(input_map, new_size)
     assert padded_volume.shape == new_size
     assert np.all(padded_volume == 1)
 
-    padded_volume_custom = pad(input_volume, new_size, fill_value=5)
+    padded_volume_custom = pad(input_map, new_size, fill_value=5)
     assert padded_volume_custom.shape == new_size
     assert np.all(padded_volume_custom[0] == 5)  # Top slice
     assert np.all(padded_volume_custom[-1] == 5)  # Bottom slice
@@ -598,32 +599,32 @@ def test_pad():
     assert np.all(padded_volume_custom[-1, -1] == 5)  # Back bottom corner
     assert np.all(padded_volume_custom[1:4, 1:4, 1:4] == 1)
 
-    input_volume_same_size = np.ones((5, 5, 5))
+    input_map_same_size = np.ones((5, 5, 5))
     new_size_same = (5, 5, 5)
-    padded_volume_same = pad(input_volume_same_size, new_size_same)
-    assert np.array_equal(input_volume_same_size, padded_volume_same)
+    padded_volume_same = pad(input_map_same_size, new_size_same)
+    assert np.array_equal(input_map_same_size, padded_volume_same)
 
-    input_volume_edge_case = np.ones((1, 1, 1))
+    input_map_edge_case = np.ones((1, 1, 1))
     new_size_edge_case = (3, 3, 3)
-    padded_volume_edge = pad(input_volume_edge_case, new_size_edge_case)
+    padded_volume_edge = pad(input_map_edge_case, new_size_edge_case)
     assert padded_volume_edge.shape == new_size_edge_case
     assert np.all(padded_volume_edge == 1)
 
     try:
         new_size_invalid = (5, 5)  # New size has only 2 dimensions
-        pad(input_volume, new_size_invalid)
+        pad(input_map, new_size_invalid)
         assert False, "Expected ValueError for invalid new_size"
-    except IndexError:
+    except ValueError:
         pass
     try:
         new_size_invalid_dim = (5, 5, 5, 5)  # New size has 4 dimensions
-        pad(input_volume, new_size_invalid_dim)
+        pad(input_map, new_size_invalid_dim)
         assert False, "Expected ValueError for invalid new_size"
     except Exception:
         pass
     try:
         new_size_small = (2, 2, 2)  # New size is smaller than the original volume
-        pad(input_volume, new_size_small)
+        pad(input_map, new_size_small)
         assert False, "Expected ValueError for new_size smaller than volume size"
     except Exception:
         pass
@@ -631,7 +632,7 @@ def test_pad():
 
 def test_deconvolve():
     # Parameters for the synthetic test
-    input_volume = np.random.rand(64, 64, 64).astype(np.float32)  # Random 3D volume
+    input_map = np.random.rand(64, 64, 64).astype(np.float32)  # Random 3D volume
     pixel_size_a = 3.42  # Angstroms
     defocus = 2.5  # micrometers
     snr_falloff = 1.2
@@ -642,21 +643,21 @@ def test_deconvolve():
 
     # Apply deconvolution to the synthetic 3D volume
     output_volume = deconvolve(
-        input_volume, pixel_size_a, defocus, snr_falloff, deconv_strength, highpass_nyquist, phase_flipped, phaseshift
+        input_map, pixel_size_a, defocus, snr_falloff, deconv_strength, highpass_nyquist, phase_flipped, phaseshift
     )
 
-    assert output_volume.shape == input_volume.shape
+    assert output_volume.shape == input_map.shape
     assert np.isfinite(output_volume).all()
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
-    plt.imshow(input_volume[32, :, :], cmap="gray")  # Slice through the middle
+    plt.imshow(input_map[32, :, :], cmap="gray")  # Slice through the middle
     plt.title("Original Volume Slice")
     plt.subplot(1, 2, 2)
     plt.imshow(output_volume[32, :, :], cmap="gray")  # Slice through the middle
     plt.title("Deconvolved Volume Slice")
     plt.show()
     # Compare FFT of input and output volumes (using log scale)
-    input_fft = np.abs(fftshift(fftn(input_volume)))
+    input_fft = np.abs(fftshift(fftn(input_map)))
     output_fft = np.abs(fftshift(fftn(output_volume)))
     plt.figure(figsize=(10, 5))
     plt.subplot(1, 2, 1)
@@ -666,8 +667,8 @@ def test_deconvolve():
     plt.imshow(np.log1p(np.mean(output_fft, axis=0)), cmap="inferno")
     plt.title("FFT Output (Deconvolved)")
     plt.show()
-    assert not np.allclose(output_volume, input_volume)
-    assert np.max(output_volume) <= np.max(input_volume) * 2
+    assert not np.allclose(output_volume, input_map)
+    assert np.max(output_volume) <= np.max(input_map) * 2
     assert np.isfinite(output_volume).all()
 
 
@@ -692,6 +693,7 @@ def test_compute_ctf_1d():
 
     if expected_ctf_path.exists():
         os.remove(expected_ctf_path)
+
 
 def test_trim():
     input_map = np.arange(27).reshape(3, 3, 3)
@@ -1109,6 +1111,7 @@ def test_get_cross_slices():
     assert result[1].shape == (10, 10)
     assert result[2].shape == (10, 10)
 
+
 @pytest.fixture
 def sample_motl_data():
     """Fixture providing a sample DataFrame for Motl object."""
@@ -1136,12 +1139,14 @@ def sample_motl_data():
     }
     return pd.DataFrame(data)
 
+
 def test_place_object_basic(sample_motl_data):
     motl = Motl(sample_motl_data)
     input_object = np.ones((5, 5, 5))  # Simple input object
     volume_shape = (100, 100, 100)
     result = place_object(input_object, motl, volume_shape=volume_shape)
     assert result.shape == volume_shape
+
 
 def test_place_object_list_input(sample_motl_data):
     motl = Motl(sample_motl_data)
@@ -1150,12 +1155,14 @@ def test_place_object_list_input(sample_motl_data):
     result = place_object(input_objects, motl, volume_shape=volume_shape)
     assert result.shape == volume_shape
 
+
 def test_place_object_volume_input(sample_motl_data):
     motl = Motl(sample_motl_data)
     input_object = np.ones((4, 4, 4))
     volume = np.zeros((80, 80, 80))
     result = place_object(input_object, motl, volume=volume)
     assert result.shape == volume.shape
+
 
 def test_place_object_feature_to_color_class(sample_motl_data):
     motl = Motl(sample_motl_data)
@@ -1164,23 +1171,25 @@ def test_place_object_feature_to_color_class(sample_motl_data):
     result = place_object(input_object, motl, volume_shape=volume_shape, feature_to_color="class")
     assert result.shape == volume_shape
 
+
 def test_place_object_shifts(sample_motl_data):
     motl_data = sample_motl_data.copy()
-    motl_data['shift_x'] = [1,2,3,4,5,6]
-    motl_data['shift_y'] = [1,2,3,4,5,6]
-    motl_data['shift_z'] = [1,2,3,4,5,6]
+    motl_data["shift_x"] = [1, 2, 3, 4, 5, 6]
+    motl_data["shift_y"] = [1, 2, 3, 4, 5, 6]
+    motl_data["shift_z"] = [1, 2, 3, 4, 5, 6]
 
     motl = Motl(motl_data)
     input_object = np.ones((4, 4, 4))
     volume_shape = (80, 80, 80)
     result = place_object(input_object, motl, volume_shape=volume_shape)
     assert result.shape == volume_shape
+
 
 def test_place_object_rotations(sample_motl_data):
     motl_data = sample_motl_data.copy()
-    motl_data['phi'] = [10,20,30,40,50,60]
-    motl_data['psi'] = [10,20,30,40,50,60]
-    motl_data['theta'] = [10,20,30,40,50,60]
+    motl_data["phi"] = [10, 20, 30, 40, 50, 60]
+    motl_data["psi"] = [10, 20, 30, 40, 50, 60]
+    motl_data["theta"] = [10, 20, 30, 40, 50, 60]
 
     motl = Motl(motl_data)
     input_object = np.ones((4, 4, 4))
@@ -1188,11 +1197,12 @@ def test_place_object_rotations(sample_motl_data):
     result = place_object(input_object, motl, volume_shape=volume_shape)
     assert result.shape == volume_shape
 
+
 def test_place_object_placement_and_color(sample_motl_data):
     motl_data = sample_motl_data.copy()
-    motl_data['x'] = [1, 5, 10, 15, 20, 25]
-    motl_data['y'] = [1, 5, 10, 15, 20, 25]
-    motl_data['z'] = [1, 5, 10, 15, 20, 25]
+    motl_data["x"] = [1, 5, 10, 15, 20, 25]
+    motl_data["y"] = [1, 5, 10, 15, 20, 25]
+    motl_data["z"] = [1, 5, 10, 15, 20, 25]
     motl = Motl(motl_data)
     input_object = np.ones((3, 3, 3))
     volume_shape = (30, 30, 30)
@@ -1284,7 +1294,7 @@ def test_calculate_masked_fsc_ones_mask_unchanged():
     mask = np.ones((box, box, box), dtype=np.float32)
 
     df_no_mask = calculate_masked_fsc(vol, vol, n_repeats=0)
-    df_with_mask = calculate_masked_fsc(vol, vol, mask=mask, n_repeats=0)
+    df_with_mask = calculate_masked_fsc(vol, vol, input_mask=mask, n_repeats=0)
 
     np.testing.assert_allclose(
         df_no_mask["uncorrected_fsc"].values,
@@ -1315,6 +1325,7 @@ def test_calculate_masked_fsc_xml_output(tmp_path):
     assert os.path.exists(output_path)
 
     import xml.etree.ElementTree as ET
+
     root = ET.parse(output_path).getroot()
     assert root.tag == "fsc"
     assert len(root.findall("coordinate")) == box // 2
@@ -1325,7 +1336,7 @@ def test_calculate_masked_fsc_xml_output(tmp_path):
     [
         ("shape_mismatch", np.zeros((8, 8, 8)), np.zeros((8, 8, 10)), {}),
         ("not_cubic", np.zeros((8, 8, 10)), np.zeros((8, 8, 10)), {}),
-        ("mask_shape", np.zeros((8, 8, 8)), np.zeros((8, 8, 8)), {"mask": np.zeros((10, 10, 10))}),
+        ("mask_shape", np.zeros((8, 8, 8)), np.zeros((8, 8, 8)), {"input_mask": np.zeros((10, 10, 10))}),
         ("bad_extension", np.zeros((8, 8, 8)), np.zeros((8, 8, 8)), {"output_path": "fsc.npz"}),
     ],
 )
@@ -1335,3 +1346,147 @@ def test_calculate_masked_fsc_errors(error_case, map_a, map_b, extra_kwargs, tmp
         kwargs["output_path"] = str(tmp_path / kwargs["output_path"])
     with pytest.raises(ValueError):
         calculate_masked_fsc(map_a, map_b, n_repeats=0, **kwargs)
+
+
+def test_rotate_output_kwargs_forwarded(tmp_path):
+    volume = np.zeros((16, 16, 16), dtype=np.float32)
+    volume[8, 8, 8] = 1.0
+    out = str(tmp_path / "out.mrc")
+    rotate(volume, rotation_angles=[0, 0, 0], output_path=out, pixel_size=3.14)
+    _, ps, _ = get_metadata(out)
+    assert abs(ps - 3.14) < 0.01
+
+
+def test_rotate_raises_without_output_path():
+    volume = np.zeros((16, 16, 16), dtype=np.float32)
+    with pytest.raises(ValueError, match="output_path"):
+        rotate(volume, rotation_angles=[0, 0, 0], pixel_size=2.7)
+
+
+def test_rotate_no_output_no_kwargs():
+    volume = np.zeros((16, 16, 16), dtype=np.float32)
+    result = rotate(volume, rotation_angles=[0, 0, 0])
+    assert result.shape == volume.shape
+
+
+# ---------------------------------------------------------------------------
+# sample_line_profiles + symmetrize_volume direct coverage
+# ---------------------------------------------------------------------------
+
+
+def test_sample_line_profiles_shape_and_geometry():
+    """One pair → one dict with the documented geometry keys and a 1-D profile."""
+    rng = np.random.default_rng(0)
+    volume = rng.random((20, 20, 20)).astype(np.float32)
+    p1 = np.array([[5.0, 5.0, 5.0]])
+    p2 = np.array([[15.0, 5.0, 5.0]])
+    out = sample_line_profiles(p1, p2, volume, extension_half_width_a=2.0)
+    assert isinstance(out, list)
+    assert len(out) == 1
+    entry = out[0]
+    assert {"profile", "p1", "p2", "midpoint", "start", "end"} <= entry.keys()
+    assert entry["profile"].ndim == 1
+    np.testing.assert_allclose(entry["midpoint"], [10.0, 5.0, 5.0])
+
+
+def test_sample_line_profiles_skips_nan_and_zero_pairs():
+    """Pairs with NaN or zero-length direction are dropped silently."""
+    volume = np.ones((10, 10, 10), dtype=np.float32)
+    p1 = np.array([[5.0, 5.0, 5.0], [np.nan, 0.0, 0.0], [1.0, 1.0, 1.0]])
+    p2 = np.array([[5.0, 5.0, 5.0], [1.0, 1.0, 1.0],     [7.0, 1.0, 1.0]])
+    # First pair: zero direction; second pair: NaN; only third survives.
+    out = sample_line_profiles(p1, p2, volume, extension_half_width_a=1.0)
+    assert len(out) == 1
+
+
+def test_sample_line_profiles_rejects_non_3d_map():
+    """Non-3D input must raise ValueError."""
+    with pytest.raises(ValueError):
+        sample_line_profiles(
+            np.array([[0.0, 0.0, 0.0]]),
+            np.array([[1.0, 0.0, 0.0]]),
+            np.zeros((10, 10)),  # 2-D
+        )
+
+
+def test_symmetrize_volume_constant_is_invariant_in_interior():
+    """A constant volume is invariant under Cn averaging in the interior.
+
+    ``scipy.ndimage.affine_transform`` defaults to ``mode='constant'`` so voxels
+    near the boundary get zeroed when a 90° rotation maps their inverse-source
+    outside the original grid. Exclude a 2-voxel margin in the rotated plane
+    (xy) and the interior must be invariant.
+    """
+    vol = np.full((12, 12, 12), 3.0, dtype=np.float32)
+    out = symmetrize_volume(vol, "C4")
+    np.testing.assert_allclose(out[2:-2, 2:-2, :], vol[2:-2, 2:-2, :], atol=1e-4)
+
+
+def test_symmetrize_volume_shape_preserved():
+    """Output shape matches input."""
+    vol = np.random.rand(10, 10, 10).astype(np.float32)
+    assert symmetrize_volume(vol, 2).shape == vol.shape
+
+
+# ---------------------------------------------------------------------------
+# calculate_masked_fsc / fsc_read column compatibility
+# ---------------------------------------------------------------------------
+
+
+def test_calculate_masked_fsc_and_fsc_read_same_columns(tmp_path):
+    """calculate_masked_fsc and fsc_read must return the same columns.
+
+    A downstream consumer that reads a curve from disk or computes one
+    on the fly must not need to branch on the source.  With n_repeats=0
+    (no phase randomisation) calculate_masked_fsc produces exactly
+    ``x`` and ``uncorrected_fsc``, matching every fsc_read path.
+    """
+    from cryocat.utils.ioutils import fsc_read
+
+    np.random.seed(42)
+    box = 16
+    vol = np.random.rand(box, box, box).astype(np.float32)
+
+    df_computed = calculate_masked_fsc(vol, vol, n_repeats=0)
+
+    # Write the uncorrected_fsc curve as a plain-text file and read it back.
+    pixel_size = 2.0
+    fsc_path = tmp_path / "fsc.txt"
+    np.savetxt(str(fsc_path), df_computed["uncorrected_fsc"].values)
+    df_read = fsc_read(str(fsc_path), pixel_size=pixel_size, box_size=box)
+
+    assert list(df_computed.columns) == list(df_read.columns), (
+        f"Column mismatch: compute={list(df_computed.columns)}, "
+        f"read={list(df_read.columns)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# calculate_masked_fsc: signature and cubic-constraint tests (P5)
+# ---------------------------------------------------------------------------
+
+import inspect
+
+
+def test_calculate_masked_fsc_signature():
+    """Volume and return annotations must match what formgen expects.
+
+    MapSource (and MapSource | None) both resolve to a path picker widget.
+    This test pins the annotations so that a refactor cannot silently
+    break the form without a test failure.
+    """
+    from cryocat._types import MapSource
+
+    sig = inspect.signature(calculate_masked_fsc)
+    params = sig.parameters
+    assert params["input_map_even"].annotation is MapSource
+    assert params["input_map_odd"].annotation is MapSource
+    assert params["input_mask"].annotation == (MapSource | None)
+    assert sig.return_annotation is pd.DataFrame
+
+
+def test_calculate_masked_fsc_non_cubic_raises_with_shape():
+    """ValueError for non-cubic input names the offending shape."""
+    vol = np.zeros((8, 8, 16), dtype=np.float32)
+    with pytest.raises(ValueError, match=r"\(8, 8, 16\)"):
+        calculate_masked_fsc(vol, vol)

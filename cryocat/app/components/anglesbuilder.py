@@ -1,0 +1,330 @@
+"""Reusable 'angles builder' panel component.
+
+A self-contained Dash panel that exposes ``cryocat.utils.geom.generate_angles``
+via a ``formgen``-generated form, renders a live orientational-distribution
+preview, and writes the result to a file on demand.
+
+The panel has no knowledge of where it lives (modal or page).  After a
+successful write the ``{prefix}-value`` store is updated; the host wires
+its own callback to react to that event.
+
+Public API
+----------
+inplane_figure(angles, gs)
+    Pure function — polar scatter of inplane (phi) angles.
+angles_preview_figures(angles, gs, *, uirevision_prefix)
+    Pure function — returns (sphere_fig, inplane_fig) from a computed angles array.
+get_angles_builder_sidebar_content(prefix)
+    Controls-only layout (form, path, create button, stores). Graph lives separately.
+get_angles_builder_panel(prefix)
+    Self-contained layout including the preview graph.  Used in modal contexts.
+register_angles_builder_callbacks(app, prefix, *, with_graphs)
+    Register all callbacks for the panel (works with both layout variants).
+    Pass ``with_graphs=True`` for the full-panel layout; ``with_graphs=False``
+    when the host page owns the preview graphs.
+"""
+
+import numpy as np
+import plotly.graph_objects as go
+
+import dash
+from dash import html, dcc, Input, Output, State, ALL
+import dash_bootstrap_components as dbc
+from dash.exceptions import PreventUpdate
+
+from cryocat.utils.geom import generate_angles
+from cryocat.app import formgen, ids, styles
+from cryocat.app.apputils import generate_kwargs, run_operation
+from cryocat.app.pool import PoolState
+from cryocat.app.components.graphsettings import styled_figure, error_figure
+from cryocat.app.components.customel import customel_graph
+
+_ID_TYPE = "angles-param"
+
+
+def inplane_figure(angles: np.ndarray, gs) -> go.Figure:
+    """Polar scatter of inplane (phi) angles + optional graph settings."""
+    phi = np.unique(np.round(angles[:, 0], 8))
+    fig = go.Figure(
+        go.Scatterpolar(
+            r=[1.0] * len(phi),
+            theta=phi,
+            mode="markers",
+            marker=dict(size=6, opacity=0.8),
+        )
+    )
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=False, range=[0, 1.3]),
+            angularaxis=dict(
+                direction="counterclockwise",
+                tickmode="array",
+                tickvals=[0, 45, 90, 135, 180, 225, 270, 315],
+            ),
+        ),
+        showlegend=False,
+        title=dict(text=f"Inplane sampling (φ) — {len(phi)} angles", font=dict(size=12)),
+        margin=dict(l=50, r=50, t=40, b=50),
+    )
+    return styled_figure(fig, gs or {}, uirevision="inplane-preview")
+
+
+def angles_preview_figures(
+    angles: np.ndarray,
+    gs,
+    *,
+    uirevision_prefix: str = "angles",
+) -> tuple:
+    """Pure function: sphere + inplane preview figures from a computed angles array.
+
+    Parameters
+    ----------
+    angles : np.ndarray
+        Output of :func:`~cryocat.utils.geom.generate_angles`.
+    gs : dict | None
+        Graph settings store data (forwarded to :func:`styled_figure`).
+    uirevision_prefix : str
+        Prefix used in the ``uirevision`` key so Plotly preserves the camera
+        across updates (should match the panel prefix).
+
+    Returns
+    -------
+    tuple[go.Figure, go.Figure]
+        ``(sphere_fig, inplane_fig)``; either may be an error figure on failure.
+    """
+    from cryocat.analysis import visplot
+
+    n_phi = len(np.unique(np.round(angles[:, 0], 8)))
+    n_cone = len(angles) // n_phi if n_phi > 0 else len(angles)
+
+    try:
+        fig1 = visplot.plot_rotation_normals(angles)
+        sphere_fig = styled_figure(
+            fig1, gs or {},
+            uirevision=f"{uirevision_prefix}-preview",
+            title={"text": f"Cone sampling — {n_cone} angles", "font": {"size": 12}},
+            margin={"l": 0, "r": 0, "t": 40, "b": 0},
+        )
+    except Exception as exc:
+        sphere_fig = error_figure(f"Sphere plot error: {exc}")
+
+    try:
+        inplane_fig = inplane_figure(angles, gs)
+    except Exception as exc:
+        inplane_fig = error_figure(f"Inplane plot error: {exc}")
+
+    return sphere_fig, inplane_fig
+
+
+def get_angles_builder_sidebar_content(prefix: str, preview_btn: bool = False) -> html.Div:
+    """Form controls, output path, create button and stores — no graph.
+
+    Designed for split sidebar/main layouts where the preview graph lives
+    in the main content area.  IDs are identical to those in
+    :func:`get_angles_builder_panel`, so :func:`register_angles_builder_callbacks`
+    works unchanged with either layout.
+
+    Parameters
+    ----------
+    prefix : str
+        Same prefix that will be passed to :func:`register_angles_builder_callbacks`.
+    preview_btn : bool, default=False
+        When True, a "Preview" button (``{prefix}-preview-btn``) is added
+        between the form and the output-path field so the user can trigger
+        the visualisation manually.
+    """
+    form_rows = formgen.build_form(
+        generate_angles,
+        id_type=_ID_TYPE,
+        id_extra={"owner": prefix},
+    )
+    preview_button = (
+        [
+            dbc.Button(
+                "Preview",
+                id=f"{prefix}-preview-btn",
+                color="info",
+                size="sm",
+                style={"width": "100%", "marginBottom": "0.5rem"},
+            )
+        ]
+        if preview_btn
+        else []
+    )
+    return html.Div(
+        [
+            html.Div(form_rows, id=f"{prefix}-form", style={"marginBottom": "0.75rem"}),
+            *preview_button,
+            dbc.Input(
+                id=f"{prefix}-output-path",
+                type="text",
+                placeholder="Output path (e.g. /path/to/angles.csv)",
+                size="sm",
+                style={"marginBottom": "0.4rem"},
+            ),
+            dbc.Button(
+                "Create angle list",
+                id=f"{prefix}-create",
+                color="primary",
+                size="sm",
+                style={"width": "100%", "marginBottom": "0.4rem"},
+            ),
+            html.Div(
+                id=f"{prefix}-status",
+                style={
+                    **styles.HINT,
+                    "marginTop": "0.25rem",
+                    "wordBreak": "break-word",
+                },
+            ),
+            dcc.Store(id=f"{prefix}-params"),
+            dcc.Store(id=f"{prefix}-angles"),
+            dcc.Store(id=f"{prefix}-value"),
+        ],
+    )
+
+
+def get_angles_builder_panel(prefix: str) -> html.Div:
+    """Build the angles-builder panel layout.
+
+    The form rows are generated from :func:`~cryocat.utils.geom.generate_angles`
+    via :func:`~cryocat.app.formgen.build_form`.  Every control's id includes
+    ``{"builder": prefix}`` so pattern-matching callbacks can scope their inputs
+    to this specific panel instance.
+
+    Parameters
+    ----------
+    prefix : str
+        Unique string prefix for all component IDs (e.g. ``"pana-angles-build"``
+        or ``"util-generate_angles"``).
+
+    Returns
+    -------
+    dash.html.Div
+        Self-contained layout tree.
+    """
+    form_rows = formgen.build_form(
+        generate_angles,
+        id_type=_ID_TYPE,
+        id_extra={"owner": prefix},
+    )
+    return html.Div(
+        [
+            # Controls come first so they stay visible when graphs are rendered
+            html.Div(form_rows, id=f"{prefix}-form", style={"marginBottom": "0.5rem"}),
+            dbc.Input(
+                id=f"{prefix}-output-path",
+                type="text",
+                placeholder="Output path (e.g. /path/to/angles.csv)",
+                size="sm",
+                style={"marginBottom": "0.4rem"},
+            ),
+            html.Div(
+                [
+                    dbc.Button(
+                        "Create angle list",
+                        id=f"{prefix}-create",
+                        color="primary",
+                        size="sm",
+                    ),
+                    html.Span(
+                        id=f"{prefix}-status",
+                        style={
+                            "marginLeft": "0.75rem",
+                            "color": "grey",
+                            "alignSelf": "flex-end",
+                        },
+                    ),
+                ],
+                style={**{"display": "flex", "alignItems": "center"}, "marginBottom": "0.5rem"},
+            ),
+            # Two graphs side-by-side (same as Utilities page)
+            dbc.Row(
+                [
+                    dbc.Col(customel_graph(prefix, "preview", dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "preview"}, style={"height": "320px"})), width=6),
+                    dbc.Col(customel_graph(prefix, "inplane", dcc.Graph(id={"type": "styled-graph", "owner": prefix, "name": "inplane"}, style={"height": "320px"})), width=6),
+                ],
+                className="g-1",
+            ),
+            dcc.Store(id=f"{prefix}-params"),
+            dcc.Store(id=f"{prefix}-angles"),
+            dcc.Store(id=f"{prefix}-value"),
+        ],
+        id=f"{prefix}-panel",
+    )
+
+
+def register_angles_builder_callbacks(app: dash.Dash, prefix: str, *, with_graphs: bool) -> None:
+    """Register all callbacks for the angles-builder panel identified by ``prefix``.
+
+    Parameters
+    ----------
+    app : dash.Dash
+        The Dash application instance.
+    prefix : str
+        Must match the ``prefix`` passed to :func:`get_angles_builder_panel`.
+    with_graphs : bool
+        When True the ``_preview`` callback (which writes to ``{prefix}-angles``,
+        the sphere graph, and the inplane graph) is registered.  Pass False when
+        the host page registers its own preview callback that owns those outputs.
+    """
+
+    @app.callback(
+        Output(f"{prefix}-params", "data"),
+        Input({"type": _ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "value"),
+        State({"type": _ID_TYPE, "owner": prefix, "param": ALL, "tag": ALL}, "id"),
+        State(ids.POOL_REGISTRY, "data"),
+        State(ids.POOL_META, "data"),
+        State(ids.POOL_NEXT_ID, "data"),
+        prevent_initial_call=True,
+    )
+    def _collect_params(values, form_ids, registry, pool_meta, pool_next_id):
+        if not values or not form_ids:
+            raise PreventUpdate
+        pool_state = PoolState.from_stores(registry, pool_meta, pool_next_id)
+        return generate_kwargs(form_ids, values, pool_state)
+
+    if with_graphs:
+        @app.callback(
+            Output(f"{prefix}-angles", "data"),
+            Output({"type": "styled-graph", "owner": prefix, "name": "preview"}, "figure"),
+            Output({"type": "styled-graph", "owner": prefix, "name": "inplane"}, "figure"),
+            Input(f"{prefix}-params", "data"),
+            State(ids.GRAPH_SETTINGS_STORE, "data"),
+            prevent_initial_call=True,
+        )
+        def _preview(params, gs):
+            if not params:
+                raise PreventUpdate
+            if params.get("cone_angle") is None or params.get("cone_sampling") is None:
+                raise PreventUpdate
+
+            try:
+                kwargs = {k: v for k, v in params.items() if v is not None}
+                angles = generate_angles(**kwargs)
+            except Exception as exc:
+                err = error_figure(f"Error: {exc}")
+                return dash.no_update, err, err
+
+            sphere_fig, inplane_fig = angles_preview_figures(angles, gs, uirevision_prefix=prefix)
+            return angles.tolist(), sphere_fig, inplane_fig
+
+    @app.callback(
+        Output(f"{prefix}-status", "children"),
+        Output(f"{prefix}-value", "data"),
+        Input(f"{prefix}-create", "n_clicks"),
+        State(f"{prefix}-params", "data"),
+        State(f"{prefix}-output-path", "value"),
+        prevent_initial_call=True,
+    )
+    def _create(_n, params, out_path):
+        if not out_path:
+            return "Specify an output path.", dash.no_update
+        if not params or params.get("cone_angle") is None or params.get("cone_sampling") is None:
+            return "Set cone_angle and cone_sampling first.", dash.no_update
+        try:
+            kwargs = {k: v for k, v in params.items() if v is not None}
+            angles = run_operation(generate_angles, {**kwargs, "output_path": out_path})
+        except Exception as exc:
+            return f"Error: {exc}", dash.no_update
+        return f"Saved {len(angles)} angles → {out_path}", out_path

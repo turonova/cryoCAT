@@ -1,18 +1,50 @@
+from __future__ import annotations
+
 import os
 import tempfile
-from enum import Enum
-import pandas as pd
-from os import path
 import warnings
+from enum import Enum
+from os import path
+
+import pandas as pd
+
+from cryocat._types import ArrayLike, PathOrStr
 
 
-def _try_numeric(col):
-    """Convert a Series to numeric, returning the original Series if any value cannot be converted."""
+def _try_numeric(col: pd.Series) -> pd.Series:
+    """Convert a Series to numeric, returning the original if any value cannot be converted.
+
+    Parameters
+    ----------
+    col : pandas.Series
+        Input column to attempt numeric conversion on.
+
+    Returns
+    -------
+    pandas.Series
+        Numeric series if all values are convertible, otherwise the original series.
+    """
     result = pd.to_numeric(col, errors="coerce")
     return result if result.notna().all() else col
 
 
 class TokenType(Enum):
+    """Categories of lexical tokens produced by :meth:`Token.tokenize`.
+
+    Attributes
+    ----------
+    LITERAL : 0
+        A plain data value or data-block specifier.
+    NEWLINE : 1
+        A line boundary (emitted once per input line).
+    COMMENT : 2
+        Text following a ``#`` character on a line.
+    LOOP : 3
+        The ``loop_`` keyword that begins a tabular data block.
+    PROPERTY : 4
+        A column-name token starting with ``_``.
+    """
+
     LITERAL = 0
     NEWLINE = 1
     COMMENT = 2
@@ -27,13 +59,29 @@ class Token:
     (1-based) line/column location in the original file.
     """
 
-    def __init__(self, token_type: TokenType, value, location):
+    def __init__(
+        self,
+        token_type: TokenType,
+        value: str | None,
+        location: tuple[int, int],
+    ) -> None:
+        """
+        Parameters
+        ----------
+        token_type : TokenType
+            Category of this token.
+        value : str or None
+            String payload of the token (``None`` for NEWLINE tokens).
+        location : tuple of int
+            Zero-based ``(line, column)`` in the source text; stored as
+            the 1-based ``(line+1, column+1)`` pair in ``self.location``.
+        """
         self.token_type = token_type
         self.value = value
         self.location = (location[0] + 1, location[1] + 1)
 
     @staticmethod
-    def tokenize(text):
+    def tokenize(text: str) -> list[Token]:
         """Tokenize raw STAR file text into a reversed list of Token objects.
 
         The returned list is ordered so that ``list.pop()`` yields tokens in
@@ -85,7 +133,7 @@ class Token:
         return tokens[::-1]
 
     @staticmethod
-    def parse_newline_or_comments(tokens):
+    def parse_newline_or_comments(tokens: list[Token]) -> list[str]:
         """Consume NEWLINE and COMMENT tokens from the front of the queue.
 
         Parameters
@@ -108,7 +156,7 @@ class Token:
         return comments
 
     @staticmethod
-    def parse_specifier(tokens):
+    def parse_specifier(tokens: list[Token]) -> tuple[list[str], str]:
         """Consume leading whitespace/comments and then a LITERAL token as a data specifier.
 
         Parameters
@@ -128,7 +176,7 @@ class Token:
         return comments, specifier.value
 
     @staticmethod
-    def parse_columns(tokens):
+    def parse_columns(tokens: list[Token]) -> tuple[list[str], list[str]]:
         """Consume the ``loop_`` keyword and subsequent PROPERTY tokens as column names.
 
         Parameters
@@ -153,7 +201,7 @@ class Token:
         return comments, columns
 
     @staticmethod
-    def parse_column(tokens):
+    def parse_column(tokens: list[Token]) -> str:
         """Consume a single PROPERTY token (optionally followed by a COMMENT) as a column name.
 
         The leading ``_`` of the PROPERTY value is stripped before returning.
@@ -174,7 +222,10 @@ class Token:
         return column.value[1:]
 
     @staticmethod
-    def parse_rows(tokens, columns):
+    def parse_rows(
+        tokens: list[Token],
+        columns: list[str],
+    ) -> tuple[list[str], pd.DataFrame]:
         """Consume LITERAL tokens as row data and build a DataFrame.
 
         Parameters
@@ -209,7 +260,7 @@ class Token:
         return comments, pd.DataFrame(rows, columns=columns)
 
     @staticmethod
-    def check(tokens, token_type):
+    def check(tokens: list[Token], token_type: TokenType) -> bool:
         """Return True if the next token in the queue matches ``token_type``.
 
         Parameters
@@ -228,7 +279,7 @@ class Token:
         return tokens[-1].token_type == token_type
 
     @staticmethod
-    def consume(tokens, token_type):
+    def consume(tokens: list[Token], token_type: TokenType) -> Token:
         """Remove and return the next token, raising IOError if the type does not match.
 
         Parameters
@@ -255,7 +306,7 @@ class Token:
         raise IOError(f"Expected {token_type} but got {tokens[-1].token_type} at {tokens[-1].location}.")
 
     @staticmethod
-    def check_then_consume(tokens, token_type):
+    def check_then_consume(tokens: list[Token], token_type: TokenType) -> Token | None:
         """Consume the next token if it matches ``token_type``, otherwise return None.
 
         Parameters
@@ -275,7 +326,11 @@ class Token:
         return None
 
     @staticmethod
-    def lookahead(tokens, token_type_target, ignores):
+    def lookahead(
+        tokens: list[Token],
+        token_type_target: TokenType,
+        ignores: list[TokenType],
+    ) -> bool:
         """Scan ahead through the queue for ``token_type_target``, skipping ``ignores``.
 
         Parameters
@@ -319,42 +374,54 @@ class Starfile:
         Comment lines associated with each data block.
     """
 
-    def __init__(self, file_path=None, frames=None, specifiers=None, comments=None):
-        """Initialise a Starfile, optionally reading from *file_path*.
+    def __init__(
+        self,
+        input_path: PathOrStr | None = None,
+        frames: list[pd.DataFrame] | None = None,
+        specifiers: list[str] | None = None,
+        comments: list[list[str]] | None = None,
+    ) -> None:
+        """Initialise a Starfile, optionally reading from *input_path*.
 
-        If *file_path* points to an existing file it is read immediately and
+        If *input_path* points to an existing file it is read immediately and
         ``frames``, ``specifiers``, and ``comments`` are populated from it.
         Otherwise the provided values (or ``None``) are stored directly.
 
         Parameters
         ----------
-        file_path : str, optional
+        input_path : PathOrStr, optional
             Path to a ``.star`` file to read. Defaults to None.
         frames : list of pandas.DataFrame, optional
-            Pre-built data frames. Used only when *file_path* is not given.
+            Pre-built data frames. Used only when *input_path* is not given.
         specifiers : list of str, optional
-            Specifier strings matching *frames*. Used only when *file_path* is not given.
+            Specifier strings matching *frames*. Used only when *input_path* is not given.
         comments : list of list of str, optional
-            Comments matching *frames*. Used only when *file_path* is not given.
+            Comments matching *frames*. Used only when *input_path* is not given.
         """
-        if file_path and path.isfile(file_path):
-            self.frames, self.specifiers, self.comments = self.read(file_path)
+        if input_path and path.isfile(input_path):
+            self.frames, self.specifiers, self.comments = self.read(input_path)
         else:
             self.frames = frames
             self.specifiers = specifiers
             self.comments = comments
 
     @staticmethod
-    def remove_lines(file_path, lines_to_remove, output_path=None, data_specifier=None, number_columns=True):
+    def remove_lines(
+        input_path: PathOrStr,
+        lines_to_remove: ArrayLike,
+        output_path: PathOrStr | None = None,
+        data_specifier: str | None = None,
+        number_columns: bool = True,
+    ) -> tuple[list[pd.DataFrame], list[str], list[list[str]]] | None:
         """Remove rows from a data block in a STAR file.
 
         Parameters
         ----------
-        file_path : str
+        input_path : PathOrStr
             Path to the input STAR file.
-        lines_to_remove : array-like of int
+        lines_to_remove : ArrayLike
             Integer row indices (0-based) to remove from the target data block.
-        output_path : str, optional
+        output_path : PathOrStr, optional
             If given, the modified STAR file is written to this path. If None,
             the modified data structures are returned instead. Defaults to None.
         data_specifier : str, optional
@@ -368,7 +435,7 @@ class Starfile:
         tuple or None
             ``(frames, specifiers, comments)`` when *output_path* is None, otherwise None.
         """
-        frames, specifiers, comments = Starfile.read(file_path)
+        frames, specifiers, comments = Starfile.read(input_path)
 
         if data_specifier is None:
             spec_id = 0
@@ -388,7 +455,13 @@ class Starfile:
             return frames, specifiers, comments
 
     @staticmethod
-    def read(file_path, data_id=None):
+    def read(
+        input_path: PathOrStr,
+        data_id: int | None = None,
+    ) -> (
+        tuple[list[pd.DataFrame], list[str], list[list[str]]]
+        | tuple[pd.DataFrame, str, list[str]]
+    ):
         """Parse a STAR file into DataFrames, specifiers, and comments.
 
         Columns that contain entirely numeric data are automatically cast to
@@ -396,7 +469,7 @@ class Starfile:
 
         Parameters
         ----------
-        file_path : str
+        input_path : PathOrStr
             Path to the ``.star`` file to read.
         data_id : int, optional
             If given, return only the data block at this index rather than all
@@ -411,7 +484,7 @@ class Starfile:
         comments : list of list of str, or list of str
             Comments (or a single comment list when *data_id* is given).
         """
-        with open(file_path, mode="r") as file:
+        with open(input_path, mode="r") as file:
             raw_starfile = file.read()
 
         tokens = Token.tokenize(raw_starfile)
@@ -437,7 +510,7 @@ class Starfile:
         return frames, specifiers, comments
 
     @staticmethod
-    def get_specifier_id(specifiers, specifier_id):
+    def get_specifier_id(specifiers: list[str], specifier_id: str) -> int | None:
         """Return the list index of a specifier string, or None if not found.
 
         Parameters
@@ -457,12 +530,15 @@ class Starfile:
         return None
 
     @staticmethod
-    def get_frame_and_comments(file_path, specifier):
+    def get_frame_and_comments(
+        input_path: PathOrStr,
+        specifier: str,
+    ) -> tuple[pd.DataFrame, list[str]]:
         """Read a single data block and its comments from a STAR file.
 
         Parameters
         ----------
-        file_path : str
+        input_path : PathOrStr
             Path to the ``.star`` file.
         specifier : str
             Specifier of the data block to retrieve (e.g. ``"data_particles"``).
@@ -479,21 +555,28 @@ class Starfile:
         ValueError
             If *specifier* is not found in the file.
         """
-        frames, specifiers, comments = Starfile.read(file_path)
+        frames, specifiers, comments = Starfile.read(input_path)
         spec_id = Starfile.get_specifier_id(specifiers, specifier)
         if spec_id is None:
             raise ValueError(f"There is no entry with specifier {specifier}.")
         return frames[spec_id], comments[spec_id]
 
     @staticmethod
-    def write(frames, output_path, specifiers=None, comments=None, number_columns=True, float_precision=6):
+    def write(
+        frames: list[pd.DataFrame],
+        output_path: PathOrStr,
+        specifiers: list[str] | None = None,
+        comments: list[list[str] | None] | None = None,
+        number_columns: bool = True,
+        float_precision: int = 6,
+    ) -> None:
         """Write data blocks to a STAR file.
 
         Parameters
         ----------
         frames : list of pandas.DataFrame
             Data blocks to write.
-        output_path : str
+        output_path : PathOrStr
             Path of the output ``.star`` file.
         specifiers : list of str, optional
             Specifier string for each data block. Defaults to ``["data"] * len(frames)``.
@@ -547,7 +630,7 @@ class Starfile:
                 file.write("\n")
 
     @staticmethod
-    def fix_relion5_star(input_path):
+    def fix_relion5_star(input_path: PathOrStr) -> str:
         """Convert a RELION 5 STAR file with key-value ``data_general`` blocks to loop format.
 
         RELION 5 sometimes writes ``data_general`` sections as bare ``_key value``
@@ -561,7 +644,7 @@ class Starfile:
 
         Parameters
         ----------
-        input_path : str
+        input_path : PathOrStr
             Path to the input RELION 5 STAR file.
 
         Returns

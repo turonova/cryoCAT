@@ -1,594 +1,61 @@
+"""Peak analysis (pana) — batch orchestration for template-matching peak analysis.
+
+Three-layer design
+------------------
+Layer 1  Pure-compute functions (no I/O): ``mask_stats``, ``sharp_mask_overlap``,
+         ``find_matching_overlap_row``, ``dist_map_stats``, ``peak_stats_and_profiles``,
+         ``peak_shapes``, ``shape_stats``, ``filter_template_df``,
+         ``_run_analysis_args_from_row``.
+
+Layer 2  Single-case orchestrators that run one (target, template, angles) triple
+         and optionally write their own artifacts: ``analyze_rotations``,
+         ``compute_distance_map``, ``compute_peak_stats``, ``visualize_results``,
+         ``run_single_case``.
+
+Layer 3  Batch wrappers that iterate over CSV/folder collections and delegate to
+         Layer 1/2: ``get_mask_stats``, ``compute_sharp_mask_overlap``,
+         ``check_existing_tight_mask_values``, ``compute_dist_maps_voxels``,
+         ``compute_center_peak_stats_and_profiles``, ``compute_peak_shapes``,
+         ``get_shape_stats``, ``get_indices``, ``create_summary_html``,
+         ``run_analysis``, ``run_angle_analysis``.
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
-import seaborn as sns
+from typing import Literal
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
 from cryocat.core import cryomap
 from cryocat.utils import geom
 from cryocat.utils import ioutils
 from cryocat.core import cryomotl
 from cryocat.analysis import tmana
-from cryocat.utils import mathutils
-from cryocat.utils import wedgeutils
+from cryocat.analysis import visplot
+from cryocat.core import cryowedge
+from cryocat.utils import imageutils
+from cryocat.utils.classutils import gui_exposed
 from scipy.spatial.transform import Rotation as srot
 import re
 from pathlib import Path
+from cryocat._types import DataSource, EulerAngles, ListLike, MapSource, PathOrStr, Symmetry, TripletLike
+from cryocat.core.cryomotl import MotlSource
 from cryocat.core import cryomask
 import os
 from skimage import measure
 from skimage import morphology
-import matplotlib.gridspec as gridspec
-from scipy.interpolate import RegularGridInterpolator
-from skimage.transform import rotate as skimage_rotate
 
-import warnings
 
-warnings.filterwarnings("ignore")
-
-
-def rotate_image(image, alpha, fill_mode="constant", fill_value=0.0):
-    """Rotate an ndarray image by a specified angle.
-
-    Uses 'skimage.transform.rotate' to rotate the input image without resizing
-    the output. Pixels outside the boundaries of the input are filled
-    according to the specified mode and fill value.
-
-    Some descriptions are from `scikit-image page <https://scikit-image.org>`_.
-
-    Parameters
-    ----------
-    image : ndarray
-        nD NumPy array representing the image to rotate.
-    alpha : float
-        Angle of rotation in degrees. Positive values rotate counterclockwise.
-    fill_mode : {'constant', 'edge', 'symmetric', 'reflect', 'wrap'}, optional
-        Points outside the boundaries of the input are filled according to the
-        given mode. Default is 'constant'.
-    fill_value : float, optional
-        Value used to fill points outside the boundaries when `fill_mode`
-        is 'constant'. Default is 0.0.
-
-    Returns
-    -------
-    ndarray
-        Rotated image as a NumPy array with the same shape as the input.
-    """
-
-    return skimage_rotate(image, alpha, resize=False, mode=fill_mode, cval=fill_value)
-
-
-def _ctf(defocus, pshift, famp, cs, evk, f):
-    """Compute Contrast Transfer Function (CTF) for an acquisition scheme.
-
-        This function evaluates the 1D CTF over a 1D spatial frequency array
-        using image acquisition parameters such as defocus, spherical aberration, and
-        accelerating voltage.
-
-        Parameters
-        ----------
-        defocus : array_like
-            Defocus values (in :math:`\mu\mathrm{m}`) for each tilt.
-            Shape is '(len(defocus), 1)'.
-        pshift : array_like
-            Phase shift values (in degrees) for each tilt. 0 if no phase shift is added.
-            Shape is '(len(pshift), 1)'.
-        famp : float
-            Amplitude contrast (typically between 0.0 and 0.2).
-        cs : float
-            Spherical aberration (in mm).
-        evk : float
-            Accelerating voltage (in kV).
-        f : ndarray
-            1D spatial frequency magnitude array (in :math:`\mathrm{\AA}^{-1}`) at which to evaluate the CTF.
-            Must be 1D, as other shapes cannot be broadcasted with defocus /
-            phase shift array of shape (len(defocus), 1).
-
-        Returns
-        -------
-        ctf : ndarray
-            The computed 1D CTF curve evaluated at each tilt as a function of
-            frequency array `f`. Shape is '(len(defocus), len(f))'.
-
-        Notes
-        -----
-        - The output combines both sine and cosine components weighted by
-          phase and amplitude contrast:
-    .. math::
-       \mathrm{CTF}(f) = \sqrt{1 - f_\mathrm{amp}^2} \, \sin(\chi(f)) + f_\mathrm{amp} \, \cos(\chi(f))
-           where :math:`\chi(f)` is the aberration phase function.
-        - this output is of radial symmetry
-    """
-
-    defocus = defocus * 1.0e4  # convert defocus distance from μm to Å
-    cs = cs * 1.0e7  # spherical aberration from mm to Å
-    pshift = pshift * np.pi / 180  # phase shift degree to radian
-
-    h = 6.62606957e-34  # Planck's constant (m^2*kg/s)
-    c = 299792458  # speed of light (m/s)
-    erest = 511000  # electron rest energy (eV)
-    v = evk * 1000  # accelerating voltage (V)
-    e = 1.602e-19  # unit of e- charge (C)
-
-    # de Broglie e- wavelength
-    lam = (c * h) / np.sqrt(((2 * erest * v) + (v**2)) * (e**2)) * (10**10)
-
-    # phase contrast weighting factor
-    w = (1 - (famp**2)) ** 0.5
-
-    # compute the ctf phase shift term / wave aberration equation
-    chi = (np.pi * lam * (f**2)) * (defocus - 0.5 * (lam**2) * (f**2) * cs)
-    chi += pshift
-
-    # CTF function
-    ctf = (w * np.sin(chi)) + (famp * np.cos(chi))
-
-    return ctf
-
-
-def generate_ctf(wl, slice_idx, slice_weight, binning):
-    """Generate a CTF filter for a weighted volume that is subset of a full volume.
-
-    This function computes defocus and phase shift-specific CTF filters for a template.
-
-    It does so by:
-    1. computing the frequency array of a tomogram;
-
-    2. interpolating the CTF based on the full sized frequency array and
-       defocus / pshift values;
-
-    3. fourier cropping the full size CTF values to fit the size of a template, to keep
-       only the lower frequencies;
-
-    4. applying the CTF values to the given `slice_weight` array.
-
-    Parameters
-    ----------
-    wl : pandas.DataFrame
-        Wedge list dataframe containing metadata and microscope parameters
-        for one tomogram.
-    slice_idx : array-like of int
-        Indices of the frequency components (aka. points in fourier space)
-        to which the CTF filter should be applied.
-    slice_weight : ndarray
-        A 3D array representing the frequency domain weighting (missing wedge +
-        bandpass) of each tilt.
-        The shape is assumed to be (depth, height, width) or (zyx).
-    binning : int or float
-        The binning factor of the tomogram. Used to scale the pixel size.
-
-    Returns
-    -------
-    ctf_filt : ndarray
-        The computed CTF filter applied on top of the weighted filter input
-        (i.e. bandpass and missing wedge), in fourier space.
-        Same shape as `slice_weight`.
-
-    Notes
-    -----
-    - If `pshift` is not provided in `wl`, it defaults to zeros.
-    """
-
-    # determine template and full tomogram sizes
-    tmpl_size = slice_weight.shape[0]
-    full_size = int(max(wl["tomo_x"].values[0], wl["tomo_y"].values[0], wl["tomo_z"].values[0]))
-    pixelsize = wl["pixelsize"].values[0] * binning
-
-    # calculate frequency arrays of tomogram and template sizes
-    freqs_full = mathutils.compute_frequency_array((full_size,), pixelsize)
-    freqs_crop = mathutils.compute_frequency_array((tmpl_size,), pixelsize)
-    freqs_crop = freqs_crop[tmpl_size // 2 :]  # only need half of the freq array
-
-    # selects the central part (len = tmpl length) of the frequency array from
-    # the full frequency array and wraps it to match FFT layout
-    f_idx = np.zeros(full_size, dtype="bool")
-    f_idx[:tmpl_size] = 1
-    f_idx = np.roll(f_idx, -tmpl_size // 2)
-    f_idx = np.nonzero(f_idx)[0]  # get the indices of selected part
-
-    # acquisition parameters
-    defocus = np.array(wl["defocus"])
-    pshift = wl.get("pshift", np.zeros_like(defocus))
-    famp = wl["amp_contrast"].values[0]
-    cs = wl["cs"].values[0]
-    evk = wl["voltage"].values[0]
-
-    # compute the 1D CTF as a function of full tomo freq magnitude array
-    full_ctf = np.abs(_ctf(defocus[:, None], pshift[:, None], famp, cs, evk, freqs_full))
-
-    # cropping the ctf that only belongs to template size from the full size ctf
-    # cropping is done in fourier space to remove high freq ctf content
-    ft_ctf = np.fft.fft(full_ctf, axis=1)
-    ft_ctf = ft_ctf[:, f_idx] * tmpl_size / full_size
-    crop_ctf = np.real(np.fft.ifft(ft_ctf, axis=1))
-    crop_ctf = crop_ctf[:, tmpl_size // 2 :]
-
-    # init an empty vol to save ctf values
-    ctf_filt = np.zeros_like(slice_weight)
-
-    # map weighted spatial components to their freq magnitudes
-    x = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize))
-
-    # for each tilt, interpolate the CTF value for each weighted voxel
-    for ictf, sidx in zip(crop_ctf, slice_idx):
-        ip = RegularGridInterpolator(
-            (freqs_crop,),  # Grid points
-            ictf,  # Values on the grid
-            method="linear",  # Interpolation method ('linear', 'nearest')
-            bounds_error=False,  # Do not raise error for out-of-bound points
-            fill_value=0,  # Fill with 0 for out-of-bound points
-        )
-
-        # write the interpolated CTF values for all weighted voxels to an empty vol
-        ctf_filt[sidx] += ip(x[sidx])
-
-    # ? np.nan_to_num(ctf_filt)
-
-    # apply the CTF filter to input weight filter
-    ctf_filt *= slice_weight
-
-    return ctf_filt
-
-
-def generate_exposure(wedgelist, slice_idx, slice_weight, binning):
-    r"""Generate an exposure-based filter to account for frequency-dependent signal
-    attenuation due to electron dose in cryo-electron tomography.
-
-    This function models the decay of signal at different spatial frequencies
-    based on cumulative electron exposure per tilt. The filter is computed per
-    tilt exposure using an empirical decay function and returned as a 3D volume matching
-    the input slice weights.
-
-    Parameters
-    ----------
-    wedgelist : pandas.DataFrame
-        Metadata table containing at least the following columns:
-        - "exposure": float, cumulative electron exposure per tilt (in \mathrm{e^- / \AA^2})
-        - "pixelsize": float, unbinned pixel size (in :math:`\mathrm{\AA}`)
-
-    slice_idx : list of numpy.ndarray
-        Indices of the frequency components (aka. points in fourier space)
-        to which the exposure filter should be applied.
-
-    slice_weight : numpy.ndarray
-        A 3D array representing the frequency domain weighting (missing wedge +
-        bandpass) of each tilt.
-        The shape is assumed to be (depth, height, width) or (zyx).
-
-    binning : int
-        The binning factor of the tomogram. Used to scale the pixel size.
-
-    Returns
-    -------
-    exp_filt : numpy.ndarray
-        3D exposure filter of the same shape as `slice_weight`. Each voxel contains
-        a multiplicative factor representing attenuation based on frequency and dose.
-
-    Notes
-    -----
-    The attenuation function follows the empirical dose-dependent decay model:
-
-    .. math::
-        \exp\Bigg(-\frac{\mathrm{exposure}}{2 \, (a \, f^b + c)}\Bigg)
-
-    where f is the spatial frequency in :math:`\mathrm{\AA}^{-1}` and a, b, c are empirical constants.
-    See `this paper <https://elifesciences.org/articles/06980>`_ for more info.
-    """
-
-    expo = wedgelist["exposure"].values
-    a, b, c = (0.245, -1.665, 2.81)  # values that best fit the function in the paper
-    pixelsize = wedgelist["pixelsize"].values[0] * binning
-
-    freq_array = np.fft.ifftshift(mathutils.compute_frequency_array(slice_weight.shape, pixelsize))
-
-    exp_filt = np.zeros_like(slice_weight)
-
-    # for each weighted component, find its corresponding freq then exposure
-    for expi, idx in zip(expo, slice_idx):
-        freqs = freq_array[idx]
-        exp_filt[idx] += np.exp(-expi / (2 * ((a * freqs**b) + c)))
-
-    exp_filt *= slice_weight
-
-    return exp_filt
-
-
-def generate_wedgemask_slices_template(wedgelist, template_filter):
-    """Generate missing wedge masks and weights for a template in Fourier space.
-
-    This function simulates the sampling of a 3D template volume in Fourier space,
-    given a set of tilt angles. It computes:
-
-    - Which voxels are covered based on tilt range.
-
-    - A normalized weight to compensate for unequal coverage of tilts,
-      due to rotation interpolation artifacts (some voxels may be covered by >1 tilt).
-
-    - A binary template mask that shows active voxels
-      after bandpass & missing wedge filters.
-
-    Parameters
-    ----------
-    wedgelist : pandas.DataFrame
-        A table with a column `tilt_angle` (in degrees) representing the tilt angles
-        of the acquisition. This should only contain info for one tomogram.
-    template_filter : ndarray
-        A 3D frequency-filtered template in numpy array. The dimensions have to be equal,
-        aka. a cube shape.
-
-    Returns
-    -------
-    active_slices_idx : list of tuple of ndarrays
-        A list of index tuples '[(zs, ys, xs)]' for each tilt, indicating where the
-        projection intersects the bandpassed Fourier space.
-        Each value inside the tuple is an array indicating where all active points
-        is on each dimension. len(active_slices_idx) = len(wedgelist).
-    wedge_slices_weights : ndarray
-        A 3D array of the same shape as `template_filter`, containing weights that
-        normalize the contribution of each voxel based on how frequently it was sampled.
-        Voxels that are not sampled receive a weight of 0.
-    wedge_slices : ndarray
-        A binary 3D mask of the same shape as `template_filter` with 1s at all voxels
-        that were sampled by at least one tilt.
-
-    Notes
-    -----
-    - Since the wedge mask is manually built and assume zero frequency component in
-      center of array, shifting of the mask from center of array to top-left corner is
-      needed for later operations in fourier space.
-
-    - Rotating the ray at specified degrees (not a continuous range) to match the real
-      tilting scheme better (star-shaped).
-    """
-
-    template_size = np.array(template_filter.shape)
-    assert len(template_size) == 3, "The template is not 3D!"
-    assert len(np.unique(template_size)) == 1, "The template is not cubic in shape!"
-
-    # get the x and z length of the filtered template
-    # (original codes uses matlab axes 1 and 3 which correspond to x and z
-    # according to the original gsg_mrcread; so with mrcfile this is 2 and 0)
-    mx = np.max(template_size[[2, 0]])  # template is in zyx order
-
-    # create a 2D (xz) image of a line going down through the middle
-    # to simluate a projection ray at 0 deg tilt
-    img = np.zeros((mx, mx))
-    img[:, mx // 2] = 1.0
-
-    # binary mask of where the bandpass filter is applied on the template
-    bpf_idx = template_filter > 0  # shouldn't this be in fourier space?
-
-    # initialize a few vars to store info
-    active_slices_idx = []
-    wedge_slices_weights = np.zeros_like(template_filter)
-    weight = np.zeros_like(template_filter)
-
-    for alpha in wedgelist["tilt_angle"]:
-
-        # rotate the ray projection img by alpha deg
-        r_img = rotate_image(img, alpha)
-
-        # after rotation, smoothing effect thus need to turn interpolated values into binary
-        crop_r_img = r_img > np.exp(-2)  # e^-2 is common effective support threshold for g-blur
-
-        # repeat the 2D ray img into a 3D vol;
-        # transpose it to the same dims as template (yxz to zyx);
-        # then shift the zero freuqency voxels to origin to match FFT format
-        slice_vol = np.fft.ifftshift(np.transpose(np.tile(crop_r_img, (mx, 1, 1)), (2, 0, 1)))
-
-        # apply the actual bandpass filter mask to the 3D ray image
-        slice_idx = slice_vol & bpf_idx
-
-        # add together all tilts into one weight that indicates the complete missing wedge loc
-        weight += slice_idx
-
-        # store locations of nonzero voxels per tilt
-        active_slices_idx.append(np.nonzero(slice_idx))
-
-    # add together projection interporlations may lead to overlapping pixels;
-    # invert the values to balance the over/under-sampling
-    w_idx = np.nonzero(weight)
-    wedge_slices_weights[w_idx] = 1.0 / weight[w_idx]
-
-    # create a binary wedge mask
-    wedge_slices = np.zeros_like(weight)
-    wedge_slices[w_idx] = 1.0
-
-    return active_slices_idx, wedge_slices_weights, wedge_slices
-
-
-def generate_wedgemask_slices_tile(wedgelist, tile_filter):
-    """Generate missing wedge masks and weights for a subtomo or a tile from tomogram
-    in Fourier space.
-
-    This function simulates the sampling of a 3D tile volume in Fourier space,
-    given a set of tilt angles. It computes:
-
-    - Which voxels are covered based on tilt range.
-
-    - A normalized weight to compensate for unequal coverage of tilts,
-      due to rotation interpolation artifacts (some voxels may be covered by >1 tilt).
-
-    - A binary tile mask that shows active voxels
-      after bandpass & missing wedge filters.
-
-    Parameters
-    ----------
-    wedgelist : pandas.DataFrame
-        A table with a column `tilt_angle` (in degrees) representing the tilt angles
-        of the acquisition. This should only contain info for one tomogram.
-    tile_filter : ndarray
-        A 3D frequency-filtered tile in numpy array. The dimensions have to be equal,
-        aka. a cube shape.
-        The array itself is not used for its values, only its shape.
-
-     Returns
-    -------
-    wedge_slices : ndarray
-        A binary 3D mask of the same shape as `tile_filter` with 1s at all voxels
-        that were sampled by at least one tilt.
-
-    """
-
-    tile_size = np.array(tile_filter.shape)
-
-    # make sure that the tile size is cubic
-    assert len(tile_size) == 3, "The tile is not 3D!"
-    assert len(np.unique(tile_size)) == 1, "The tile is not cubic in shape!"
-
-    # original codes uses matlab axes 1 and 3 which correspond to x and z
-    # according to the original gsg_mrcread; so with mrcfile this is 2 and 0
-    mx = np.max(tile_size[[2, 0]])  # tile is in zyx order
-    img = np.zeros((mx, mx))
-    img[:, mx // 2] = 1.0  # create projection line to simulate signal direction
-
-    # initialize a vol to store missing wedge filter
-    tile_bin_slice = np.zeros(tile_size[[2, 0]], dtype="float32")
-
-    for alpha in wedgelist["tilt_angle"]:
-
-        r_img = rotate_image(img, alpha)
-        # tile filter?
-        r_img = np.fft.fftshift(np.fft.fft2(r_img))
-        new_img = np.real(np.fft.ifft2(np.fft.ifftshift(r_img)))
-        new_img /= np.max(new_img)
-
-        # rotation smoothing effect thus need to turn interpolated values into binary
-        tile_bin_slice += new_img > np.exp(-2)
-
-    # generate tile binary wedge filter
-    tile_bin_slice = (tile_bin_slice > 0).astype("float32")
-
-    # repeat the 2D ray img into a 3D vol;
-    # transpose it to the same dims as tile (yxz to zyx);
-    # then shift the zero freuqency voxels to origin
-    wedge_slices = np.fft.ifftshift(np.transpose(np.tile(tile_bin_slice, (tile_size[1], 1, 1)), (2, 0, 1)))
-
-    return wedge_slices
-
-
-def generate_wedge_masks(
-    template_size,
-    tile_size,
-    wedgelist,
-    tomo_number,
-    binning=1,
-    low_pass_filter=None,
-    high_pass_filter=None,
-    ctf_weighting=False,
-    exposure_weighting=False,
-    output_template=None,
-    output_tile=None,
-):
-    """Generates wedge masks for both template and subtomo tile volumes.
-
-    This function computes frequency-space masks that account for the missing wedge
-    artifacts based on a provided wedge list. Optionally applies low-pass and
-    high-pass filters to the masks. CTF and exposure filtering may also be applied on
-    top of the wedge masks.
-
-    Parameters
-    ----------
-    template_size : int or array-like
-        The size of the template. Could be a single int (assume cubic shape) or a
-        tuple, list or numpy.ndarray of length of 3.
-
-    tile_size : tuple of int
-        The size of the subtomo or tile. Could be a single int (assume cubic shape) or a
-        tuple, list or numpy.ndarray of length of 3.
-
-    wedgelist : str or pandas.DataFrame
-        Path to the STOPGAP wedge list file (.star) or a preloaded DataFrame.
-        The list should contain entries specifying the missing wedge parameters
-        per tomogram.
-
-    tomo_number : int
-        The tomogram number to select from the wedge list.
-
-    binning : int, optional
-        Binning factor used in tomogram. Default is 1 (no binning).
-
-    low_pass_filter : int, optional
-        If provided, applies a low-pass filter in Fourier space with the given cutoff
-        in Fourier pixels.
-
-    high_pass_filter : int, optional
-        If provided, applies a high-pass filter in Fourier space with the given cutoff
-        in Fourier pixels.
-
-    ctf_weighting : bool, optional
-        If True, applies CTF weighting. Default is False.
-
-    exposure_weighting : bool, optional
-        If True, applies exposure weighting. Default is False.
-
-    output_template : str, optional
-        Path to save the resulting template wedge mask. Can use `create_wedge_names`
-        to generate this path.
-
-    output_tile : str, optional
-        Path to save the resulting tile wedge mask. Can use `create_wedge_names`
-        to generate this path.
-
-    Returns
-    -------
-    filter_template_t : ndarray
-        The wedge-weighted and filtered Fourier mask for the template volume.
-
-    filter_tile_t : ndarray
-        The wedge-weighted and filtered Fourier mask for the tile volume.
-    """
-
-    # init mask volumes for template and tile
-    filter_template = np.ones(cryomask.get_correct_format(template_size))
-    filter_tile = np.ones(cryomask.get_correct_format(tile_size))
-
-    # get relevant subset of the wedgelist
-    wedgelist = wedgeutils.load_wedge_list_sg(wedgelist)
-    wedgelist = wedgelist.loc[wedgelist["tomo_num"] == tomo_number]
-
-    if low_pass_filter:
-        filter_template = cryomap.lowpass(filter_template, fourier_pixels=low_pass_filter)
-        filter_tile = cryomap.lowpass(filter_tile, fourier_pixels=low_pass_filter)
-
-    if high_pass_filter:
-        filter_template = cryomap.highpass(filter_template, fourier_pixels=low_pass_filter)
-        filter_tile = cryomap.highpass(filter_tile, fourier_pixels=low_pass_filter)
-
-    # compute wedge masks to inited masks
-    active_slices_idx, wedge_slices_weights, wedge_slices_template = generate_wedgemask_slices_template(
-        wedgelist, filter_template
-    )
-    wedge_slices_template_tile = generate_wedgemask_slices_tile(wedgelist, filter_tile)
-
-    # apply wedge masks on initialized (or bandpassed) masks
-    filter_template = wedge_slices_template * filter_template
-    filter_tile = wedge_slices_template_tile * filter_tile
-
-    # if true, apply exposure and ctf filtering to template filter only
-    if exposure_weighting:
-        filter_template *= generate_exposure(wedgelist, active_slices_idx, wedge_slices_weights, binning)
-
-    if ctf_weighting:
-        filter_template *= generate_ctf(wedgelist, active_slices_idx, wedge_slices_weights, binning)
-
-    if output_template:
-        cryomap.write(filter_template, output_template, transpose=False, data_type=np.single)
-
-    if output_tile:
-        cryomap.write(filter_tile, output_tile, transpose=False, data_type=np.single)
-
-    filter_template_t = filter_template.transpose(2, 1, 0)  # zyx to xyz
-    filter_tile_t = filter_tile.transpose(2, 1, 0)
-
-    return filter_template_t, filter_tile_t
-
-
-def create_structure_path(folder_path, structure_name):
+def create_structure_path(folder_path: PathOrStr, structure_name: str) -> str:
     """Put together a path for the structure folder by combining a base folder path
     and the name of the structure.
 
     Parameters
     ----------
-    folder_path : str
+    folder_path : PathOrStr
         The base directory path where the structure folder should be created.
         It should include a trailing slash if needed, otherwise the function
         will not insert a separator between `folder_path` and `structure_name`.
@@ -605,12 +72,12 @@ def create_structure_path(folder_path, structure_name):
     return structure_folder
 
 
-def create_em_path(folder_path, structure_name, em_filename):
+def create_em_path(folder_path: PathOrStr, structure_name: str, em_filename: str) -> str:
     """Constructs the full path to an `.em` file within a specific structure folder.
 
     Parameters
     ----------
-    folder_path : str
+    folder_path : PathOrStr
         The base directory path.
     structure_name : str
         The name of the structure, used to create a subdirectory under `folder_path`.
@@ -624,11 +91,11 @@ def create_em_path(folder_path, structure_name, em_filename):
     """
 
     structure_folder_path = create_structure_path(folder_path, structure_name)
-    em_path = structure_folder_path + em_filename + ".em"
+    em_path = structure_folder_path + em_filename
     return em_path
 
 
-def create_subtomo_name(structure_name, motl_name, tomo_id, boxsize):
+def create_subtomo_name(structure_name: str, motl_name: str, tomo_id: str, boxsize: int) -> str:
     """Generate a standardized filename for a subtomogram.
     The generated file name is
     :code:`subtomo_<structure_name>_m<motl_name>_t<tomo_id>_s<boxsize>.em`
@@ -650,20 +117,22 @@ def create_subtomo_name(structure_name, motl_name, tomo_id, boxsize):
         The constructed filename for the subtomogram.
     """
 
-    subtomo_name = "subtomo_" + structure_name + "_m" + motl_name + "_t" + tomo_id + "_s" + str(boxsize) + ".em"
+    motl_stem = Path(motl_name).stem
+    tomo_id_stem = Path(tomo_id).stem
+    subtomo_name = "subtomo_" + structure_name + "_m_" + motl_stem + "_t_" + tomo_id_stem + "_s" + str(boxsize) + ".em"
 
     return subtomo_name
 
 
 def create_tomo_name(
-    folder_path,
-    tomo,
-):
+    folder_path: PathOrStr,
+    tomo: str,
+) -> str:
     """Generate a full file path for a tomogram with an .mrc extension.
 
     Parameters
     ----------
-    folder_path : str
+    folder_path : PathOrStr
         Path to the directory containing the tomogram.
     tomo : str
         Base name of the tomogram file (without extension).
@@ -674,32 +143,28 @@ def create_tomo_name(
         Full path to the tomogram file with .mrc extension.
     """
 
-    tomo_name = folder_path + tomo + ".mrc"
+    tomo_name = folder_path + tomo
     return tomo_name
 
 
-def create_wedge_names(wedge_path, tomo_number, boxsize, binning, filter=None):
-    """Generate filenames for tomogram and template wedge masks with filtering info.
+def create_wedge_names(wedge_path: PathOrStr, boxsize: int, filter: int | None = None) -> tuple[str, str]:
+    """Generate filenames for target and template wedge masks with filtering info.
 
     If no filter size is provided, it defaults to half of the box size.
 
     Parameters
     ----------
-    wedge_path : str
+    wedge_path : PathOrStr
         Directory path where the wedge files will be stored.
-    tomo_number : int
-        Number of the tomogram.
     boxsize : int
         Size of the subtomogram box in voxels.
-    binning : int
-        Binning level applied to the tomogram.
-    filter : int, optional, default=boxsize // 2
+    filter : int, optional
         Size of the filter applied during processing.
 
     Returns
     -------
-    tomo_wedge : str
-        Filename for the filtered tomogram wedge mask.
+    target_wedge : str
+        Filename for the filtered target wedge mask.
     tmpl_wedge : str
         Filename for the filtered template wedge mask.
     """
@@ -707,14 +172,14 @@ def create_wedge_names(wedge_path, tomo_number, boxsize, binning, filter=None):
     if filter is None:
         filter = boxsize // 2
 
-    file_ending = str(boxsize) + "_t" + str(tomo_number) + "_b" + str(binning) + "_f" + str(filter) + ".em"
-    tomo_wedge = wedge_path + "tile_filt_" + file_ending
-    tmpl_wedge = wedge_path + "tmpl_filt_" + file_ending
+    file_ending = str(boxsize) + "_f" + str(filter) + ".em"
+    target_wedge = wedge_path + "target_wm_" + file_ending
+    tmpl_wedge = wedge_path + "template_wm_" + file_ending
 
-    return tomo_wedge, tmpl_wedge
+    return target_wedge, tmpl_wedge
 
 
-def create_output_base_name(tmpl_index):
+def create_output_base_name(tmpl_index: int) -> str:
     """Generates the base name for peak analysis output folders / files.
 
     Includes the index of the row analyzed from the template list csv.
@@ -734,7 +199,7 @@ def create_output_base_name(tmpl_index):
     return output_base
 
 
-def create_output_folder_name(tmpl_index):
+def create_output_folder_name(tmpl_index: int) -> str:
     """Generates the name of the folder (not the full path) where the peak analysis
     results will be stored, given the index of the row from the template list csv.
 
@@ -752,42 +217,127 @@ def create_output_folder_name(tmpl_index):
     return create_output_base_name(tmpl_index) + "_results"
 
 
-def create_output_folder_path(folder_path, structure_name, folder_spec):
+def create_output_folder_path(folder_path: PathOrStr, structure_name: str, folder_spec: int | str) -> str:
     """Constructs the full path of the output folder.
 
     Parameters
     ----------
-    folder_path : str
+    folder_path : PathOrStr
         The path to the peak analysis base folder.
     structure_name : str
         The name of the structure.
-    folder_spec : int or else
-        Information about the output folder. If int (should be an index from the
-        template list csv), the output folder name will be 'id_<folder_spec>_results'.
-        If not int, the output folder name will be '<folder_spec>'.
+    folder_spec : int or str
+        When an int (a row index from the template list CSV), the folder name
+        is ``id_<folder_spec>_results``.  When a string, it is used directly
+        as the folder name.
 
     Returns
     -------
     output_path : str
-        The full path to the output folder. Should be either 'id_<folder_spec>_results'
-        or '<folder_spec>'.
+        Full path to the output folder, with a trailing slash.
+        Pattern: ``<folder_path>/<structure_name>/id_<folder_spec>_results/``
+        when `folder_spec` is an int, or ``<folder_path>/<structure_name>/<folder_spec>/``
+        otherwise.
     """
 
-    if isinstance(folder_spec, int):
-        output_path = create_structure_path(folder_path, structure_name) + create_output_folder_name(folder_spec) + "/"
+    _is_int_like = isinstance(folder_spec, (int, np.integer)) or (
+        isinstance(folder_spec, (float, np.floating))
+        and not np.isnan(folder_spec)
+        and float(folder_spec) == int(float(folder_spec))
+    )
+    if _is_int_like:
+        output_path = (
+            create_structure_path(folder_path, structure_name)
+            + create_output_folder_name(int(float(folder_spec)))
+            + "/"
+        )
 
     else:
-        output_path = create_structure_path(folder_path, structure_name) + folder_spec + "/"
+        output_path = create_structure_path(folder_path, structure_name) + str(folder_spec) + "/"
 
     return output_path
 
 
-def get_indices(template_list, conditions, sort_by=None):
+def _path_or_inmemory(value: np.ndarray | str | os.PathLike | None) -> str:
+    """Return *value* as a string path, or a sentinel for non-path inputs.
+
+    Parameters
+    ----------
+    value : numpy.ndarray or str or os.PathLike or None
+        The map/data source to stringify.  ``None`` produces an empty string.
+        An ndarray (or any non-path object) produces ``"<in-memory>"``.
+
+    Returns
+    -------
+    str
+        ``""`` when *value* is ``None``; the string form of *value* when it is
+        a path; ``"<in-memory>"`` otherwise.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (str, os.PathLike)):
+        return str(value)
+    return "<in-memory>"
+
+
+def _resolve_input_path(value: str, parent_folder_path: PathOrStr, structure_name: str) -> str:
+    """Resolve a Template/Mask/Target-map value to an absolute path.
+
+    When *value* already carries directory information (absolute path or
+    contains a directory separator) it is returned unchanged.  A bare
+    filename is resolved via the rigid ``parent / structure / filename``
+    convention used by the batch pipeline.
+
+    Parameters
+    ----------
+    value : str
+        Filename or path as read from the template-list CSV.
+    parent_folder_path : PathOrStr
+        Root folder containing structure subfolders.
+    structure_name : str
+        Name of the structure subfolder under *parent_folder_path*.
+
+    Returns
+    -------
+    str
+        Absolute or explicitly-qualified path.
+    """
+    if os.path.isabs(value) or os.path.dirname(value):
+        return value
+    return create_em_path(parent_folder_path, structure_name, value)
+
+
+def filter_template_df(df: pd.DataFrame, conditions: dict, sort_by: str | None = None) -> pd.Index:
+    """Filter an already-loaded template DataFrame and return matching indices.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Template list DataFrame (indexed by row id).
+    conditions : dict
+        Keys are column names; values are the required equality values.
+        All conditions must match (logical AND).
+    sort_by : str, optional
+        Column name to sort the filtered result by ascending value.
+
+    Returns
+    -------
+    pandas.Index
+        Index of rows satisfying all conditions, optionally sorted.
+    """
+    for key, value in conditions.items():
+        df = df.loc[df[key] == value, :]
+    if sort_by is not None:
+        df = df.sort_values(by=sort_by, ascending=True)
+    return df.index
+
+
+def get_indices(template_list: PathOrStr, conditions: dict, sort_by: str | None = None) -> pd.Index:
     """Get the indices of a filtered and optionally sorted template list csv file.
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the template list csv file.
     conditions : dict
         Dictionary where keys are template list column names and values are the values to
@@ -801,88 +351,30 @@ def get_indices(template_list, conditions, sort_by=None):
     pandas.Index
         Index of the filtered (and optionally sorted) rows in the template list DataFrame.
     """
-
-    temp_df = pd.read_csv(template_list, index_col=0)
-
-    for key, value in conditions.items():
-        temp_df = temp_df.loc[temp_df[key] == value, :]
-        # display(temp_df)
-
-    if sort_by is not None:
-        temp_df = temp_df.sort_values(by=sort_by, ascending=True)
-
-    return temp_df.index
+    return filter_template_df(_read_template_list(template_list), conditions, sort_by=sort_by)
 
 
-def get_sharp_mask_stats(input_mask):
-    """Get the boxsize of the nonzero element inside the sharp mask and the total
-    volume of the nonzero element.
-
-    Parameters
-    ----------
-    input_mask : str or numpy.ndarray
-         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
-         The nonzero element in this mask has sharp edges, i.e.: the values inside
-         the mask are either 1 or 0.
-
-    Returns
-    -------
-    n_voxels : int
-        The number of voxels of where the input_mask is not zero.
-    mask_bb : tuple of int
-        The bounding box size in (x, y, z) of the nonzero element.
-    """
-
-    mask_bb = cryomask.get_mass_dimensions(input_mask)
-    n_voxels = np.count_nonzero(input_mask)
-
-    return n_voxels, mask_bb
-
-
-def get_soft_mask_stats(input_mask):
-    """Get the boxsize of the element (> 0.5) inside the soft mask and the total
-    volume of the nonzero element.
-
-    Parameters
-    ----------
-    input_mask : str or numpy.ndarray
-         Input mask specified either by its path or already loaded as 3D numpy.ndarray.
-         The nonzero element in this mask has soft edges, i.e.: the values inside
-         the mask are between 0 and 1.
-
-    Returns
-    -------
-    n_voxels : int
-        The number of voxels of where the input_mask is bigger than 0.5.
-    mask_bb : tuple of int
-        The bounding box size in (x, y, z) of the element that has values bigger than 0.5.
-    """
-
-    # mask the mask where the values are bigger than 0.5
-    mask_th = np.where(input_mask > 0.5, 1.0, 0.0)
-    mask_bb = cryomask.get_mass_dimensions(mask_th)
-    n_voxels = np.count_nonzero(mask_th)
-
-    return n_voxels, mask_bb
-
-
-def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
+def cut_the_best_subtomo(
+    tomogram: PathOrStr, motl_path: PathOrStr, subtomo_shape: TripletLike, output_path: PathOrStr | None
+) -> tuple:
     """Extract the highest-scoring subtomogram from a tomogram.
 
     Loads a tomogram and its corresponding particle motive list, identifies the entry
-    with the highest score, and extracts the aligned subtomogram around that
-    position. Optionally writes the result to a file.
+    with the highest score, extracts the subtomogram at that position, and applies
+    the stored shift correction.  Rotation is not applied.
+    Optionally writes the result to a file.
 
     Parameters
     ----------
-    tomogram : str
+    tomogram : PathOrStr
         Path to the tomogram file to extract from.
-    motl_path : str
+    motl_path : PathOrStr
         Path to the motive list with extracted particle information (.csv or
         compatible format).
-    subtomo_shape : tuple of int
-        Shape of the subtomogram to extract, in (x, y, z) order.
-    output_file : str or None
+    subtomo_shape : TripletLike
+        Shape of the subtomogram to extract, in (x, y, z) order.  A
+        ``TripletLike`` is a scalar or a 3-element sequence.
+    output_path : PathOrStr or None
         Path to save the extracted subtomogram. If None, the file is not saved.
 
     Returns
@@ -904,16 +396,52 @@ def cut_the_best_subtomo(tomogram, motl_path, subtomo_shape, output_file):
     angles = m.df.loc[m.df.index[max_idx], ["phi", "theta", "psi"]].to_numpy()
 
     subvolume = cryomap.extract_subvolume(tomo, coord, subtomo_shape)
-    subvolume_sh = cryomap.shift2(subvolume, shifts)
+    subvolume_sh = cryomap.shift(subvolume, shifts)
     # subvolume_rot = cryomap.rotate(subvolume_sh,rotation_angles=angles)
 
-    if output_file is not None:
-        cryomap.write(subvolume_sh, output_file, data_type=np.single)
+    if output_path is not None:
+        cryomap.write(subvolume_sh, output_path, data_type=np.single)
 
     return subvolume_sh, angles
 
 
-def create_subtomograms_for_tm(template_list, parent_folder_path):
+@gui_exposed(label="Extract best subtomogram", category="Analysis", output="map", hide=("output_path",))
+def extract_best_subtomogram(
+    tomogram: MapSource,
+    motl: MotlSource,
+    box_size: TripletLike | int,
+    *,
+    output_path: PathOrStr | None = None,
+) -> dict:
+    """Extract the highest-scoring subtomogram from a tomogram.
+
+    Parameters
+    ----------
+    tomogram : MapSource
+        Target tomogram to extract from.  A ``MapSource`` is an ndarray or a
+        path to a map file (.mrc, .em, …).
+    motl : MotlSource
+        Motive list with particle coordinates and scores.  A ``MotlSource`` is
+        a :class:`~cryocat.core.cryomotl.Motl`, a :class:`pandas.DataFrame`,
+        or a path to a compatible file.
+    box_size : TripletLike or int
+        Box size of the extracted subtomogram.  A scalar is treated as cubic.
+    output_path : PathOrStr, optional
+        Path to write the extracted subtomogram.  Skipped when *None*.
+
+    Returns
+    -------
+    dict
+        ``subtomogram`` - extracted subtomogram ndarray;
+        ``rotation`` - Euler angles ``(phi, theta, psi)`` of the best particle;
+        ``output_path`` - path the subtomogram was written to, or *None*.
+    """
+    box_size = geom.as_triplet(box_size, dtype=int)
+    subtomogram, rotation = cut_the_best_subtomo(tomogram, motl, box_size, output_path)
+    return {"subtomogram": subtomogram, "rotation": rotation, "output_path": output_path}
+
+
+def create_subtomograms_for_tm(template_list: PathOrStr, parent_folder_path: PathOrStr) -> pd.DataFrame:
     """Generates subtomograms with highest ccc score from tomograms for each
     entry in template list csv.
 
@@ -922,9 +450,9 @@ def create_subtomograms_for_tm(template_list, parent_folder_path):
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the template list file with motl path info.
-    parent_folder_path : str
+    parent_folder_path : PathOrStr
         Path to the base directory for peak analysis.
 
     Returns
@@ -934,20 +462,20 @@ def create_subtomograms_for_tm(template_list, parent_folder_path):
         creation status, orientation angles, and filenames.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
-    temp_df["Tomo map"] = temp_df["Tomo map"].astype(object)
+    temp_df = _read_template_list(template_list)
+    temp_df["Target map"] = temp_df["Target map"].astype(object)
     unique_entries = temp_df.groupby(["Structure", "Motl", "Tomogram", "Boxsize"]).groups
     entry_indices = list(unique_entries.values())
 
     for i, entry in enumerate(unique_entries):
-        if np.all(temp_df.loc[entry_indices[i], "Tomo created"]):
+        if np.all(temp_df.loc[entry_indices[i], "Target created"]):
             continue  # skip if subtomograms have been created
         else:
             motl = create_em_path(parent_folder_path, entry[0], entry[1])
             boxsize = entry[3]
 
             # find out which entries from template list have not had subtomos created
-            not_created = temp_df.loc[temp_df["Tomo created"] == False, "Tomo created"].index
+            not_created = temp_df.loc[temp_df["Target created"] == False, "Target created"].index
             create_idx = np.intersect1d(not_created, entry_indices[i])
 
             # cut the subtomos with best ccc scores and save them
@@ -961,15 +489,361 @@ def create_subtomograms_for_tm(template_list, parent_folder_path):
 
             # updates the template list df after creating best subtomos
             temp_df.loc[create_idx, ["Phi", "Theta", "Psi"]] = np.tile(subtomo_rotation, (create_idx.shape[0], 1))
-            temp_df.loc[create_idx, "Tomo created"] = True
-            temp_df.loc[create_idx, "Tomo map"] = subtomo_name[0:-3]
+            temp_df.loc[create_idx, "Target created"] = True
+            temp_df.loc[create_idx, "Target map"] = subtomo_name
 
     temp_df.to_csv(template_list)
 
     return temp_df
 
 
-def get_mask_stats(template_list, indices, parent_folder_path):
+# ── Layer 1: pure-compute functions ─────────────────────────────────────────
+
+
+def mask_stats(soft_mask: np.ndarray, sharp_mask: np.ndarray) -> dict:
+    """Compute volume statistics for a soft/sharp mask pair.
+
+    Parameters
+    ----------
+    soft_mask : numpy.ndarray
+        Soft (smooth-boundary) mask volume.
+    sharp_mask : numpy.ndarray
+        Tight (binary) mask volume.
+
+    Returns
+    -------
+    dict
+        ``voxels_soft`` - nonzero voxels in *soft_mask* above 0.5;
+        ``voxels_sharp`` - nonzero voxels in *sharp_mask*;
+        ``bbox`` - bounding-box dimensions (x, y, z) of *sharp_mask*;
+        ``solidity`` - solidity of *sharp_mask*.
+    """
+    solidity = cryomask.compute_solidity(sharp_mask)
+    voxels, bbox = imageutils.mask_voxel_count_and_bbox(sharp_mask)
+    voxels_soft, _ = imageutils.mask_voxel_count_and_bbox(soft_mask, threshold=0.5)
+    return {"voxels_soft": voxels_soft, "voxels_sharp": voxels, "bbox": bbox, "solidity": solidity}
+
+
+def sharp_mask_overlap(mask: np.ndarray, rotations: list) -> np.ndarray:
+    """Compute the overlap between a mask and its rotated versions.
+
+    Parameters
+    ----------
+    mask : numpy.ndarray
+        Binary or near-binary mask volume.
+    rotations : sequence of scipy.spatial.transform.Rotation
+        Per-rotation objects to apply to *mask*.
+
+    Returns
+    -------
+    numpy.ndarray of int
+        Voxel count of the intersection ``mask_rotated * mask`` for each rotation.
+    """
+    voxel_count = []
+    for rot in rotations:
+        mask_rot = cryomap.rotate(mask, rotation=rot, transpose_rotation=True)
+        mask_rot = np.where(mask_rot > 0.1, 1.0, 0.0)
+        voxel_count.append(np.count_nonzero(mask_rot * mask))
+    return np.asarray(voxel_count)
+
+
+@gui_exposed(
+    label="Compute sharp mask overlap (single case)",
+    category="Analysis",
+    output="dataframe",
+)
+def compute_sharp_mask_overlap_single(
+    template_mask: MapSource,
+    input_angles: DataSource,
+    angles_order: str = "zxz",
+) -> dict:
+    """Compute how much the mask self-overlaps under each search angle.
+
+    For every angle in *input_angles*, the mask is rotated by that angle and
+    the voxel-count intersection with the original mask is computed via
+    :func:`sharp_mask_overlap`.
+
+    Parameters
+    ----------
+    template_mask : MapSource
+        Binary or near-binary mask volume.  A ``MapSource`` is an ndarray or a
+        path to a map file.
+    input_angles : DataSource
+        ``(N, 3)`` Euler-angle array or path to an angles file.  Each row is
+        used as a rotation applied to the mask.  A ``DataSource`` is a path to
+        a file or an ndarray.
+    angles_order : str, default='zxz'
+        Euler-angle convention of *input_angles*.
+
+    Returns
+    -------
+    dict
+        ``"overlap"`` – 1-D integer array of voxel-count overlaps, one per
+        angle; ``"angles"`` – the ``(N, 3)`` Euler-angle array used.
+    """
+    mask_arr = cryomap.read(template_mask) if not isinstance(template_mask, np.ndarray) else template_mask
+    angles_arr = (
+        ioutils.euler_angles_load(input_angles, angles_order)
+        if not isinstance(input_angles, np.ndarray)
+        else input_angles
+    )
+
+    rotations = [srot.from_euler(angles_order, row, degrees=True) for row in angles_arr]
+    overlap = sharp_mask_overlap(mask_arr, rotations)
+
+    return {"overlap": overlap, "angles": angles_arr}
+
+
+@gui_exposed(
+    label="Compute shape stats (single case)",
+    category="Analysis",
+    output="dataframe",
+)
+def compute_shape_stats_single(
+    scores_map: MapSource,
+    shape_type: str = "tight",
+) -> dict:
+    """Compute peak-shape statistics for a single scores map.
+
+    Wraps :func:`peak_shapes` and returns the principal-axis dimensions of the
+    peak ellipsoid under three threshold methods (triangle, Gaussian, half-peak).
+
+    Parameters
+    ----------
+    scores_map : MapSource
+        3-D CC scores volume.  A ``MapSource`` is an ndarray or a path to a
+        map file.
+    shape_type : str, default='tight'
+        Informational label attached to the result (e.g. ``'tight'`` or
+        ``'loose'``).
+
+    Returns
+    -------
+    dict
+        ``"tp_shape"``, ``"gp_shape"``, ``"hp_shape"`` – principal dimensions
+        ``(x, y, z)`` of the peak ellipsoid under each threshold;
+        ``"peak_value"`` – maximum CC score; ``"shape_type"`` – echoed label.
+    """
+    sc_arr = cryomap.read(scores_map) if not isinstance(scores_map, np.ndarray) else scores_map
+    res = peak_shapes(sc_arr)
+    return {
+        "tp_shape": list(res["tp_shape"]),
+        "gp_shape": list(res["gp_shape"]),
+        "hp_shape": list(res["hp_shape"]),
+        "peak_value": float(res["peak_value"]),
+        "shape_type": shape_type,
+    }
+
+
+def find_matching_overlap_row(template_df: pd.DataFrame, i: int) -> pd.Index:
+    """Return indices of done rows with the same tight mask and degrees as row *i*.
+
+    Parameters
+    ----------
+    template_df : pandas.DataFrame
+        Already-loaded template list (indexed by row id).
+    i : int
+        Row index whose ``Tight mask`` and ``Degrees`` values are used as criteria.
+
+    Returns
+    -------
+    pandas.Index
+        Indices of rows where ``Done`` is truthy and both ``Tight mask`` and
+        ``Degrees`` match those of row *i*.
+    """
+    tm = template_df.at[i, "Tight mask"]
+    deg = template_df.at[i, "Degrees"]
+    match = template_df["Done"].astype(bool) & (template_df["Tight mask"] == tm) & (template_df["Degrees"] == deg)
+    return template_df.index[match]
+
+
+def dist_map_stats(
+    dist_map: np.ndarray,
+    peak_center: tuple[int, ...],
+    degrees: float,
+    is_all: bool = False,
+    morph_footprint: tuple[int, ...] = (2, 2, 2),
+) -> dict:
+    """Compute morphological statistics for a distance map around a peak.
+
+    Parameters
+    ----------
+    dist_map : numpy.ndarray
+        Angular distance map volume.
+    peak_center : tuple of int
+        ``(z, y, x)`` voxel coordinates of the highest-CC peak.
+    degrees : float
+        Search-angle increment used to threshold the distance map.
+    is_all : bool, default False
+        When True the threshold is ``2 * degrees`` (for the combined
+        ``dist_all`` map); otherwise ``degrees`` is used directly.
+    morph_footprint : tuple of int, default (2, 2, 2)
+        Structuring element size for morphological opening.
+
+    Returns
+    -------
+    dict
+        ``vc`` – voxel count of the peak component;
+        ``solidity`` – solidity of the peak component;
+        ``label`` – binary volume isolating the peak component;
+        ``vco`` – voxel count after morphological opening;
+        ``open_label`` – binary volume after opening;
+        ``dim`` – bounding-box dimensions (x, y, z) of the opened component.
+    """
+    threshold = 2.0 * degrees if is_all else degrees
+
+    dist_map = dist_map.copy()
+    dist_map[peak_center[0], peak_center[1], peak_center[2]] = degrees
+    dist_map = np.where(dist_map <= threshold, 1.0, 0.0)
+
+    dist_label = measure.label(dist_map, connectivity=1)
+    dist_props = pd.DataFrame(measure.regionprops_table(dist_label, properties=("label", "area", "solidity")))
+
+    peak_label = dist_label[peak_center[0], peak_center[1], peak_center[2]]
+    vc = dist_props.loc[dist_props["label"] == peak_label, "area"].values
+    sol = dist_props.loc[dist_props["label"] == peak_label, "solidity"].values
+    label_binary = np.where(dist_label == peak_label, 1.0, 0.0)
+
+    open_label = morphology.binary_opening(label_binary, footprint=np.ones(morph_footprint), out=None)
+    open_label = measure.label(open_label, connectivity=1)
+    peak_label_open = open_label[peak_center[0], peak_center[1], peak_center[2]]
+    open_label_binary = np.where(open_label == peak_label_open, 1.0, 0.0)
+    vco = np.count_nonzero(open_label_binary)
+    dim = cryomask.get_mass_dimensions(open_label_binary)
+
+    return {
+        "vc": vc,
+        "solidity": sol,
+        "label": label_binary,
+        "vco": vco,
+        "open_label": open_label_binary,
+        "dim": dim,
+    }
+
+
+def peak_stats_and_profiles(scores_map: np.ndarray, peak_center: tuple[int, ...], peak_value: float) -> dict:
+    """Compute line profiles and spherical-neighborhood statistics for a scores map peak.
+
+    Parameters
+    ----------
+    scores_map : numpy.ndarray
+        Raw 3-D cross-correlation scores volume.
+    peak_center : tuple of int
+        ``(z, y, x)`` voxel coordinates of the highest-CC peak.
+    peak_value : float
+        CC score at *peak_center*.
+
+    Returns
+    -------
+    dict
+        ``line_profiles`` – 2-D array of shape ``(max_dim, 3)`` (x/y/z profiles);
+        ``drop_x``, ``drop_y``, ``drop_z`` – score drop from peak to neighbours;
+        ``peak_x``, ``peak_y``, ``peak_z`` – peak voxel coordinates;
+        ``mean_r``, ``median_r``, ``var_r`` for *r* = 1..5 – statistics over
+        spheres of increasing radius centred on *peak_center*.
+    """
+    _, _, line_profiles = tmana.create_starting_parameters_1D(scores_map)
+
+    stats = {"peak_value": peak_value, "line_profiles": line_profiles}
+
+    for j, dim in enumerate(["x", "y", "z"]):
+        drop = peak_value - (line_profiles[peak_center[j] - 1, j] + line_profiles[peak_center[j] + 1, j]) / 2.0
+        stats["drop_" + dim] = drop
+        stats["peak_" + dim] = peak_center[j]
+
+    for r in range(1, 6):
+        cc_mask = cryomask.spherical_mask(np.asarray(scores_map.shape), radius=r, center=peak_center)
+        masked_map = scores_map[np.nonzero(scores_map * cc_mask)]
+        stats[f"mean_{r}"] = np.mean(masked_map)
+        stats[f"median_{r}"] = np.median(masked_map)
+        stats[f"var_{r}"] = np.var(masked_map)
+
+    return stats
+
+
+def peak_shapes(scores_map: np.ndarray) -> dict:
+    """Evaluate peak shapes using triangle, Gaussian, and hard thresholding.
+
+    Parameters
+    ----------
+    scores_map : numpy.ndarray
+        3-D cross-correlation scores volume.
+
+    Returns
+    -------
+    dict
+        ``tp_shape``, ``gp_shape``, ``hp_shape`` - principal dimensions (x, y, z)
+        of the peak ellipsoid under each threshold method;
+        ``peak_value`` - maximum CC score;
+        ``t_map``, ``t_th_map``, ``t_surf`` - triangle-threshold outputs;
+        ``g_map``, ``g_th_map``, ``g_surf`` - Gaussian-threshold outputs;
+        ``h_map``, ``h_th_map``, ``h_surf`` - hard-threshold outputs.
+    """
+    t_map, tp_shape, peak_value, t_th_map, t_surf = tmana.evaluate_scores_map(
+        scores_map, label_type="ellipsoid", threshold_type="triangle"
+    )
+    g_map, gp_shape, _, g_th_map, g_surf = tmana.evaluate_scores_map(
+        scores_map, label_type="ellipsoid", threshold_type="gauss"
+    )
+    h_map, hp_shape, _, h_th_map, h_surf = tmana.evaluate_scores_map(
+        scores_map, label_type="ellipsoid", threshold_type="hard"
+    )
+    return {
+        "tp_shape": tp_shape,
+        "gp_shape": gp_shape,
+        "hp_shape": hp_shape,
+        "peak_value": peak_value,
+        "t_map": t_map,
+        "t_th_map": t_th_map,
+        "t_surf": t_surf,
+        "g_map": g_map,
+        "g_th_map": g_th_map,
+        "g_surf": g_surf,
+        "h_map": h_map,
+        "h_th_map": h_th_map,
+        "h_surf": h_surf,
+    }
+
+
+def shape_stats(sharp_mask: np.ndarray) -> pd.DataFrame:
+    """Compute region properties for connected components of a sharp mask.
+
+    Parameters
+    ----------
+    sharp_mask : numpy.ndarray
+        Binary tight mask volume.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per labeled region with columns: ``label``, ``area``,
+        ``area_bbox``, ``area_convex``, ``equivalent_diameter_area``,
+        ``euler_number``, ``feret_diameter_max``, ``inertia_tensor``,
+        ``solidity``.
+    """
+    mask_label = measure.label(sharp_mask, connectivity=1)
+    return pd.DataFrame(
+        measure.regionprops_table(
+            mask_label,
+            properties=(
+                "label",
+                "area",
+                "area_bbox",
+                "area_convex",
+                "equivalent_diameter_area",
+                "euler_number",
+                "feret_diameter_max",
+                "inertia_tensor",
+                "solidity",
+            ),
+        )
+    )
+
+
+# ── Layer 2: batch wrappers ───────────────────────────────────────────────────
+
+
+def get_mask_stats(template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr) -> None:
     """Compute and update mask statistics for specified rows in a template list.
 
     Loads info about soft and tight (sharp) masks to computes volume-related statistics,
@@ -986,38 +860,39 @@ def get_mask_stats(template_list, indices, parent_folder_path):
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV template list file.
     indices : list of int
         List of row indices in the CSV to process.
-    parent_folder_path : str
+    parent_folder_path : PathOrStr
         Base directory where folders for all structures are.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         structure_name = temp_df.at[i, "Structure"]
         soft_mask = cryomap.read(create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Mask"]))
         sharp_mask = cryomap.read(create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"]))
 
-        # calculate how compactful the mask is
-        solidity = cryomask.compute_solidity(sharp_mask)
+        stats = mask_stats(soft_mask, sharp_mask)
 
-        voxels, bbox = get_sharp_mask_stats(sharp_mask)
-        voxels_soft, _ = get_soft_mask_stats(soft_mask)
-
-        temp_df.at[i, "Voxels"] = voxels_soft  # total vol of soft mask
-        temp_df.at[i, "Voxels TM"] = voxels  # total vol of sharp mask
-        temp_df.at[i, "Dim x"] = bbox[0]  # bounding box x for mask element
-        temp_df.at[i, "Dim y"] = bbox[1]  # bounding box y for mask element
-        temp_df.at[i, "Dim z"] = bbox[2]  # bounding box z for mask element
-        temp_df.at[i, "Solidity"] = solidity
+        temp_df.at[i, "Voxels"] = stats["voxels_soft"]
+        temp_df.at[i, "Voxels TM"] = stats["voxels_sharp"]
+        temp_df.at[i, "Dim x"] = stats["bbox"][0]
+        temp_df.at[i, "Dim y"] = stats["bbox"][1]
+        temp_df.at[i, "Dim z"] = stats["bbox"][2]
+        temp_df.at[i, "Solidity"] = stats["solidity"]
 
         temp_df.to_csv(template_list)  # save new results back to template list
 
 
-def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_folder_path, angles_order="zxz"):
+def compute_sharp_mask_overlap(
+    template_list: PathOrStr,
+    indices: list[int],
+    parent_folder_path: PathOrStr,
+    angles_order: str = "zxz",
+) -> None:
     """Compute the overlap between the original tight mask and rotated versions of it.
 
     For each template specified by its index in the template list, this function loads the
@@ -1027,19 +902,18 @@ def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_f
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV template list file.
     indices : list of int
         List of row indices in the CSV to process.
-    angle_list_path : str
-        Path to the directory containing angle list files used for rotation.
-    parent_folder_path : str
-        Base directory where folders for all structures are.
-    angles_order : str, optional
-        The rotation order used to interpret the Euler angles (default is "zxz").
+    parent_folder_path : PathOrStr
+        Base directory where folders for all structures are. If "Angles" contains a
+        bare filename, it is resolved via ``parent_folder/structure/``.
+    angles_order : str, default='zxz'
+        The rotation order used to interpret the Euler angles.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     # only proceed for rows that haven't been analyzed
     for i in indices:
@@ -1049,28 +923,27 @@ def compute_sharp_mask_overlap(template_list, indices, angle_list_path, parent_f
         structure_name = temp_df.at[i, "Structure"]
         mask_name = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"])
         mask = cryomap.read(mask_name)
-        angle_list = angle_list_path + temp_df.at[i, "Angles"]
-        angles = ioutils.rot_angles_load(angle_list, angles_order)
+        angle_list = _resolve_input_path(temp_df.at[i, "Angles"], parent_folder_path, structure_name)
+        angles = ioutils.euler_angles_load(angle_list, angles_order)
         rotations = srot.from_euler("zxz", angles, degrees=True)
 
-        voxel_count = []
-
-        # for each rotation, compute the overlapping vol w/ non-rotated mask
-        for j in rotations:
-            mask_rot = cryomap.rotate(mask, rotation=j, transpose_rotation=True)
-            mask_rot = np.where(mask_rot > 0.1, 1.0, 0.0)
-            voxel_count.append(np.count_nonzero(mask_rot * mask))
+        voxel_count = sharp_mask_overlap(mask, rotations)
 
         output_base = create_output_base_name(i)
         output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
 
         csv_name = output_folder + output_base + ".csv"
         info_df = pd.read_csv(csv_name, index_col=0)
-        info_df["Tight mask overlap"] = np.asarray(voxel_count)
+        info_df["Tight mask overlap"] = voxel_count
         info_df.to_csv(csv_name)
 
 
-def check_existing_tight_mask_values(template_list, indices, parent_folder_path, angle_list_path, angles_order="zxz"):
+def check_existing_tight_mask_values(
+    template_list: PathOrStr,
+    indices: list[int],
+    parent_folder_path: PathOrStr,
+    angles_order: str = "zxz",
+) -> None:
     """Check and populate "Tight mask overlap" values for given rows in template list.
 
     This function verifies whether specified rows have "Tight mask overlap" values.
@@ -1080,20 +953,18 @@ def check_existing_tight_mask_values(template_list, indices, parent_folder_path,
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV template list file.
     indices : list of int
         List of row indices in `template_list` to check.
-    parent_folder_path : str
-        Base directory where structure folders are located.
-    angle_list_path : str
-        Path to the directory containing rotation angle list files.
-    angles_order : str, optional
+    parent_folder_path : PathOrStr
+        Base directory where structure folders are located. If "Angles" contains a
+        bare filename, it is resolved via ``parent_folder/structure/``.
+    angles_order : str, default='zxz'
         Rotation order to interpret the Euler angles when computing overlaps.
-        Default is "zxz".
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         if not temp_df.at[i, "Done"]:
@@ -1109,8 +980,7 @@ def check_existing_tight_mask_values(template_list, indices, parent_folder_path,
 
         # if the value does not exist, find and copy from other "same" analysis outputs
         if "Tight mask overlap" not in rot_info.columns:
-            tm_spec = {"Done": True, "Tight mask": temp_df.at[i, "Tight mask"], "Degrees": temp_df.at[i, "Degrees"]}
-            done_idx = get_indices(template_list, tm_spec)
+            done_idx = find_matching_overlap_row(temp_df, i)
 
             for j in done_idx:
                 csv_file = (
@@ -1132,12 +1002,15 @@ def check_existing_tight_mask_values(template_list, indices, parent_folder_path,
         # if the value is not found in "same" analysis, computes it
         if not data_found:
             print(f"Computing sharp mask overlap for index {i}")
-            compute_sharp_mask_overlap(
-                template_list, [i], angle_list_path, parent_folder_path, angles_order=angles_order
-            )
+            compute_sharp_mask_overlap(template_list, [i], parent_folder_path, angles_order=angles_order)
 
 
-def compute_dist_maps_voxels(template_list, indices, parent_folder_path, morph_footprint=(2, 2, 2)):
+def compute_dist_maps_voxels(
+    template_list: PathOrStr,
+    indices: list[int],
+    parent_folder_path: PathOrStr,
+    morph_footprint: TripletLike = (2, 2, 2),
+) -> None:
     """Compute a few morphology related measurements for areas with highest cc score.
 
     For each specified rows in the template list, this function processes angular distance
@@ -1148,15 +1021,16 @@ def compute_dist_maps_voxels(template_list, indices, parent_folder_path, morph_f
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV template list file.
     indices : list of int
         Row indices in `template_list` to process.
-    parent_folder_path : str
+    parent_folder_path : PathOrStr
         Base directory where structure folders are located.
-    morph_footprint : tuple of int, optional
+    morph_footprint : TripletLike, default=(2, 2, 2)
         Size of the structuring element used for binary opening during morphological
-        processing of labeled regions. Default is (2, 2, 2).
+        processing of labeled regions.  A ``TripletLike`` is a scalar or a
+        3-element sequence.
 
     Notes
     -----
@@ -1183,7 +1057,7 @@ def compute_dist_maps_voxels(template_list, indices, parent_folder_path, morph_f
 
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         if not temp_df.at[i, "Done"]:
@@ -1207,61 +1081,28 @@ def compute_dist_maps_voxels(template_list, indices, parent_folder_path, morph_f
 
         for j, value in enumerate(dist_names):
             dist_map = cryomap.read(output_folder + output_base + "_angles_" + value + ".em")
+            stats = dist_map_stats(dist_map, peak_center, degrees, is_all=(j == 0), morph_footprint=morph_footprint)
 
-            # save peak coords so they don't disappear when masked (value could be > degrees)
-            dist_map[peak_center[0], peak_center[1], peak_center[2]] = degrees
-
-            # only save where the angular distance is within search angle degree
-            if j == 0:
-                dist_map = np.where(dist_map <= 2.0 * degrees, 1.0, 0.0)  #
-            else:
-                dist_map = np.where(dist_map <= degrees, 1.0, 0.0)
-
-            # label and measure each connected component in dist_map
-            dist_label = measure.label(dist_map, connectivity=1)
-            dist_props = pd.DataFrame(measure.regionprops_table(dist_label, properties=("label", "area", "solidity")))
-
-            # from all the connected components, find the ones that have highest ccc
-            peak_label = dist_label[peak_center[0], peak_center[1], peak_center[2]]
-            label_vc = dist_props.loc[dist_props["label"] == peak_label, "area"].values
-            column_name = "VC " + value  # voxel count
-            temp_df.at[i, column_name] = label_vc
-
-            label_sol = dist_props.loc[dist_props["label"] == peak_label, "solidity"].values
-            column_name = "Solidity " + value
-            temp_df.at[i, column_name] = label_sol
-
-            # save highest ccc connect components into a new vol as binary
-            dist_label = np.where(dist_label == peak_label, 1.0, 0.0)
+            temp_df.at[i, "VC " + value] = stats["vc"]
+            temp_df.at[i, "Solidity " + value] = stats["solidity"]
             cryomap.write(
-                dist_label, output_folder + output_base + "_angles_" + value + "_label.em", data_type=np.single
+                stats["label"], output_folder + output_base + "_angles_" + value + "_label.em", data_type=np.single
             )
-
-            # remove labels that are smaller than the footprint
-            open_label = morphology.binary_opening(dist_label, footprint=np.ones(morph_footprint), out=None)
-            open_label = measure.label(open_label, connectivity=1)
-            peak_label = open_label[peak_center[0], peak_center[1], peak_center[2]]
-            open_label = np.where(open_label == peak_label, 1.0, 0.0)
-
-            # count the volumes of the size filtered peaklabels
-            label_vc = np.count_nonzero(open_label)
-            column_name = "VCO " + value
-            temp_df.at[i, column_name] = label_vc
+            temp_df.at[i, "VCO " + value] = stats["vco"]
             cryomap.write(
-                open_label, output_folder + output_base + "_angles_" + value + "_label_open.em", data_type=np.single
+                stats["open_label"],
+                output_folder + output_base + "_angles_" + value + "_label_open.em",
+                data_type=np.single,
             )
-            # print(column_name, label_vc)
-
-            # get the dimensions of the bounding box for each open peak label
-            open_dim = cryomask.get_mass_dimensions(open_label)
             for d, dim in enumerate(["x", "y", "z"]):
-                column_name = "O " + value + " " + dim
-                temp_df.at[i, column_name] = open_dim[d]
+                temp_df.at[i, "O " + value + " " + dim] = stats["dim"][d]
 
         temp_df.to_csv(template_list)  # to save what was finished in case of a crush
 
 
-def compute_center_peak_stats_and_profiles(template_list, indices, parent_folder_path):
+def compute_center_peak_stats_and_profiles(
+    template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr
+) -> None:
     """Compute statistics and line profiles for the cc peaks in a score map.
 
     For each specified template index, this function:
@@ -1284,15 +1125,15 @@ def compute_center_peak_stats_and_profiles(template_list, indices, parent_folder
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV template list file.
     indices : list of int
         List of row indices in `template_list` to process.
-    parent_folder_path : str
+    parent_folder_path : PathOrStr
         Base directory containing structure folders.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         if not temp_df.at[i, "Done"]:
@@ -1311,84 +1152,87 @@ def compute_center_peak_stats_and_profiles(template_list, indices, parent_folder
         # find the coords and values of highest cc values
         peak_center, peak_value, _ = tmana.create_starting_parameters_2D(masked_map)
 
-        # for each peak, find how the cc value changes in each x,y,z direction
-        _, _, line_profiles = tmana.create_starting_parameters_1D(scores_map)
+        stats = peak_stats_and_profiles(scores_map, peak_center, peak_value)
 
-        temp_df.at[i, "Peak value"] = peak_value
+        temp_df.at[i, "Peak value"] = stats["peak_value"]
 
-        line_pd = pd.DataFrame(data=line_profiles, columns=["x", "y", "z"])
+        line_pd = pd.DataFrame(data=stats["line_profiles"], columns=["x", "y", "z"])
         line_pd.to_csv(output_folder + output_base + "_peak_line_profiles.csv")
 
-        # for each axis, find out the value diff between peaks and surrounding pixels
-        for j, dim in enumerate(["x", "y", "z"]):
-            peak_difference = (
-                peak_value - (line_profiles[peak_center[j] - 1, j] + line_profiles[peak_center[j] + 1, j]) / 2.0
-            )
-            temp_df.at[i, "Drop " + dim] = peak_difference
-            temp_df.at[i, "Peak " + dim] = peak_center[j]  # peak coord in that axis
+        for dim in ["x", "y", "z"]:
+            temp_df.at[i, "Drop " + dim] = stats["drop_" + dim]
+            temp_df.at[i, "Peak " + dim] = stats["peak_" + dim]
 
-        # look at only the peak area (with 5 different sizes), and calculate some stats
         for r in range(1, 6):
-            cc_mask = cryomask.spherical_mask(np.asarray(scores_map.shape), radius=r, center=peak_center)
-            masked_map = scores_map[np.nonzero(scores_map * cc_mask)]
-            temp_df.at[i, "Mean " + str(r)] = np.mean(masked_map)
-            temp_df.at[i, "Median " + str(r)] = np.median(masked_map)
-            temp_df.at[i, "Var " + str(r)] = np.var(masked_map)
+            temp_df.at[i, "Mean " + str(r)] = stats[f"mean_{r}"]
+            temp_df.at[i, "Median " + str(r)] = stats[f"median_{r}"]
+            temp_df.at[i, "Var " + str(r)] = stats[f"var_{r}"]
 
         temp_df.to_csv(template_list)
 
 
 def analyze_rotations(
-    tomogram,
-    template,
-    template_mask,
-    input_angles,
-    wedge_mask_tomo=None,
-    wedge_mask_tmpl=None,
-    output_file=None,
-    cc_radius=3,
-    angular_offset=None,
-    starting_angle=None,
-    c_symmetry=1,
-    angles_order="zxz",
-):
-    """Perform template matching between a tomogram and a reference template.
+    target_map: MapSource,
+    template: MapSource,
+    template_mask: MapSource,
+    input_angles: DataSource,
+    wedge_mask_target: MapSource | None = None,
+    wedge_mask_tmpl: MapSource | None = None,
+    output_path: PathOrStr | None = None,
+    cc_radius: int = 3,
+    angular_offset: EulerAngles | None = None,
+    starting_angle: EulerAngles | None = None,
+    symmetry: Symmetry = "C1",
+    angles_order: str = "zxz",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
+) -> tuple:
+    """Perform template matching against a fixed target map.
 
-    This function rotates a reference template through a set of input Euler angles,
-    computes the Fast Local Cross-Correlation Function (FLCF) between each rotated
-    template and the target tomogram, and collects statistics for each rotation.
-    Optionally, wedge masks can be applied to account for missing wedge artifacts,
-    and a spherical correlation mask can be applied for localized measurements.
+    Rotates ``template`` through ``input_angles`` and computes the normalized
+    cross-correlation against the fixed ``target_map`` for each rotation.
+    Wedge masks can be applied to account for missing-wedge artifacts, and a
+    spherical correlation mask limits measurements to a central region.
 
     Parameters
     ----------
-    tomogram : str or numpy.ndarray
-        File path (.mrc or .em) to or a numpy array of a tomogram of interest.
-    template : str or numpy.ndarray
-        File path to or an array of the reference template map.
-    template_mask : str or numpy.ndarray
-        File path to or an array of the binary mask for the template.
-    input_angles : str or numpy.ndarray
-        File path to an angle list or a numpy array of euler angles.
-    wedge_mask_tomo : str or numpy.ndarray, optional
-        File path to or a numpy array of the wedge mask for the tomogram.
-    wedge_mask_tmpl : str or numpy.ndarray, optional
-        File path to or an array of the wedge mask for the template.
-    output_file : str, optional
-        Base path for saving output CSV and EM maps. If None, results are not
-        written to disk.
-    cc_radius : int, optional
+    target_map : MapSource
+        Fixed volume against which the rotated template is matched.  A
+        ``MapSource`` is an ndarray or a path to a map file (.mrc, .em, …).
+    template : MapSource
+        Reference template map (the rotated side).
+    template_mask : MapSource
+        Binary mask for the template.
+    input_angles : DataSource
+        Angle list for the rotation search.  A ``DataSource`` is a path to a
+        file or an ndarray.
+    wedge_mask_target : MapSource, optional
+        Wedge mask for the target map.
+    wedge_mask_tmpl : MapSource, optional
+        Wedge mask for the template.
+    output_path : PathOrStr, optional
+        Base path for saving output CSV and EM maps.  ``None`` skips disk
+        output.  A ``PathOrStr`` is a :class:`str` or :class:`pathlib.Path`.
+    cc_radius : int, default=3
         Radius (in voxels) of the spherical mask applied to compute masked
-        cross-correlation. Default is 3.
-    angular_offset : float or array-like of shape (3,), optional
-        Euler angles (degrees) to offset all input angles before matching.
-    starting_angle : float or array-like of shape (3,), optional
-        Euler angles (degrees) representing the reference orientation from which angular
-        distances will be calculated. Default is (0, 0, 0).
-    c_symmetry : int, optional
-        C symmetry of the structure. Default is 1 (no symmetry).
-    angles_order : {"zxz", ...}, optional
-        Euler angle convention used for rotations. Default is "zxz".
+        cross-correlation.
+    angular_offset : EulerAngles, optional
+        Euler angles (degrees) applied as an offset to all input angles before
+        matching.  An ``EulerAngles`` is a ``(3,)`` triple or ``(N, 3)``
+        ndarray.
+    starting_angle : EulerAngles, optional
+        Reference orientation of the template (Euler angles, degrees).
+        Applied as a base rotation right-multiplied onto every input angle.
+        Defaults to ``(0, 0, 0)``.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the structure, used for the angular, cone and
+        in-plane distances (:func:`cryocat.utils.geom.compare_rotations`).
+        A ``Symmetry`` is an int or a string like ``"C5"``. D/T/O/I raise
+        ``NotImplementedError`` (cone and in-plane distances are not defined).
+    angles_order : str, default='zxz'
+        Euler-angle convention used for rotations.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
@@ -1405,44 +1249,32 @@ def analyze_rotations(
     final_ccc_map : ndarray
         3D array of the maximum CCC values observed across all rotations.
     final_angles_map : ndarray
-        3D array of rotation indices (of angle rotation list) corresponding to the
-        highest CCC at each voxel.
+        3D array of 0-based rotation indices into the angle list, recording
+        which rotation produced the highest CCC at each voxel.
+        Voxels that were never updated retain their initial value of ``-1``.
     final_ccc_map_masked : ndarray
         Masked CCC map showing only the central area of final_ccc_map.
 
     Notes
     -----
-    - If the template and tomogram sizes differ, the smaller map is padded to match.
+    - If the target_map and template sizes differ, the smaller map is padded to match.
     - The function keeps track of the highest CCC per voxel across all rotations.
     """
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    geom.require_cyclic_symmetry(symmetry, "Cone and in-plane distances")  # fail before matching
 
-    angles = ioutils.rot_angles_load(input_angles, angles_order)
-    # angles = angles[0:4,:]
+    angles = geom.apply_starting_and_offset(
+        ioutils.euler_angles_load(input_angles, angles_order),
+        starting_angle,
+        angular_offset,
+        angles_order,
+    )
 
-    if starting_angle is None:
-        starting_angle = np.asarray([0, 0, 0])
-
-    # adds the starting angle to every euler angle
-    if np.any(starting_angle):
-        rots = srot.from_euler("zxz", angles=angles, degrees=True)
-        add_rot = srot.from_euler("zxz", angles=starting_angle, degrees=True)
-        new_rot = rots * add_rot
-        angles = new_rot.as_euler("zxz", degrees=True)
-
-    if angular_offset is not None and np.any(angular_offset):
-        rots = srot.from_euler("zxz", angles=angles, degrees=True)
-        add_rot = srot.from_euler("zxz", angles=angular_offset, degrees=True)
-        new_rot = rots * add_rot
-        angles = new_rot.as_euler("zxz", degrees=True)
-
-    # angles = angles[0:20,:]
-
-    tomo = cryomap.read(tomogram)
+    tomo = cryomap.read(target_map)
     tmpl = cryomap.read(template)
     mask = cryomap.read(template_mask)
 
     # pad the maps so they are the same size
-    # might be faster to pad tmpl2 and mask after the rotation, but less readible
     if np.any(tomo.shape < tmpl.shape):
         tomo = cryomap.pad(tomo, tmpl.shape)
         output_size = tmpl.shape
@@ -1456,21 +1288,26 @@ def analyze_rotations(
     # a small central area where the ccc is relevant
     cc_mask = cryomask.spherical_mask(np.array(output_size), radius=cc_radius).astype(np.single)
 
-    # calculates the complex conjugate of fourier transformed tomogram
-    if wedge_mask_tomo is not None:
-        wedge_tomo = cryomap.read(wedge_mask_tomo)
-        conj_target, conj_target_sq = cryomap.calculate_conjugates(tomo, wedge_tomo)
+    # calculates the complex conjugate of fourier transformed target
+    if wedge_mask_target is not None:
+        wedge_target = cryomap.read(wedge_mask_target)
+        conj_target, conj_target_sq = imageutils.calculate_conjugates(tomo, wedge_target)
     else:
-        conj_target, conj_target_sq = cryomap.calculate_conjugates(tomo)
+        conj_target, conj_target_sq = imageutils.calculate_conjugates(tomo)
 
     if wedge_mask_tmpl is not None:
         wedge_tmpl = cryomap.read(wedge_mask_tmpl)
 
     # make an array of starting angles the same shape as angles
-    starting_angles = np.tile(starting_angle, (angles.shape[0], 1))
+    _sa = np.asarray(starting_angle, dtype=float) if starting_angle is not None else np.zeros(3)
+    starting_angles = np.tile(_sa, (angles.shape[0], 1))
 
     # calculates angular/cone/inplane distances
-    ang_dist, cone, inplane = geom.compare_rotations(starting_angles, angles, c_symmetry=c_symmetry)
+    ang_dist, cone, inplane = geom.compare_rotations(
+        srot.from_euler("zxz", starting_angles, degrees=True),
+        srot.from_euler("zxz", angles, degrees=True),
+        symmetry=symmetry,
+    )
 
     res_table = pd.DataFrame(
         columns=[
@@ -1507,7 +1344,7 @@ def analyze_rotations(
         masked_ref = norm_ref * rot_mask
 
         # calculates fast local correlation coefficient
-        cc_map = cryomap.calculate_flcf(masked_ref, rot_mask, conj_target=conj_target, conj_target_sq=conj_target_sq)
+        cc_map = imageutils.calculate_flcf(masked_ref, rot_mask, conj_target=conj_target, conj_target_sq=conj_target_sq)
         z_score = (cc_map - np.mean(cc_map)) / np.std(cc_map)
 
         # find the indices where the current ccc is bigger than ccc in init/saved cc map
@@ -1515,7 +1352,7 @@ def analyze_rotations(
 
         # overwrite in the same position with the bigger ccc (corresponding ang dist)
         final_ccc_map = np.maximum(final_ccc_map, cc_map)
-        final_angles_map[max_idx] = i + 1
+        final_angles_map[max_idx] = i
 
         masked_map = cc_map * cc_mask
         z_score_masked = z_score * cc_mask
@@ -1536,18 +1373,1156 @@ def analyze_rotations(
     final_ccc_map = np.clip(final_ccc_map, 0.0, 1.0)
     final_ccc_map_masked = final_ccc_map * cc_mask
 
-    if output_file is not None:
-        res_table.to_csv(output_file + ".csv", index=False)
-        cryomap.write(file_name=output_file + "_scores.em", data_to_write=final_ccc_map, data_type=np.single)
-        # cryomap.write(file_name=output_file + '_scores_masked.em',
+    if output_path is not None:
+        res_table.to_csv(output_path + ".csv", index=False)
+        cryomap.write(output_path=output_path + "_scores.em", data_to_write=final_ccc_map, data_type=np.single)
+        # cryomap.write(output_path=output_path + '_scores_masked.em',
         #               data_to_write = final_ccc_map_masked,
         #               data_type=np.single)
-        cryomap.write(file_name=output_file + "_angles.em", data_to_write=final_angles_map, data_type=np.single)
+        cryomap.write(output_path=output_path + "_angles.em", data_to_write=final_angles_map, data_type=np.single)
 
     return res_table, final_ccc_map, final_angles_map, final_ccc_map_masked
 
 
-def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_folder_path, cc_radius_tol=10):
+# ── params.csv columns ──────────────────────────────────────────────────────
+
+_TEMPLATE_INPUT_COLS: tuple[str, ...] = (
+    "Structure",
+    "Compare",
+    "Target map",
+    "Template",
+    "Mask",
+    "Tomogram",
+    "Angles",
+    "Degrees",
+    "Phi",
+    "Theta",
+    "Psi",
+    "Apply angular offset",
+    "Apply wedge",
+    "Target wedge mask",
+    "Template wedge mask",
+    "Boxsize",
+    "Binning",
+    "Pixelsize",
+    "Symmetry",
+    "Motl",
+    "Output folder",
+    "Done",
+)
+
+_RESULT_COLS: tuple[str, ...] = (
+    "Voxels",
+    "Voxels TM",
+    "Dim x",
+    "Dim y",
+    "Dim z",
+    "Solidity",
+    "VC dist_all",
+    "VC dist_normals",
+    "VC dist_inplane",
+    "Solidity dist_all",
+    "Solidity dist_normals",
+    "Solidity dist_inplane",
+    "VCO dist_all",
+    "VCO dist_normals",
+    "VCO dist_inplane",
+    "O dist_all x",
+    "O dist_all y",
+    "O dist_all z",
+    "O dist_normals x",
+    "O dist_normals y",
+    "O dist_normals z",
+    "O dist_inplane x",
+    "O dist_inplane y",
+    "O dist_inplane z",
+    "Peak value",
+    "Peak x",
+    "Peak y",
+    "Peak z",
+    "Drop x",
+    "Drop y",
+    "Drop z",
+    "Mean 1",
+    "Mean 2",
+    "Mean 3",
+    "Mean 4",
+    "Mean 5",
+    "Median 1",
+    "Median 2",
+    "Median 3",
+    "Median 4",
+    "Median 5",
+    "Var 1",
+    "Var 2",
+    "Var 3",
+    "Var 4",
+    "Var 5",
+    "TP x",
+    "TP y",
+    "TP z",
+    "GP x",
+    "GP y",
+    "GP z",
+    "HP x",
+    "HP y",
+    "HP z",
+)
+
+
+def gather_case_results(
+    scores_map: MapSource | None = None,
+    dist_all_map: MapSource | None = None,
+    dist_normals_map: MapSource | None = None,
+    dist_inplane_map: MapSource | None = None,
+    tight_mask: MapSource | None = None,
+    template_mask: MapSource | None = None,
+    degrees: float | None = None,
+    cc_radius: int = 10,
+    morph_footprint: TripletLike = (2, 2, 2),
+) -> dict:
+    """Compute all result metrics from single-case outputs and return a flat dict.
+
+    Delegates to the Layer-1 helpers :func:`mask_stats`,
+    :func:`dist_map_stats`, :func:`peak_stats_and_profiles`, and
+    :func:`peak_shapes`.  Only metrics whose required inputs are available are
+    included.  All ``MapSource`` parameters may be ndarrays or file paths.
+
+    Parameters
+    ----------
+    scores_map : MapSource, optional
+        Cross-correlation scores volume.
+    dist_all_map : MapSource, optional
+        Combined angular distance map.
+    dist_normals_map : MapSource, optional
+        Normals angular distance map.
+    dist_inplane_map : MapSource, optional
+        In-plane angular distance map.
+    tight_mask : MapSource, optional
+        Tight (binary) mask — required for mask-stats columns.
+    template_mask : MapSource, optional
+        Soft template mask — required together with *tight_mask* for mask-stats.
+    degrees : float, optional
+        Search-angle increment used to threshold distance maps.  Required for
+        dist-map-stats columns.
+    cc_radius : int, default=10
+        Radius (voxels) of the central sphere used to locate the peak.
+    morph_footprint : TripletLike, default=(2, 2, 2)
+        Structuring element for binary opening in :func:`dist_map_stats`.
+
+    Returns
+    -------
+    dict
+        Flat dict with keys drawn from :data:`_RESULT_COLS`.
+    """
+    result: dict = {}
+
+    # ── mask stats ──────────────────────────────────────────────────────────
+    if template_mask is not None and tight_mask is not None:
+        _tm = cryomap.read(template_mask)
+        _tight = cryomap.read(tight_mask)
+        _ms = mask_stats(_tm, _tight)
+        result["Voxels"] = _ms["voxels_soft"]
+        result["Voxels TM"] = _ms["voxels_sharp"]
+        result["Dim x"] = _ms["bbox"][0]
+        result["Dim y"] = _ms["bbox"][1]
+        result["Dim z"] = _ms["bbox"][2]
+        result["Solidity"] = _ms["solidity"]
+
+    # ── locate peak ─────────────────────────────────────────────────────────
+    _sm = None
+    peak_center = None
+    peak_value = None
+    if scores_map is not None:
+        _sm = cryomap.read(scores_map)
+        _cc_mask = cryomask.spherical_mask(np.asarray(_sm.shape), radius=cc_radius)
+        peak_center, peak_value, _ = tmana.create_starting_parameters_2D(_sm * _cc_mask)
+
+    # ── dist-map stats ───────────────────────────────────────────────────────
+    if peak_center is not None and degrees is not None:
+        _dist_names = ["dist_all", "dist_normals", "dist_inplane"]
+        _dist_sources = [dist_all_map, dist_normals_map, dist_inplane_map]
+        for j, (name, src) in enumerate(zip(_dist_names, _dist_sources)):
+            if src is None:
+                continue
+            _dm = cryomap.read(src)
+            _ds = dist_map_stats(_dm, peak_center, degrees, is_all=(j == 0), morph_footprint=morph_footprint)
+            result[f"VC {name}"] = _ds["vc"]
+            result[f"Solidity {name}"] = _ds["solidity"]
+            result[f"VCO {name}"] = _ds["vco"]
+            for d, dim in enumerate(["x", "y", "z"]):
+                result[f"O {name} {dim}"] = _ds["dim"][d]
+
+    # ── peak stats and profiles ──────────────────────────────────────────────
+    if _sm is not None:
+        _ps = peak_stats_and_profiles(_sm, peak_center, peak_value)
+        result["Peak value"] = _ps["peak_value"]
+        for dim in ["x", "y", "z"]:
+            result["Drop " + dim] = _ps["drop_" + dim]
+            result["Peak " + dim] = _ps["peak_" + dim]
+        for r in range(1, 6):
+            result[f"Mean {r}"] = _ps[f"mean_{r}"]
+            result[f"Median {r}"] = _ps[f"median_{r}"]
+            result[f"Var {r}"] = _ps[f"var_{r}"]
+
+        _shp = peak_shapes(_sm)
+        for t, p in enumerate(["x", "y", "z"]):
+            result["TP " + p] = np.round(_shp["tp_shape"][t], 3)
+            result["GP " + p] = np.round(_shp["gp_shape"][t], 3)
+            result["HP " + p] = np.round(_shp["hp_shape"][t], 3)
+
+    return result
+
+
+def build_params_record(params: dict[str, object], results: dict[str, object]) -> pd.DataFrame:
+    """Build a one-row template-schema-compatible DataFrame from case params and results.
+
+    The returned DataFrame has all columns from :data:`_TEMPLATE_INPUT_COLS`
+    and :data:`_RESULT_COLS` plus an ``"Output base"`` helper column.  Missing
+    keys produce ``NaN`` rather than raising a ``KeyError``.
+
+    Parameters
+    ----------
+    params : dict
+        Input-parameter values (keys matching :data:`_TEMPLATE_INPUT_COLS`).
+    results : dict
+        Computed result values (keys matching :data:`_RESULT_COLS`).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Single-row DataFrame.
+    """
+    combined = {**params, **results}
+    all_cols = list(_TEMPLATE_INPUT_COLS) + list(_RESULT_COLS) + ["Output base"]
+    row = {col: combined.get(col, np.nan) for col in all_cols}
+    return pd.DataFrame([row])
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 — single-case orchestrators
+# ---------------------------------------------------------------------------
+
+_ARTIFACT_FILES = (
+    "scores.em",
+    "angles.em",
+    "angles.csv",
+    "stats.json",
+    "peak_line_profiles.csv",
+    "distance_map_all.em",
+    "distance_map_normals.em",
+    "distance_map_inplane.em",
+    "distance_map_all_label.em",
+    "distance_map_normals_label.em",
+    "distance_map_inplane_label.em",
+    "distance_map_all_label_open.em",
+    "distance_map_normals_label_open.em",
+    "distance_map_inplane_label_open.em",
+)
+
+
+def _resolve_write_dir(
+    output_dir: PathOrStr,
+    case_name: str,
+    if_exists: Literal["overwrite", "error", "timestamp"],
+) -> Path:
+    case_dir = Path(output_dir) / case_name
+    if if_exists == "overwrite":
+        case_dir.mkdir(parents=True, exist_ok=True)
+        return case_dir
+    if if_exists == "error":
+        if case_dir.exists() and any((case_dir / f).exists() for f in _ARTIFACT_FILES):
+            raise FileExistsError(f"Output artifacts already exist in {case_dir}")
+        case_dir.mkdir(parents=True, exist_ok=True)
+        return case_dir
+    # "timestamp"
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = case_dir / f"run_{ts}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+@gui_exposed(
+    label="Compute angular distance maps",
+    category="Analysis",
+    output="dataframe",
+    hide=("output_dir", "scores_map", "degrees", "morph_footprint", "cyclic_symmetry"),
+)
+def compute_distance_map(
+    angles_map: MapSource,
+    angles_list: DataSource,
+    starting_angle: EulerAngles | None = None,
+    symmetry: Symmetry = "C1",
+    angles_order: str = "zxz",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
+    scores_map: MapSource | None = None,
+    degrees: float | None = None,
+    morph_footprint: TripletLike = (2, 2, 2),
+    output_dir: PathOrStr | None = None,
+) -> dict:
+    """Compute angular distance maps relative to ``starting_angle``.
+
+    For each voxel in ``angles_map`` (a 0-based index into ``angles_list``), the
+    three distances ``dist_all``, ``dist_normals``, ``dist_inplane`` are computed
+    between that voxel's Euler triple and ``starting_angle`` using
+    :func:`cryocat.utils.geom.compare_rotations`.  Unset voxels (sentinel ``-1``)
+    receive distance 0.  ``starting_angle=None`` defaults to ``(0, 0, 0)``.
+
+    Parameters
+    ----------
+    angles_map : MapSource
+        3-D integer map of 0-based angle indices produced by
+        :func:`analyze_rotations`.  Unset voxels carry value ``-1``.  A
+        ``MapSource`` is an ndarray or a path to a map file.
+    angles_list : DataSource
+        ``(N, 3)`` Euler-angle array or path to an angles file.  A
+        ``DataSource`` is a path to a file or an ndarray.
+    starting_angle : EulerAngles, optional
+        Reference rotation from which distances are measured.  ``None`` is
+        treated as ``(0, 0, 0)``.  An ``EulerAngles`` is a ``(3,)`` triple or
+        ``(1, 3)`` ndarray.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry passed to :func:`cryocat.utils.geom.compare_rotations`.
+        A ``Symmetry`` is an int or a string like ``"C5"``. D/T/O/I raise
+        ``NotImplementedError`` (cone and in-plane distances are not defined).
+    angles_order : str, default='zxz'
+        Euler-angle convention of *angles_list*.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
+    scores_map : MapSource, optional
+        3-D CC scores volume.  When provided together with *degrees*, the peak
+        voxel is located and label maps are computed via :func:`dist_map_stats`.
+        A ``MapSource`` is an ndarray or a path to a map file.
+    degrees : float, optional
+        Search-angle increment used to threshold the distance maps for labeling.
+        Required together with *scores_map* to produce label volumes.
+    morph_footprint : TripletLike, default=(2, 2, 2)
+        Structuring element size for binary opening in :func:`dist_map_stats`.
+        A ``TripletLike`` is a scalar or a 3-element sequence.
+    output_dir : PathOrStr, optional
+        Directory where output ``.em`` files are written.  Three distance maps
+        are always written; if labels were computed, six additional label
+        volumes are written as well.  A ``PathOrStr`` is a :class:`str` or
+        :class:`pathlib.Path`.
+
+    Returns
+    -------
+    dict
+        ``dist_all`` – 3-D map of total angular distances;
+        ``dist_normals`` – 3-D map of rotation-axis distances;
+        ``dist_inplane`` – 3-D map of in-plane rotation distances;
+        ``labels_all``, ``labels_normals``, ``labels_inplane`` – binary peak
+        component volumes (``None`` when labels not computed);
+        ``labels_all_open``, ``labels_normals_open``, ``labels_inplane_open``
+        – morphologically opened label volumes (``None`` when not computed);
+        ``output_dir`` – resolved output directory path or ``None``.
+    """
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    angles_map_arr = cryomap.read(angles_map) if not isinstance(angles_map, np.ndarray) else angles_map
+    angles_arr = (
+        ioutils.euler_angles_load(angles_list, angles_order) if not isinstance(angles_list, np.ndarray) else angles_list
+    )
+
+    # Reference rotation: None or (0, 0, 0) → measure from the identity.
+    if starting_angle is None:
+        ref_triple = np.zeros(3)
+    else:
+        ref_triple = np.asarray(starting_angle, dtype=float).reshape(-1)
+        if ref_triple.shape != (3,):
+            raise ValueError(f"starting_angle must be a length-3 Euler triple, got shape {ref_triple.shape}.")
+
+    ref_angles = np.tile(ref_triple, (len(angles_arr), 1))
+    dist_all, dist_normals, dist_inplane = geom.compare_rotations(
+        srot.from_euler("zxz", ref_angles, degrees=True),
+        srot.from_euler("zxz", angles_arr, degrees=True),
+        symmetry=symmetry,
+    )
+
+    map_shape = angles_map_arr.shape
+    idx_flat = angles_map_arr.flatten().astype(int)  # 0-based; unset voxels are -1
+    valid = idx_flat >= 0
+
+    dist_all_flat = np.zeros(len(idx_flat))
+    dist_normals_flat = np.zeros(len(idx_flat))
+    dist_inplane_flat = np.zeros(len(idx_flat))
+    dist_all_flat[valid] = dist_all[idx_flat[valid]]
+    dist_normals_flat[valid] = dist_normals[idx_flat[valid]]
+    dist_inplane_flat[valid] = dist_inplane[idx_flat[valid]]
+
+    dist_all_map = dist_all_flat.reshape(map_shape).astype(np.single)
+    dist_normals_map = dist_normals_flat.reshape(map_shape).astype(np.single)
+    dist_inplane_map = dist_inplane_flat.reshape(map_shape).astype(np.single)
+
+    # Compute label maps when scores_map and degrees are both available.
+    labels_all = labels_normals = labels_inplane = None
+    labels_all_open = labels_normals_open = labels_inplane_open = None
+
+    if scores_map is not None and degrees is not None:
+        sc_arr = cryomap.read(scores_map) if not isinstance(scores_map, np.ndarray) else scores_map
+        sc_sphere = cryomask.spherical_mask(np.array(sc_arr.shape), radius=10)
+        peak_center, _, _ = tmana.create_starting_parameters_2D(sc_arr * sc_sphere)
+
+        st_all = dist_map_stats(dist_all_map, peak_center, degrees, is_all=True, morph_footprint=morph_footprint)
+        st_nrm = dist_map_stats(dist_normals_map, peak_center, degrees, is_all=False, morph_footprint=morph_footprint)
+        st_inp = dist_map_stats(dist_inplane_map, peak_center, degrees, is_all=False, morph_footprint=morph_footprint)
+
+        labels_all = st_all["label"].astype(np.single)
+        labels_normals = st_nrm["label"].astype(np.single)
+        labels_inplane = st_inp["label"].astype(np.single)
+        labels_all_open = st_all["open_label"].astype(np.single)
+        labels_normals_open = st_nrm["open_label"].astype(np.single)
+        labels_inplane_open = st_inp["open_label"].astype(np.single)
+
+    result = {
+        "dist_all": dist_all_map,
+        "dist_normals": dist_normals_map,
+        "dist_inplane": dist_inplane_map,
+        "labels_all": labels_all,
+        "labels_normals": labels_normals,
+        "labels_inplane": labels_inplane,
+        "labels_all_open": labels_all_open,
+        "labels_normals_open": labels_normals_open,
+        "labels_inplane_open": labels_inplane_open,
+        "output_dir": None,
+    }
+
+    if output_dir is not None:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        cryomap.write(dist_all_map, str(out / "distance_map_all.em"), data_type=np.single)
+        cryomap.write(dist_normals_map, str(out / "distance_map_normals.em"), data_type=np.single)
+        cryomap.write(dist_inplane_map, str(out / "distance_map_inplane.em"), data_type=np.single)
+        if labels_all is not None:
+            cryomap.write(labels_all, str(out / "distance_map_all_label.em"), data_type=np.single)
+            cryomap.write(labels_normals, str(out / "distance_map_normals_label.em"), data_type=np.single)
+            cryomap.write(labels_inplane, str(out / "distance_map_inplane_label.em"), data_type=np.single)
+            cryomap.write(labels_all_open, str(out / "distance_map_all_label_open.em"), data_type=np.single)
+            cryomap.write(labels_normals_open, str(out / "distance_map_normals_label_open.em"), data_type=np.single)
+            cryomap.write(labels_inplane_open, str(out / "distance_map_inplane_label_open.em"), data_type=np.single)
+        result["output_dir"] = out
+
+    return result
+
+
+@gui_exposed(
+    label="Compute peak statistics",
+    category="Analysis",
+    output="dataframe",
+    hide=("output_dir",),
+)
+def compute_peak_stats(
+    scores_map: MapSource,
+    dist_all_map: MapSource,
+    dist_normals_map: MapSource,
+    dist_inplane_map: MapSource,
+    degrees: float,
+    cc_radius: int = 10,
+    morph_footprint: TripletLike = (2, 2, 2),
+    output_dir: PathOrStr | None = None,
+) -> dict:
+    """Compute morphological and profile statistics for the peak in a scores map.
+
+    Finds the highest-scoring voxel within a central sphere, then computes
+    connected-component morphology for each angular distance map (voxel count,
+    solidity, opened voxel count, bounding-box dimensions) and line-profile /
+    neighbourhood statistics for the scores-map peak.
+
+    Parameters
+    ----------
+    scores_map : MapSource
+        3-D CC scores volume.  A ``MapSource`` is an ndarray or a path to a
+        map file (.mrc, .em, …).
+    dist_all_map : MapSource
+        3-D total angular distance map.
+    dist_normals_map : MapSource
+        3-D rotation-axis distance map.
+    dist_inplane_map : MapSource
+        3-D in-plane rotation distance map.
+    degrees : float
+        Search-angle increment (degrees) used to threshold the distance maps.
+    cc_radius : int, default=10
+        Radius (voxels) of the central sphere used for peak detection.
+    morph_footprint : TripletLike, default=(2, 2, 2)
+        Structuring element size for binary opening in :func:`dist_map_stats`.
+        A ``TripletLike`` is a scalar or a 3-element sequence.
+    output_dir : PathOrStr, optional
+        If provided, ``stats.json`` and ``peak_line_profiles.csv`` are written
+        into this directory.  A ``PathOrStr`` is a :class:`str` or
+        :class:`pathlib.Path`.
+
+    Returns
+    -------
+    dict
+        ``"peak_stats"`` – peak value, coordinates, score drops, and
+        spherical-neighbourhood means / medians / variances for radii 1–5;
+        ``"dist_maps"`` – keyed by ``"dist_all"``, ``"dist_normals"``,
+        ``"dist_inplane"``, each containing ``vc``, ``solidity``, ``vco``, ``dim``;
+        ``"peak_line_profiles"`` – :class:`pandas.DataFrame` with columns
+        ``"x"``, ``"y"``, ``"z"``.
+    """
+    scores_map = cryomap.read(scores_map) if not isinstance(scores_map, np.ndarray) else scores_map
+    dist_all_map = cryomap.read(dist_all_map) if not isinstance(dist_all_map, np.ndarray) else dist_all_map
+    dist_normals_map = (
+        cryomap.read(dist_normals_map) if not isinstance(dist_normals_map, np.ndarray) else dist_normals_map
+    )
+    dist_inplane_map = (
+        cryomap.read(dist_inplane_map) if not isinstance(dist_inplane_map, np.ndarray) else dist_inplane_map
+    )
+
+    sphere_mask = cryomask.spherical_mask(np.array(scores_map.shape), radius=cc_radius)
+    masked_scores = scores_map * sphere_mask
+    peak_center, peak_value, _ = tmana.create_starting_parameters_2D(masked_scores)
+
+    dist_map_names = ["dist_all", "dist_normals", "dist_inplane"]
+    dist_map_arrays = [dist_all_map, dist_normals_map, dist_inplane_map]
+    dist_results: dict[str, dict] = {}
+    for j, (name, dm) in enumerate(zip(dist_map_names, dist_map_arrays)):
+        st = dist_map_stats(dm, peak_center, degrees, is_all=(j == 0), morph_footprint=morph_footprint)
+        dist_results[name] = {
+            "vc": float(st["vc"][0]) if len(st["vc"]) else 0.0,
+            "solidity": float(st["solidity"][0]) if len(st["solidity"]) else 0.0,
+            "vco": int(st["vco"]),
+            "dim": [float(v) for v in st["dim"]],
+        }
+
+    ps = peak_stats_and_profiles(scores_map, peak_center, peak_value)
+    peak_result: dict = {
+        "peak_value": float(ps["peak_value"]),
+        "peak_x": int(ps["peak_x"]),
+        "peak_y": int(ps["peak_y"]),
+        "peak_z": int(ps["peak_z"]),
+        "drop_x": float(ps["drop_x"]),
+        "drop_y": float(ps["drop_y"]),
+        "drop_z": float(ps["drop_z"]),
+        "line_profiles": ps["line_profiles"].tolist(),
+    }
+    for r in range(1, 6):
+        peak_result[f"mean_{r}"] = float(ps[f"mean_{r}"])
+        peak_result[f"median_{r}"] = float(ps[f"median_{r}"])
+        peak_result[f"var_{r}"] = float(ps[f"var_{r}"])
+
+    lp_df = pd.DataFrame(peak_result.pop("line_profiles"), columns=["x", "y", "z"])
+    result = {"peak_stats": peak_result, "dist_maps": dist_results, "peak_line_profiles": lp_df}
+
+    if output_dir is not None:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        with open(str(out / "stats.json"), "w") as fh:
+            json.dump({"peak_stats": peak_result, "dist_maps": dist_results}, fh, indent=2)
+        lp_df.to_csv(str(out / "peak_line_profiles.csv"), index=False)
+
+    return result
+
+
+# Module-level aliases so run_single_case can reference these functions even
+# when its bool parameters shadow the names in its local scope.
+_compute_distance_map = compute_distance_map
+_compute_peak_stats = compute_peak_stats
+
+
+def _make_slice_figure(
+    arr: np.ndarray,
+    colorscale: str,
+    title: str,
+    peak_center: tuple | None = None,
+    zoom_half: int = 5,
+    zmin: float | None = None,
+    zmax: float | None = None,
+    show_zoom: bool = True,
+) -> go.Figure:
+    """Return orthogonal cross-section slices, optionally with an 11×11 zoom row.
+
+    Hover shows the exact voxel value.  Zoom row is annotated with ``.2f``
+    format.  Axes are tick-free and fill their cells tightly.
+    """
+    slices = cryomap.get_cross_slices(
+        arr,
+        slice_numbers=list(peak_center) if peak_center is not None else None,
+        axis=[0, 1, 2],
+    )
+    if peak_center is not None:
+        px = int(round(peak_center[0]))
+        py = int(round(peak_center[1]))
+        pz = int(round(peak_center[2]))
+        zoom_centers = [(py, pz), (px, pz), (px, py)]
+    else:
+        zoom_centers = [(sl.shape[0] // 2, sl.shape[1] // 2) for sl in slices]
+
+    _zmin = float(arr.min()) if zmin is None else zmin
+    _zmax = float(arr.max()) if zmax is None else zmax
+
+    n_full = max(arr.shape)
+    zoom_size = 2 * zoom_half + 1
+    n_rows = 2 if show_zoom else 1
+    titles = ["XY", "YZ", "XZ"] + (["Zoom XY", "Zoom YZ", "Zoom XZ"] if show_zoom else [])
+
+    fig = make_subplots(
+        rows=n_rows,
+        cols=3,
+        subplot_titles=titles,
+        row_heights=[1, 1] if show_zoom else [1],
+        vertical_spacing=0.04,
+        horizontal_spacing=0.01,
+    )
+
+    for k, (sl, (rc, cc)) in enumerate(zip(slices, zoom_centers)):
+        fig.add_trace(
+            go.Heatmap(
+                z=sl,
+                colorscale=colorscale,
+                zmin=_zmin,
+                zmax=_zmax,
+                showscale=(k == 0),
+                hovertemplate="%{z:.4f}<extra></extra>",
+            ),
+            row=1,
+            col=k + 1,
+        )
+        if show_zoom:
+            r0 = max(0, rc - zoom_half)
+            r1 = min(sl.shape[0], rc + zoom_half + 1)
+            c0 = max(0, cc - zoom_half)
+            c1 = min(sl.shape[1], cc + zoom_half + 1)
+            crop = sl[r0:r1, c0:c1]
+            text_vals = [[f"{v:.2f}" for v in row] for row in crop.tolist()]
+            fig.add_trace(
+                go.Heatmap(
+                    z=crop,
+                    text=text_vals,
+                    texttemplate="%{text}",
+                    textfont={"size": 7},
+                    colorscale=colorscale,
+                    zmin=_zmin,
+                    zmax=_zmax,
+                    showscale=False,
+                    hovertemplate="%{z:.4f}<extra></extra>",
+                ),
+                row=2,
+                col=k + 1,
+            )
+
+    # Fix width so each cell is approximately square, eliminating scaleanchor whitespace.
+    # cell_px ≈ n_full * 3 (scale with map size, min 250px)
+    _cell = max(250, n_full * 3)
+    _width = _cell * 3 + 60
+    # height: n_rows * cell + top margin + per-row subplot title space
+    _height = _cell * n_rows + 40 + n_rows * 20
+
+    n_axes = n_rows * 3
+    for i in range(n_axes):
+        sfx = "" if i == 0 else str(i + 1)
+        fig.update_layout(
+            **{
+                f"xaxis{sfx}": {"constrain": "domain", "showticklabels": False, "showgrid": False, "zeroline": False},
+                f"yaxis{sfx}": {
+                    "scaleanchor": f"x{sfx}",
+                    "scaleratio": 1,
+                    "constrain": "domain",
+                    "showticklabels": False,
+                    "showgrid": False,
+                    "zeroline": False,
+                },
+            }
+        )
+
+    _t = 40 if title else 0
+    fig.update_layout(
+        title_text=title,
+        margin=dict(l=0, r=0, t=_t, b=0),
+        width=_width,
+        height=_height - (40 - _t),
+    )
+    return fig
+
+
+@gui_exposed(
+    label="Visualize peak-analysis results",
+    category="Analysis",
+    output="figures",
+)
+def visualize_results(
+    *,
+    scores: MapSource | None = None,
+    angles_map: MapSource | None = None,
+    angles_list: DataSource | None = None,
+    dist_all_map: MapSource | None = None,
+    dist_normals_map: MapSource | None = None,
+    dist_inplane_map: MapSource | None = None,
+    peak_stats: dict | PathOrStr | None = None,
+) -> dict[str, go.Figure]:
+    """Build Plotly figures for whichever result artifacts are present.
+
+    Each panel is produced only when its prerequisites are available; missing
+    inputs are silently skipped (graceful degradation).
+
+    Parameters
+    ----------
+    scores : MapSource, optional
+        3-D CC scores volume.  Required for ``"score_slices"``,
+        ``"line_profiles"``, and ``"peak_shape"`` panels.  A ``MapSource`` is
+        an ndarray or a path to a map file.
+    angles_map : MapSource, optional
+        3-D integer index map (output of :func:`analyze_rotations`).
+        Required for the ``"angle_distribution"`` panel.
+    angles_list : DataSource, optional
+        ``(N, 3)`` Euler-angle array or path to an angles file.  Enriches the
+        ``"angle_distribution"`` panel with angle labels.  A ``DataSource`` is
+        a path to a file or an ndarray.
+    dist_all_map : MapSource, optional
+        3-D total angular-distance map.  Required for ``"distance_slices_all"``.
+    dist_normals_map : MapSource, optional
+        3-D rotation-axis distance map.  Required for ``"distance_slices_normals"``.
+    dist_inplane_map : MapSource, optional
+        3-D in-plane distance map.  Required for ``"distance_slices_inplane"``.
+    peak_stats : dict or PathOrStr, optional
+        Stats dict as returned by :func:`compute_peak_stats`, or a
+        ``PathOrStr`` path to the JSON file.  When provided, the peak location
+        is used to centre the slice and zoom panels.
+
+    Returns
+    -------
+    dict[str, go.Figure]
+        Possible keys: ``"score_slices"``, ``"line_profiles"``,
+        ``"peak_shape"``, ``"distance_slices_all"``,
+        ``"distance_slices_normals"``, ``"distance_slices_inplane"``,
+        ``"angle_distribution"``.
+        Only panels whose prerequisites are present are included.
+    """
+
+    # ── load all inputs ──────────────────────────────────────────────────────
+    def _load_map(src):
+        if src is None:
+            return None
+        return cryomap.read(src) if not isinstance(src, np.ndarray) else src
+
+    scores_arr = _load_map(scores)
+    amap_arr = _load_map(angles_map)
+    dmap_all_arr = _load_map(dist_all_map)
+    dmap_normals_arr = _load_map(dist_normals_map)
+    dmap_inplane_arr = _load_map(dist_inplane_map)
+
+    alist_arr: np.ndarray | None = None
+    if angles_list is not None:
+        alist_arr = (
+            ioutils.euler_angles_load(angles_list, "zxz") if not isinstance(angles_list, np.ndarray) else angles_list
+        )
+
+    ps_dict: dict | None = None
+    if peak_stats is not None:
+        if isinstance(peak_stats, dict):
+            ps_dict = peak_stats
+        else:
+            with open(str(peak_stats)) as fh:
+                ps_dict = json.load(fh)
+
+    peak_center: tuple | None = None
+    if ps_dict is not None:
+        _ps = ps_dict.get("peak_stats", ps_dict)
+        _pc = (_ps.get("peak_x"), _ps.get("peak_y"), _ps.get("peak_z"))
+        if None not in _pc:
+            peak_center = _pc
+
+    figs: dict[str, go.Figure] = {}
+
+    # ── score_slices ─────────────────────────────────────────────────────────
+    if scores_arr is not None:
+        figs["score_slices"] = _make_slice_figure(
+            scores_arr,
+            colorscale="Viridis",
+            title="Score map — orthogonal slices",
+            peak_center=peak_center,
+            zmin=0.0,
+            zmax=float(scores_arr.max()),
+        )
+
+    # ── line_profiles ─────────────────────────────────────────────────────────
+    if scores_arr is not None:
+        _pc_lp, _pv_lp, _profiles = tmana.create_starting_parameters_1D(scores_arr)
+        fig_lp = go.Figure()
+        for k, dim in enumerate(["x", "y", "z"]):
+            fig_lp.add_trace(go.Scatter(y=_profiles[:, k], name=dim, mode="lines"))
+        fig_lp.update_layout(
+            title_text="Line profiles through peak",
+            xaxis_title="Position (voxel)",
+            yaxis_title="CC score",
+            height=380,
+        )
+        figs["line_profiles"] = fig_lp
+
+    # ── peak_shape ────────────────────────────────────────────────────────────
+    if scores_arr is not None:
+        try:
+            _ps_result = peak_shapes(scores_arr)
+            fig_sh = go.Figure()
+            for label, key in [
+                ("Triangle", "tp_shape"),
+                ("Gaussian", "gp_shape"),
+                ("Half-peak", "hp_shape"),
+            ]:
+                _vals = _ps_result.get(key, [0, 0, 0])
+                fig_sh.add_trace(go.Bar(x=["x", "y", "z"], y=list(_vals), name=label))
+            fig_sh.update_layout(
+                title_text=f"Peak shape (peak = {_ps_result.get('peak_value', 0.0):.4f})",
+                barmode="group",
+                height=380,
+            )
+            figs["peak_shape"] = fig_sh
+        except Exception:
+            pass  # non-fatal if peak_shapes fails (e.g. map too small)
+
+    # ── distance map panels (all three types) ─────────────────────────────────
+    _dist_specs = [
+        (dmap_all_arr, "distance_slices_all", "Distance map (all) — orthogonal slices"),
+        (dmap_normals_arr, "distance_slices_normals", "Distance map (normals) — orthogonal slices"),
+        (dmap_inplane_arr, "distance_slices_inplane", "Distance map (in-plane) — orthogonal slices"),
+    ]
+    for _dmap, _key, _title in _dist_specs:
+        if _dmap is not None:
+            figs[_key] = _make_slice_figure(
+                _dmap,
+                colorscale="RdYlGn_r",
+                title=_title,
+                peak_center=peak_center,
+            )
+
+    # ── angle_distribution ────────────────────────────────────────────────────
+    if amap_arr is not None:
+        _flat = amap_arr.flatten().astype(int)
+        _flat = _flat[_flat >= 0]  # drop unset sentinel -1
+        if len(_flat) > 0:
+            _counts = np.bincount(_flat)
+            _idx = np.nonzero(_counts)[0]
+            _vals = _counts[_idx]
+            _labels = [str(i) for i in _idx]
+            if alist_arr is not None:
+                _labels = [f"{alist_arr[i, 1]:.1f}°" if 0 <= i < len(alist_arr) else str(i) for i in _idx]
+            fig_ad = go.Figure(go.Bar(x=_labels, y=list(_vals)))
+            fig_ad.update_layout(
+                title_text="Angle index distribution",
+                xaxis_title="Angle (theta) / index",
+                yaxis_title="Voxel count",
+                height=380,
+            )
+            figs["angle_distribution"] = fig_ad
+
+    return figs
+
+
+@gui_exposed(
+    label="Analyze rotations (single case)",
+    category="Analysis",
+    output="dataframe",
+    hide=("output_path", "cyclic_symmetry"),
+)
+def run_single_case(
+    target_map: MapSource,
+    template: MapSource,
+    template_mask: MapSource,
+    input_angles: DataSource,
+    output_dir: PathOrStr,
+    case_name: str,
+    *,
+    starting_angle: EulerAngles | None = None,
+    angular_offset: EulerAngles | None = None,
+    symmetry: Symmetry = "C1",
+    wedge_mask_target: MapSource | None = None,
+    wedge_mask_tmpl: MapSource | None = None,
+    cc_radius: int = 10,
+    degrees: float | None = None,
+    morph_footprint: TripletLike = (2, 2, 2),
+    compute_distance_map: bool = True,
+    compute_peak_stats: bool = True,
+    angles_order: str = "zxz",
+    tight_mask: MapSource | None = None,
+    if_exists: Literal["overwrite", "error", "timestamp"] = "overwrite",
+    cyclic_symmetry: Symmetry | None = None,
+) -> dict:
+    """Run a complete single-case peak analysis and return all results.
+
+    Rotates ``template`` through ``input_angles`` and computes the normalized
+    cross-correlation against the fixed ``target_map`` for each rotation.
+    Orchestrates :func:`analyze_rotations`, :func:`compute_distance_map`, and
+    :func:`compute_peak_stats`.  Artifacts are written to
+    ``<output_dir>/<case_name>/``.
+
+    Parameters
+    ----------
+    target_map : MapSource
+        Fixed volume against which the rotated template is matched.  A
+        ``MapSource`` is an ndarray or a path to a map file (.mrc, .em, …).
+    template : MapSource
+        Reference template map (the rotated side).
+    template_mask : MapSource
+        Binary mask for the template.
+    input_angles : DataSource
+        Angle list for the rotation search.  A ``DataSource`` is a path to a
+        file or an ndarray.
+    output_dir : PathOrStr
+        Root directory under which the case sub-folder is created.  A
+        ``PathOrStr`` is a :class:`str` or :class:`pathlib.Path`.
+    case_name : str
+        Name of the sub-folder for this case.
+    starting_angle : EulerAngles, optional
+        Reference orientation applied as a base rotation (Euler angles,
+        degrees).  An ``EulerAngles`` is a ``(3,)`` triple or ``(N, 3)``
+        ndarray.  ``None`` is treated as ``(0, 0, 0)``.
+    angular_offset : EulerAngles, optional
+        Additional rotation applied to all input angles.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the structure, used for the angular, cone and
+        in-plane distances.  A ``Symmetry`` is an int or a string like
+        ``"C5"``. D/T/O/I raise ``NotImplementedError`` (cone and in-plane
+        distances are not defined).
+    wedge_mask_target : MapSource, optional
+        Wedge mask for the target map (path or array).  When ``None``, no
+        target-side wedge correction is applied.
+    wedge_mask_tmpl : MapSource, optional
+        Wedge mask for the template (path or array).  When ``None``, no
+        template-side wedge correction is applied.
+    cc_radius : int, default=10
+        Radius (voxels) of the central sphere.
+    degrees : float, optional
+        Search-angle increment for distance-map thresholding in
+        :func:`compute_peak_stats`.  Required when *compute_peak_stats* is True.
+    morph_footprint : TripletLike, default=(2, 2, 2)
+        Structuring element for binary opening in :func:`compute_peak_stats`.
+        A ``TripletLike`` is a scalar or a 3-element sequence.
+    compute_distance_map : bool, default=True
+        Whether to run :func:`compute_distance_map` after the rotation search.
+    compute_peak_stats : bool, default=True
+        Whether to run :func:`compute_peak_stats` after distance-map computation.
+    angles_order : str, default='zxz'
+        Euler-angle convention.
+    tight_mask : MapSource, optional
+        Tight (binary) mask used by :func:`gather_case_results` for mask-stats
+        columns in the written ``params.csv``.
+    if_exists : {'overwrite', 'error', 'timestamp'}, default='overwrite'
+        Policy when output artifacts already exist.  ``'overwrite'`` writes
+        directly; ``'error'`` raises :exc:`FileExistsError`; ``'timestamp'``
+        creates a timestamped sub-folder.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
+
+    Returns
+    -------
+    dict
+        Always contains ``"res_table"``, ``"scores_map"``, ``"angles_map"``,
+        ``"write_dir"``, ``"params"`` (the one-row params DataFrame written to
+        ``params.csv``).  When *compute_distance_map* is True, also contains
+        ``"dist_all_map"``, ``"dist_normals_map"``, ``"dist_inplane_map"``.
+        When *compute_peak_stats* is True and *degrees* is provided, also
+        contains ``"peak_stats"``.
+    """
+    symmetry_input = symmetry if cyclic_symmetry is None else cyclic_symmetry  # recorded as given
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    geom.require_cyclic_symmetry(symmetry, "Cone and in-plane distances")  # fail before matching
+    write_dir = _resolve_write_dir(output_dir, case_name, if_exists)
+
+    # Pre-compute transformed angles so angles.csv is consistent with the
+    # 0-based indices stored in angles.em by analyze_rotations.
+    angles_array = geom.apply_starting_and_offset(
+        ioutils.euler_angles_load(input_angles, angles_order),
+        starting_angle,
+        angular_offset,
+        angles_order,
+    )
+    ioutils.angles_save(angles_array, str(write_dir / "angles.csv"), float_format="%.3f")
+
+    res_table, scores_map, angles_map, _ = analyze_rotations(
+        target_map=target_map,
+        template=template,
+        template_mask=template_mask,
+        input_angles=input_angles,
+        wedge_mask_target=wedge_mask_target,
+        wedge_mask_tmpl=wedge_mask_tmpl,
+        cc_radius=cc_radius,
+        angular_offset=angular_offset,
+        starting_angle=starting_angle,
+        symmetry=symmetry,
+        angles_order=angles_order,
+    )
+
+    cryomap.write(scores_map, str(write_dir / "scores.em"), data_type=np.single)
+    cryomap.write(angles_map, str(write_dir / "angles.em"), data_type=np.single)
+
+    result: dict = {
+        "res_table": res_table,
+        "scores_map": scores_map,
+        "angles_map": angles_map,
+        "write_dir": write_dir,
+    }
+
+    if compute_distance_map:
+        _run_labels = compute_peak_stats and degrees is not None
+        dist_result = _compute_distance_map(
+            angles_map=angles_map,
+            angles_list=angles_array,
+            starting_angle=starting_angle,
+            symmetry=symmetry,
+            angles_order=angles_order,
+            scores_map=scores_map if _run_labels else None,
+            degrees=degrees if _run_labels else None,
+            morph_footprint=morph_footprint,
+            output_dir=str(write_dir),
+        )
+        da = dist_result["dist_all"]
+        dn = dist_result["dist_normals"]
+        di = dist_result["dist_inplane"]
+        result["dist_all_map"] = da
+        result["dist_normals_map"] = dn
+        result["dist_inplane_map"] = di
+
+        if _run_labels:
+            stats = _compute_peak_stats(
+                scores_map=scores_map,
+                dist_all_map=da,
+                dist_normals_map=dn,
+                dist_inplane_map=di,
+                degrees=degrees,
+                cc_radius=cc_radius,
+                morph_footprint=morph_footprint,
+                output_dir=str(write_dir),
+            )
+            result["peak_stats"] = stats
+
+    # ── params.csv ───────────────────────────────────────────────────────────
+    case_results = gather_case_results(
+        scores_map=result.get("scores_map"),
+        dist_all_map=result.get("dist_all_map"),
+        dist_normals_map=result.get("dist_normals_map"),
+        dist_inplane_map=result.get("dist_inplane_map"),
+        tight_mask=tight_mask,
+        template_mask=template_mask,
+        degrees=degrees,
+        cc_radius=cc_radius,
+        morph_footprint=morph_footprint,
+    )
+    _tmpl_path = _path_or_inmemory(template)
+    _tgt_path = _path_or_inmemory(target_map)
+    _compare = (
+        "tmpl"
+        if _tmpl_path
+        and _tgt_path
+        and _tmpl_path != "<in-memory>"
+        and _tgt_path != "<in-memory>"
+        and os.path.abspath(_tmpl_path) == os.path.abspath(_tgt_path)
+        else "subtomo"
+    )
+    if starting_angle is not None:
+        _sa = np.asarray(starting_angle).flatten()
+        _phi, _theta, _psi = float(_sa[0]), float(_sa[1]), float(_sa[2])
+    else:
+        _phi, _theta, _psi = 0.0, 0.0, 0.0
+    params_input = {
+        "Target map": _tgt_path,
+        "Template": _tmpl_path,
+        "Mask": _path_or_inmemory(template_mask),
+        "Angles": _path_or_inmemory(input_angles),
+        "Degrees": degrees,
+        "Symmetry": symmetry_input,
+        "Compare": _compare,
+        "Apply wedge": wedge_mask_target is not None or wedge_mask_tmpl is not None,
+        "Target wedge mask": _path_or_inmemory(wedge_mask_target),
+        "Template wedge mask": _path_or_inmemory(wedge_mask_tmpl),
+        "Apply angular offset": angular_offset is not None,
+        "Phi": _phi,
+        "Theta": _theta,
+        "Psi": _psi,
+        "Output base": case_name,
+        "Output folder": str(output_dir),
+    }
+    params_df = build_params_record(params_input, case_results)
+    params_df.to_csv(str(write_dir / "params.csv"), index=False)
+    result["params"] = params_df
+
+    return result
+
+
+def _read_template_list(path: PathOrStr) -> pd.DataFrame:
+    """Read a template-list CSV and ensure column dtypes are correct.
+
+    pandas promotes columns that contain only NaN to float64, which causes
+    TypeError when strings are later written into them (e.g. "Output folder").
+    Conversely, angle columns (Phi/Theta/Psi) stored as integers in the CSV
+    would trigger a pandas 2.x upcast error when float values are assigned.
+    This wrapper coerces both cases right after reading.
+    """
+    df = pd.read_csv(path, index_col=0)
+    for _col in ("Output folder", "Done"):
+        if _col in df.columns and df[_col].dtype != object:
+            df[_col] = df[_col].astype(object)
+    for _col in ("Phi", "Theta", "Psi"):
+        if _col in df.columns and df[_col].dtype != float:
+            df[_col] = df[_col].astype(float)
+    return df
+
+
+def _run_analysis_args_from_row(row: pd.Series, parent_folder_path: PathOrStr) -> dict:
+    """Resolve file paths and rotation args for one template-list row.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        A single row of the template-list DataFrame, indexed by column name.
+    parent_folder_path : PathOrStr
+        Root folder containing structure subfolders, templates, and tomograms.
+
+    Returns
+    -------
+    dict
+        ``structure_name``, ``template``, ``mask``, ``target_map``,
+        ``wedge_target``, ``wedge_tmpl``, ``starting_angle`` (shape ``(1, 3)``),
+        ``cyclic_symmetry``.
+    """
+    structure_name = row["Structure"]
+    template = _resolve_input_path(row["Template"], parent_folder_path, structure_name)
+    mask = _resolve_input_path(row["Mask"], parent_folder_path, structure_name)
+
+    wedge_target = None
+    wedge_tmpl = None
+
+    if row["Compare"] == "tmpl":
+        target_map = template
+    elif row["Compare"] == "subtomo":
+        target_map = _resolve_input_path(row["Target map"], parent_folder_path, structure_name)
+        if row["Apply wedge"]:
+            wedge_target, wedge_tmpl = create_wedge_names(
+                create_structure_path(parent_folder_path, structure_name), row["Boxsize"]
+            )
+    else:
+        target_map = create_em_path(parent_folder_path, row["Compare"], row["Target map"])
+
+    # Explicit wedge mask columns override auto-named paths (or set them when Apply wedge is False).
+    # row.get() returns None when the column is absent (old CSVs without these columns).
+    _explicit_tgt = row.get("Target wedge mask")
+    _explicit_tmpl = row.get("Template wedge mask")
+    if pd.notna(_explicit_tgt) and str(_explicit_tgt).strip():
+        wedge_target = _resolve_input_path(str(_explicit_tgt).strip(), parent_folder_path, structure_name)
+    if pd.notna(_explicit_tmpl) and str(_explicit_tmpl).strip():
+        wedge_tmpl = _resolve_input_path(str(_explicit_tmpl).strip(), parent_folder_path, structure_name)
+
+    starting_angle = row[["Phi", "Theta", "Psi"]].to_numpy().reshape(1, 3)
+    cyclic_symmetry = row["Symmetry"]
+
+    return {
+        "structure_name": structure_name,
+        "template": template,
+        "mask": mask,
+        "target_map": target_map,
+        "wedge_target": wedge_target,
+        "wedge_tmpl": wedge_tmpl,
+        "starting_angle": starting_angle,
+        "cyclic_symmetry": cyclic_symmetry,
+    }
+
+
+def run_analysis(
+    template_list: PathOrStr,
+    indices: list[int],
+    parent_folder_path: PathOrStr,
+    cc_radius_tol: int = 10,
+) -> None:
     """Run peak analysis based on a list with parameters and save results.
 
     This function iterates over the provided `indices` of a template list CSV,
@@ -1560,7 +2535,7 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
 
     Parameters
     ----------
-    template_list : str or path-like
+    template_list : PathOrStr
         Path to a CSV file containing info about peak analysis to perform. The CSV
         must include at least the following columns:
         - Structure
@@ -1568,7 +2543,7 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
         - Mask
         - Angles
         - Compare (compare method; "tmpl": tmpl vs. tmpl, "subtomo": subtomo vs. sutomo, or else)
-        - Tomo map (i.e. subtomo)
+        - Target map (i.e. subtomo)
         - Tomogram
         - Apply wedge (bool)
         - Boxsize
@@ -1579,21 +2554,16 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
         - Symmetry (C symmetry)
     indices : sequence of int
         List or array of row indices (0-based) in `template_list` to process.
-    angle_list_path : str or path-like
-        Base directory path where the angle list files are stored.
-        The angle file name from the CSV's "Angles" column is appended to this path.
-    wedge_path : str or path-like
-        Base directory containing wedge mask files. Used only if "Apply wedge"
-        is set for the current row.
-    parent_folder_path : str or path-like
+    parent_folder_path : PathOrStr
         Root folder containing all structure subfolders, templates, tomograms,
-        and masks referenced in `template_list`.
-    cc_radius_tol : float, optional
+        masks, and angle list files referenced in `template_list`. If "Angles"
+        contains a bare filename, it is resolved via ``parent_folder/structure/``.
+    cc_radius_tol : int, default=10
         Radius (in voxels) of the spherical mask used for computing local
-        cross-correlation scores in `analyze_rotations`. Default is 10.
+        cross-correlation scores in `analyze_rotations`.
 
     Notes
-    -------
+    -----
     - Writes output files for each processed index:
         * '<output_base>_scores.em' (cross-correlation coefficient map)
         * '<output_base>_angles.em' (best-angle index map)
@@ -1609,76 +2579,199 @@ def run_analysis(template_list, indices, angle_list_path, wedge_path, parent_fol
     - `starting_angle` is read directly from `"Phi"`, `"Theta"`, `"Psi"` columns.
     - If `"Apply angular offset"` is true, `angular_offset` is set to half of
       `Degrees` for all three Euler components; otherwise it is [0, 0, 0].
-    - Symmetry (`c_symmetry`) is passed to `analyze_rotations` to account for
-      cyclic symmetry in angular distance calculations.
+    - Symmetry (key `cyclic_symmetry`) is passed as `symmetry` to `analyze_rotations`
+      to account for cyclic symmetry in angular distance calculations.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
-        structure_name = temp_df.at[i, "Structure"]
-        tmpl_name = temp_df.at[i, "Template"]
-        tmpl_folder = create_structure_path(parent_folder_path, structure_name)
-        template = create_em_path(parent_folder_path, structure_name, tmpl_name)
-        mask = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Mask"])
-        angle_list = angle_list_path + temp_df.at[i, "Angles"]
+        args = _run_analysis_args_from_row(temp_df.loc[i], parent_folder_path)
 
-        wedge_tomo = None
-        wedge_tmpl = None
-
-        if temp_df.at[i, "Compare"] == "tmpl":
-            tomo = template
-
-        elif temp_df.at[i, "Compare"] == "subtomo":
-            tomo = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tomo map"])
-            tomo_number = re.findall(r"\d+", temp_df.at[i, "Tomogram"])[0]
-
-            if temp_df.at[i, "Apply wedge"]:
-                wedge_tomo, wedge_tmpl = create_wedge_names(
-                    wedge_path, tomo_number, temp_df.at[i, "Boxsize"], temp_df.at[i, "Binning"]
-                )
-        else:
-            tomo = create_em_path(parent_folder_path, temp_df.at[i, "Compare"], temp_df.at[i, "Tomo map"])
-
-        starting_angle = temp_df.loc[[i], ["Phi", "Theta", "Psi"]].to_numpy()
+        angle_list = _resolve_input_path(temp_df.at[i, "Angles"], parent_folder_path, args["structure_name"])
 
         if temp_df.at[i, "Apply angular offset"]:
             angular_offset = np.full((3,), temp_df.at[i, "Degrees"] / 2.0)
         else:
             angular_offset = np.asarray([0, 0, 0])
 
-        c_symmetry = temp_df.at[i, "Symmetry"]
         output_base = create_output_base_name(i)
-        output_folder = create_output_folder_path(parent_folder_path, structure_name, i)
+        output_folder = create_output_folder_path(parent_folder_path, args["structure_name"], i)
 
         temp_df.at[i, "Output folder"] = create_output_folder_name(i)
-
         Path(output_folder).mkdir(parents=True, exist_ok=True)
 
         _ = analyze_rotations(
-            tomogram=tomo,
-            template=template,
-            template_mask=mask,
+            target_map=args["target_map"],
+            template=args["template"],
+            template_mask=args["mask"],
             input_angles=angle_list,
-            wedge_mask_tomo=wedge_tomo,
-            wedge_mask_tmpl=wedge_tmpl,
-            output_file=output_folder + "/" + output_base,
+            wedge_mask_target=args["wedge_target"],
+            wedge_mask_tmpl=args["wedge_tmpl"],
+            output_path=output_folder + "/" + output_base,
             angular_offset=angular_offset,
-            starting_angle=starting_angle,
+            starting_angle=args["starting_angle"],
             cc_radius=cc_radius_tol,
-            c_symmetry=c_symmetry,
+            symmetry=args["cyclic_symmetry"],
         )[0]
 
+        applied_angles = geom.apply_starting_and_offset(
+            ioutils.euler_angles_load(angle_list),
+            args["starting_angle"],
+            angular_offset,
+        )
         angles_map = output_folder + "/" + output_base + "_angles.em"
-        _, _, _ = tmana.create_angular_distance_maps(angles_map, angle_list, write_out_maps=True)
+        _, _, _ = tmana.create_angular_distance_maps(
+            angles_map, applied_angles, write_out_maps=True, symmetry=args["cyclic_symmetry"]
+        )
 
         temp_df.at[i, "Done"] = True
         temp_df.to_csv(template_list)  # save what was finished in case of a crush
 
+        params_input = {col: temp_df.at[i, col] for col in _TEMPLATE_INPUT_COLS if col in temp_df.columns}
+        params_input["Output base"] = output_base
+        # Store the actually-used wedge paths (may be auto-named); empty string when not used.
+        params_input["Target wedge mask"] = _path_or_inmemory(args["wedge_target"])
+        params_input["Template wedge mask"] = _path_or_inmemory(args["wedge_tmpl"])
+        params_df = build_params_record(params_input, {})
+        params_df.to_csv(output_folder + "params.csv", index=False)
+
+
+def run_single_gradual_case(
+    target_map: MapSource,
+    template: MapSource,
+    template_mask: MapSource,
+    starting_angle: EulerAngles | None = None,
+    symmetry: Symmetry = "C1",
+    wedge_mask_target: MapSource | None = None,
+    wedge_mask_tmpl: MapSource | None = None,
+    angular_range: int = 359,
+    cc_radius: int = 10,
+    *,
+    cyclic_symmetry: Symmetry | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run a gradual rotation sweep for a single (target_map, template, mask) triple.
+
+    Tests all integer angles from 0 to ``angular_range - 1`` degrees for three
+    rotation types: combined (both cone and in-plane), cone-only, and in-plane
+    only.  For each angle and type, :func:`analyze_rotations` is called and
+    the resulting CC metrics are collected.
+
+    Parameters
+    ----------
+    target_map : MapSource
+        Fixed volume against which the rotated template is matched.  A
+        ``MapSource`` is an ndarray or a path to a map file.
+    template : MapSource
+        Reference template map (the rotated side).
+    template_mask : MapSource
+        Binary mask for the template.
+    starting_angle : EulerAngles, optional
+        Base orientation applied before each test angle.  An ``EulerAngles`` is
+        a ``(3,)`` triple or ``(N, 3)`` ndarray.  ``None`` is treated as
+        ``(0, 0, 0)``.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry of the structure.  A ``Symmetry`` is an int or a string
+        like ``"C5"``. D/T/O/I raise ``NotImplementedError``.
+    wedge_mask_target : MapSource, optional
+        Wedge mask for the target map.
+    wedge_mask_tmpl : MapSource, optional
+        Wedge mask for the template.
+    angular_range : int, default=359
+        Number of integer degrees to test (0 to ``angular_range - 1``).
+    cc_radius : int, default=10
+        Radius (voxels) of the central sphere for CC evaluation.
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
+
+    Returns
+    -------
+    tuple of (pandas.DataFrame, pandas.DataFrame)
+        ``final_df`` – per-angle CC metrics for all three rotation types
+        concatenated column-wise;
+        ``hist_df`` – cumulative CC-score histograms for each rotation type.
+    """
+    results = np.zeros((angular_range, 8, 3))
+    n_bins = 100
+    final_hist = np.zeros((n_bins, 3))
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
+    geom.require_cyclic_symmetry(symmetry, "Cone and in-plane distances")  # fail before matching
+
+    for a in range(angular_range):
+        angles = np.full((3, 3), float(a))
+        angles[1, 0] = 0.0  # cone-only: phi=0
+        angles[2, 1:] = 0.0  # inplane-only: theta=psi=0
+
+        for j in range(3):
+            res_df, cc_map, _, _ = analyze_rotations(
+                target_map=target_map,
+                template=template,
+                template_mask=template_mask,
+                input_angles=angles[j, :].reshape(1, 3),
+                wedge_mask_target=wedge_mask_target,
+                wedge_mask_tmpl=wedge_mask_tmpl,
+                output_path=None,
+                starting_angle=starting_angle,
+                cc_radius=cc_radius,
+                symmetry=symmetry,
+            )
+            results[a, :, j] = res_df.values
+            hist, _ = np.histogram(cc_map, bins=n_bins, range=(0.0, 1.0))
+            final_hist[:, j] += hist
+
+    ang_dist = pd.DataFrame(
+        data=results[:, :, 0],
+        columns=[
+            "ang_dist",
+            "cone_dist",
+            "inplane_dist",
+            "common_voxels",
+            "ccc",
+            "ccc_masked",
+            "z_score",
+            "z_score_masked",
+        ],
+    )
+    ang_cone = pd.DataFrame(
+        data=results[:, :, 1],
+        columns=[
+            "cone_ang_dist",
+            "cone_cone_dist",
+            "cone_inplane_dist",
+            "cone_common_voxels",
+            "cone_ccc",
+            "cone_ccc_masked",
+            "cone_z_score",
+            "cone_z_score_masked",
+        ],
+    )
+    ang_inplane = pd.DataFrame(
+        data=results[:, :, 2],
+        columns=[
+            "inplane_ang_dist",
+            "inplane_cone_dist",
+            "inplane_inplane_dist",
+            "inplane_common_voxels",
+            "inplane_ccc",
+            "inplane_ccc_masked",
+            "inplane_z_score",
+            "inplane_z_score_masked",
+        ],
+    )
+    final_df = pd.concat([ang_dist, ang_cone, ang_inplane], axis=1)
+    hist_df = pd.DataFrame(data=final_hist, columns=["ang_dist", "cone_dist", "inplane_dist"])
+
+    return final_df, hist_df
+
 
 def run_angle_analysis(
-    template_list, indices, wedge_path, parent_folder_path, angular_range=359, write_output=False, cc_radius_tol=10
-):
+    template_list: PathOrStr,
+    indices: list[int],
+    parent_folder_path: PathOrStr,
+    angular_range: int = 359,
+    write_output: bool = False,
+    cc_radius_tol: int = 10,
+) -> None:
     """Perform a gradual rotation angular peak analysis.
 
     This function systematically evaluates the effect of varying Euler angles
@@ -1689,24 +2782,22 @@ def run_angle_analysis(
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to a CSV file containing metadata and file paths for templates,
         tomograms, masks, and analysis parameters.
     indices : list of int
         List of row indices in `template_list` to process.
-    wedge_path : str
-        Directory path containing wedge mask files.
-    parent_folder_path : str
+    parent_folder_path : PathOrStr
         Root directory containing structure and template data.
-    angular_range : int, optional
-        Number of degrees to test in the rotation range. Default is 359, meaning
-        all integer angles from 0 to 358 will be analyzed. 359 makes a full circle.
-    write_output : bool, optional
+    angular_range : int, default=359
+        Number of degrees to test in the rotation range. 359 means all integer
+        angles from 0 to 358 are analyzed, covering a full circle.
+    write_output : bool, default=False
         If True, saves the computed angular analysis results and histograms
-        as CSV files in the corresponding output directory. Default is False.
-    cc_radius_tol : int, optional
+        as CSV files in the corresponding output directory.
+    cc_radius_tol : int, default=10
         Radius (in voxels) of the spherical mask applied to the cross-correlation
-        map when evaluating local correlation. Default is 10.
+        map when evaluating local correlation.
 
     Notes
     -----
@@ -1722,152 +2813,397 @@ def run_angle_analysis(
         each rotation type
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
-        structure_name = temp_df.at[i, "Structure"]
-        tmpl_name = temp_df.at[i, "Template"]
-        tmpl_folder = create_structure_path(parent_folder_path, structure_name)
-        template = create_em_path(parent_folder_path, structure_name, tmpl_name)
-        mask = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Mask"])
+        args = _run_analysis_args_from_row(temp_df.loc[i], parent_folder_path)
 
-        wedge_tomo = None
-        wedge_tmpl = None
-
-        if temp_df.at[i, "Compare"] == "tmpl":
-            tomo = template
-
-        elif temp_df.at[i, "Compare"] == "subtomo":
-            tomo = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tomo map"])
-            tomo_number = re.findall(r"\d+", temp_df.at[i, "Tomogram"])[0]
-
-            if temp_df.at[i, "Apply wedge"]:
-                wedge_tomo, wedge_tmpl = create_wedge_names(
-                    wedge_path, tomo_number, temp_df.at[i, "Boxsize"], temp_df.at[i, "Binning"]
-                )
-        else:
-            tomo = create_em_path(parent_folder_path, temp_df.at[i, "Compare"], temp_df.at[i, "Tomo map"])
-
-        starting_angle = temp_df.loc[[i], ["Phi", "Theta", "Psi"]].to_numpy()
-        c_symmetry = temp_df.at[i, "Symmetry"]
-
-        results = np.zeros((angular_range, 8, 3))
-
-        n_bins = 100
-        final_hist = np.zeros((n_bins, 3))
-
-        # loop over each int deg in angular range
-        for a in range(angular_range):
-            angles = np.full((3, 3), a)
-            angles[1, 0] = 0  # only cone rotation
-            angles[2, 1:] = 0  # only inplane rotation
-            # this is what "angles" contain: [[a, a, a],[0, a, a],[a, 0, 0]]
-            # translates to [[both cone and inplane],[cone],[inplane]]
-
-            for j in range(3):
-                res_df, cc_map, _, _ = analyze_rotations(
-                    tomogram=tomo,
-                    template=template,
-                    template_mask=mask,
-                    input_angles=angles[j, :].reshape(1, 3),
-                    wedge_mask_tomo=wedge_tomo,
-                    wedge_mask_tmpl=wedge_tmpl,
-                    output_file=None,
-                    starting_angle=starting_angle,
-                    cc_radius=cc_radius_tol,
-                    c_symmetry=c_symmetry,
-                )
-                results[a, :, j] = res_df.values
-                hist, _ = np.histogram(cc_map, bins=n_bins, range=(0.0, 1.0))
-
-                # do cumulative final_hist for each type of rotation
-                final_hist[:, j] += hist
-
-        # save results separately for each type of rotation
-        ang_dist = pd.DataFrame(
-            data=results[:, :, 0],
-            columns=[
-                "ang_dist",
-                "cone_dist",
-                "inplane_dist",
-                "common_voxels",
-                "ccc",
-                "ccc_masked",
-                "z_score",
-                "z_score_masked",
-            ],
+        final_df, hist_df = run_single_gradual_case(
+            target_map=args["target_map"],
+            template=args["template"],
+            template_mask=args["mask"],
+            starting_angle=args["starting_angle"],
+            symmetry=args["cyclic_symmetry"],
+            wedge_mask_target=args["wedge_target"],
+            wedge_mask_tmpl=args["wedge_tmpl"],
+            angular_range=angular_range,
+            cc_radius=cc_radius_tol,
         )
-        ang_cone = pd.DataFrame(
-            data=results[:, :, 1],
-            columns=[
-                "cone_ang_dist",
-                "cone_cone_dist",
-                "cone_inplane_dist",
-                "cone_common_voxels",
-                "cone_ccc",
-                "cone_ccc_masked",
-                "cone_z_score",
-                "cone_z_score_masked",
-            ],
-        )
-        ang_inplane = pd.DataFrame(
-            data=results[:, :, 2],
-            columns=[
-                "inplane_ang_dist",
-                "inplane_cone_dist",
-                "inplane_inplane_dist",
-                "inplane_common_voxels",
-                "inplane_ccc",
-                "inplane_ccc_masked",
-                "inplane_z_score",
-                "inplane_z_score_masked",
-            ],
-        )
-        final_df = pd.concat([ang_dist, ang_cone, ang_inplane], axis=1)
 
         if write_output:
             output_base = create_output_folder_path(
-                parent_folder_path, structure_name, temp_df.at[i, "Output folder"]
+                parent_folder_path, args["structure_name"], temp_df.at[i, "Output folder"]
             ) + create_output_base_name(i)
             final_df.to_csv(output_base + "_gradual_angles_analysis.csv")
-            hist_df = pd.DataFrame(data=final_hist, columns=["ang_dist", "cone_dist", "inplane_dist"])
             hist_df.to_csv(output_base + "_gradual_angles_histograms.csv")
 
 
-def create_summary_pdf(template_list, indices, parent_folder_path):
-    """Generate a detailed summary PDF for a set of peak analysis results.
+def _flex_pair(a_html: str, b_html: str) -> str:
+    """Wrap two HTML fragments in a flex row that stays side-by-side at any width."""
+    return (
+        '<div style="display:flex;gap:0.5rem;flex-wrap:nowrap;align-items:flex-start">'
+        f'<div style="flex:1 1 0;min-width:0">{a_html}</div>'
+        f'<div style="flex:1 1 0;min-width:0">{b_html}</div>'
+        "</div>"
+    )
 
-    This function reads metadata from a CSV file (`template_list`), retrieves
-    volumetric map data, analysis results, and visualization slices for the
-    specified `indices`, and compiles them into a structured multi-panel PDF
-    report. Each report includes:
 
-    - Template and processing parameters (symmetry, wedge application, voxel size, etc.)
-    - Peak detection information (location, value, line profiles)
-    - Distance map statistics and solidity/volume coverage measures
-    - Scatter plots, histograms, and gradual rotation CCC analysis (if available)
-    - Cross-sectional heatmaps of masks, score maps, and angular distance maps
+def _summary_table_html(row: pd.Series) -> str:
+    """Single 4-column native HTML table: input parameters (blue) / results (green).
 
-    The output is saved as 'id_<index>_summary.pdf' in the corresponding
+    Rendered as a real ``<table>`` so browser text-selection and copy work natively.
+    """
+
+    def _v(col: str) -> str:
+        val = row.get(col)
+        return "—" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
+
+    def _vfile(col: str) -> str:
+        val = _v(col)
+        return val if val == "—" else os.path.basename(val) or val
+
+    input_params = [
+        ("Structure", _v("Structure")),
+        ("Compare", _v("Compare")),
+        ("Target map", _vfile("Target map")),
+        ("Template", _vfile("Template")),
+        ("Mask", _vfile("Mask")),
+        ("Symmetry", _v("Symmetry")),
+        ("Apply wedge", _v("Apply wedge")),
+        ("Target wedge mask", _vfile("Target wedge mask")),
+        ("Template wedge mask", _vfile("Template wedge mask")),
+        ("Angles", _v("Angles")),
+        ("Degrees", _v("Degrees")),
+        ("Binning", _v("Binning")),
+        ("Pixel size (Å)", _v("Pixelsize")),
+        ("Box size (vox)", _v("Boxsize")),
+    ]
+    result_params = [
+        ("Peak value", _v("Peak value")),
+        ("Peak position (x,y,z)", f"{_v('Peak x')}, {_v('Peak y')}, {_v('Peak z')}"),
+        ("Voxels (soft mask)", _v("Voxels")),
+        ("Voxels (tight mask)", _v("Voxels TM")),
+        ("Dimensions (x,y,z)", f"{_v('Dim x')}, {_v('Dim y')}, {_v('Dim z')}"),
+        ("Solidity", _v("Solidity")),
+        ("VC dist all", _v("VC dist_all")),
+        ("VC dist normals", _v("VC dist_normals")),
+        ("VC dist inplane", _v("VC dist_inplane")),
+        ("Solidity dist all", _v("Solidity dist_all")),
+        ("Solidity dist normals", _v("Solidity dist_normals")),
+        ("Solidity dist inplane", _v("Solidity dist_inplane")),
+    ]
+
+    n = max(len(input_params), len(result_params))
+    while len(input_params) < n:
+        input_params.append(("", ""))
+    while len(result_params) < n:
+        result_params.append(("", ""))
+
+    _ts = "border-collapse:collapse;width:100%;font-family:sans-serif;font-size:12px"
+    _in_th = "padding:5px 8px;text-align:left;background:#3a3a5e;color:white;font-size:13px"
+    _res_th = "padding:5px 8px;text-align:left;background:#3a5e3a;color:white;font-size:13px"
+    _in_td = "padding:4px 8px;background:#ddeef6;user-select:text"
+    _res_td = "padding:4px 8px;background:#ddf0dd;user-select:text"
+
+    header = (
+        f"<thead><tr>"
+        f'<th style="{_in_th}">Input parameter</th>'
+        f'<th style="{_in_th}">Value</th>'
+        f'<th style="{_res_th}">Result</th>'
+        f'<th style="{_res_th}">Value</th>'
+        f"</tr></thead>"
+    )
+    body_rows = "".join(
+        f"<tr>"
+        f'<td style="{_in_td}">{in_name}</td>'
+        f'<td style="{_in_td}">{in_val}</td>'
+        f'<td style="{_res_td}">{res_name}</td>'
+        f'<td style="{_res_td}">{res_val}</td>'
+        f"</tr>"
+        for (in_name, in_val), (res_name, res_val) in zip(input_params, result_params)
+    )
+    return f'<table style="{_ts}">{header}<tbody>{body_rows}</tbody></table>'
+
+
+def _ccc_scatter_figure(rot_df: pd.DataFrame) -> go.Figure:
+    """Scatter plots: voxel overlap vs CCC (left) and angular distance vs CCC (right)."""
+    if "Tight mask overlap" in rot_df.columns:
+        overlap_col, overlap_label = "Tight mask overlap", "Tight mask overlap (in voxels)"
+    else:
+        overlap_col, overlap_label = "common_voxels", "Common voxels"
+    fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.08)
+    fig.add_trace(
+        go.Scatter(x=rot_df["ang_dist"], y=rot_df["ccc_masked"], mode="markers", marker=dict(size=3), showlegend=False),
+        row=1,
+        col=1,
+    )
+    fig.update_xaxes(title_text="Angular distance (in degrees)", row=1, col=1)
+    fig.update_yaxes(title_text="CCC", row=1, col=1)
+    fig.add_trace(
+        go.Scatter(
+            x=rot_df[overlap_col], y=rot_df["ccc_masked"], mode="markers", marker=dict(size=3), showlegend=False
+        ),
+        row=1,
+        col=2,
+    )
+    fig.update_xaxes(title_text=overlap_label, row=1, col=2)
+    fig.update_yaxes(title_text="CCC", row=1, col=2)
+    fig.update_layout(height=400, margin=dict(l=60, r=20, t=20, b=60))
+    return fig
+
+
+def _angle_development_figure(hist_df: pd.DataFrame, analysis_df: pd.DataFrame) -> go.Figure:
+    """Line plots: masked-CCC histogram (left) and masked CCC vs rotation angle (right).
+
+    Both panels show three lines: full angular distance, cone-only, and inplane-only.
+    Unmasked CCC columns are not plotted.
+    """
+    fig = make_subplots(rows=1, cols=2, horizontal_spacing=0.08)
+
+    hist_cols = ["ang_dist", "cone_dist", "inplane_dist"]
+    masked_cols = ["ccc_masked", "cone_ccc_masked", "inplane_ccc_masked"]
+    labels = ["ang_dist", "cone", "inplane"]
+
+    # Left: CCC histogram from hist_df (original, correct)
+    x100 = np.linspace(0.0, 1.0, num=100)
+    for col, label in zip(hist_cols, labels):
+        fig.add_trace(
+            go.Scatter(x=x100, y=hist_df[col], mode="lines", name=label, legendgroup=label, showlegend=True),
+            row=1,
+            col=1,
+        )
+    fig.update_yaxes(range=[0, 250], title_text="Number of CCC values (bin size 0.1)", row=1, col=1)
+    fig.update_xaxes(title_text="CCC", row=1, col=1)
+
+    # Right: masked CCC vs rotation angle for all three distance types
+    x359 = np.linspace(0.0, float(len(analysis_df) - 1), num=len(analysis_df))
+    for col, label in zip(masked_cols, labels):
+        fig.add_trace(
+            go.Scatter(x=x359, y=analysis_df[col], mode="lines", name=label, legendgroup=label, showlegend=False),
+            row=1,
+            col=2,
+        )
+    fig.update_xaxes(title_text="Rotation (in degrees)", row=1, col=2)
+    fig.update_yaxes(title_text="Masked CCC", row=1, col=2)
+
+    fig.update_layout(
+        height=450,
+        margin=dict(l=60, r=20, t=20, b=100),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
+    )
+    return fig
+
+
+_RESIZE_SCRIPT = (
+    "<script>\n"
+    "window.addEventListener('load', function() {\n"
+    "  if (window.Plotly) {\n"
+    "    document.querySelectorAll('.js-plotly-plot').forEach(\n"
+    "      function(d) { Plotly.Plots.resize(d); }\n"
+    "    );\n"
+    "  }\n"
+    "});\n"
+    "</script>"
+)
+
+# Flat-file names written by run_single_case mapped from the batch-style
+# suffix used by the batch pipeline (used in _write_case_summary_html).
+_SINGLE_CASE_FILE_MAP: dict[str, str] = {
+    "_scores.em": "scores.em",
+    "_angles_dist_all.em": "distance_map_all.em",
+    "_angles_dist_normals.em": "distance_map_normals.em",
+    "_angles_dist_inplane.em": "distance_map_inplane.em",
+    "_stats.json": "stats.json",
+    "_gradual_angles_histograms.csv": "gradual_angles_histograms.csv",
+    "_gradual_angles_analysis.csv": "gradual_angles_analysis.csv",
+}
+
+
+def _write_case_summary_html(
+    row: pd.Series,
+    output_folder: str,
+    output_base: str,
+    *,
+    tight_mask_path: str | None = None,
+    title: str | None = None,
+) -> str:
+    """Render and write a single-page HTML summary for one analysis case.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Template-schema row (may be a ``params.csv`` row or a template-list row).
+    output_folder : str
+        Directory containing the output files (trailing slash).
+    output_base : str
+        Filename prefix for the batch pipeline (e.g. ``"id_3"``).  Pass ``""``
+        for single-case outputs, which use flat filenames (``scores.em``, …).
+    tight_mask_path : str, optional
+        Absolute path to the tight-mask file.  When provided, the tight-mask
+        cross-section panel is included.
+    title : str, optional
+        ``<h1>`` title string.  Defaults to ``"Summary — <output_base>"`` for
+        batch mode or ``"Summary"`` for single-case mode.
+
+    Returns
+    -------
+    str
+        Path to the written HTML file.
+    """
+    _folder = Path(output_folder)
+
+    if output_base:
+
+        def _p(suffix: str) -> str | None:
+            path = _folder / (output_base + suffix)
+            return str(path) if path.is_file() else None
+
+        rot_csv = _p(".csv")
+        html_out = str(_folder / (output_base + "_summary.html"))
+        title_str = title or f"Summary — {output_base}"
+    else:
+
+        def _p(suffix: str) -> str | None:
+            fname = _SINGLE_CASE_FILE_MAP.get(suffix, "")
+            if not fname:
+                return None
+            path = _folder / fname
+            return str(path) if path.is_file() else None
+
+        rot_csv = None
+        html_out = str(_folder / "summary.html")
+        title_str = title or "Summary"
+
+    figs = visualize_results(
+        scores=_p("_scores.em"),
+        dist_all_map=_p("_angles_dist_all.em"),
+        dist_normals_map=_p("_angles_dist_normals.em"),
+        dist_inplane_map=_p("_angles_dist_inplane.em"),
+        peak_stats=_p("_stats.json"),
+    )
+
+    html_parts: list[str] = []
+
+    # ── Section 1: input parameters | results (native HTML table — copyable) ─
+    html_parts.append("<h2>Run parameters &amp; results</h2>\n" + _summary_table_html(row))
+
+    # ── Section 2: line profiles | peak shape ──────────────────────────────
+    _resp = {"responsive": True}
+    lp_html = (
+        figs["line_profiles"].to_html(include_plotlyjs=False, full_html=False, default_width="100%", config=_resp)
+        if "line_profiles" in figs
+        else None
+    )
+    ps_html = (
+        figs["peak_shape"].to_html(include_plotlyjs=False, full_html=False, default_width="100%", config=_resp)
+        if "peak_shape" in figs
+        else None
+    )
+    if lp_html and ps_html:
+        html_parts.append("<h2>Line profiles &amp; peak shape</h2>\n" + _flex_pair(lp_html, ps_html))
+    elif lp_html:
+        html_parts.append("<h2>Line profiles</h2>\n" + lp_html)
+    elif ps_html:
+        html_parts.append("<h2>Peak shape</h2>\n" + ps_html)
+
+    # ── Section 3: CCC scatter ──────────────────────────────────────────────
+    if rot_csv:
+        try:
+            rot_df = pd.read_csv(rot_csv)
+            if "ang_dist" in rot_df.columns and "ccc_masked" in rot_df.columns:
+                html_parts.append(
+                    "<h2>CCC scatter</h2>\n"
+                    + _ccc_scatter_figure(rot_df).to_html(include_plotlyjs=False, full_html=False)
+                )
+        except Exception:
+            pass
+
+    # ── Section 4: angle development ───────────────────────────────────────
+    hist_csv = _p("_gradual_angles_histograms.csv")
+    analysis_csv = _p("_gradual_angles_analysis.csv")
+    if hist_csv and analysis_csv:
+        try:
+            h_df = pd.read_csv(hist_csv, index_col=0)
+            a_df = pd.read_csv(analysis_csv, index_col=0)
+            html_parts.append(
+                "<h2>Angle development</h2>\n"
+                + _angle_development_figure(h_df, a_df).to_html(include_plotlyjs=False, full_html=False)
+            )
+        except Exception:
+            pass
+
+    # ── Section 5: tight mask cross-sections (centered) ────────────────────
+    if tight_mask_path and os.path.isfile(tight_mask_path):
+        try:
+            mask_arr = cryomap.read(tight_mask_path)
+            fig_html = _make_slice_figure(mask_arr, colorscale="gray", title="", show_zoom=False).to_html(
+                include_plotlyjs=False, full_html=False
+            )
+            html_parts.append(
+                "<h2>Tight mask cross-sections</h2>\n"
+                + f'<div style="display:flex;justify-content:center">{fig_html}</div>'
+            )
+        except Exception:
+            pass
+
+    # ── Section 6: orthogonal cross-sections (centered) ────────────────────
+    for key, section_title in [
+        ("score_slices", "Score map cross-sections"),
+        ("distance_slices_all", "Distance map (all) cross-sections"),
+        ("distance_slices_normals", "Distance map (normals) cross-sections"),
+        ("distance_slices_inplane", "Distance map (in-plane) cross-sections"),
+    ]:
+        if key in figs:
+            figs[key].update_layout(title_text="", margin_t=0)
+            fig_html = figs[key].to_html(include_plotlyjs=False, full_html=False)
+            html_parts.append(
+                f"<h2>{section_title}</h2>\n" + f'<div style="display:flex;justify-content:center">{fig_html}</div>'
+            )
+
+    full_html = (
+        "<!DOCTYPE html>\n<html>\n<head>\n"
+        '<meta charset="utf-8">\n'
+        f"<title>{title_str}</title>\n"
+        "<style>body{font-family:sans-serif;margin:1rem}h1,h2{text-align:center}</style>\n"
+        '<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>\n'
+        "</head>\n<body>\n"
+        f"<h1>{title_str}</h1>\n" + "\n".join(html_parts) + "\n" + _RESIZE_SCRIPT + "\n</body>\n</html>"
+    )
+
+    with open(html_out, "w", encoding="utf-8") as fh:
+        fh.write(full_html)
+
+    return html_out
+
+
+def create_summary_html(template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr) -> None:
+    """Generate a single-page HTML summary for a set of peak analysis results.
+
+    Reads metadata from `template_list`, gathers all available visualisation
+    figures for each index via :func:`visualize_results`, and writes them into
+    one combined HTML file per index.  Each file embeds Plotly via CDN and
+    contains all panels in order.
+
+    The output is saved as ``id_<index>_summary.html`` in the corresponding
     output folder for each index.
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV file containing metadata for all templates and analyses.
     indices : list of int
         List of row indices from `template_list` to process.
-    parent_folder_path : str
-        Base directory containing the structure folders, output folders, and map files.
+    parent_folder_path : PathOrStr
+        Base directory containing the structure folders, output folders, and
+        map files.
 
     Notes
     -----
     - If the "Done" column is False for a given index, that entry is skipped.
-    - Gradual rotation histogram and CCC analysis are included if the corresponding
-      '_gradual_angles_histograms.csv' and '_gradual_angles_analysis.csv' are found.
+    - Panels whose prerequisite files are absent are silently omitted.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         if not temp_df.at[i, "Done"]:
@@ -1877,257 +3213,116 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
         output_base = create_output_base_name(i)
         output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
 
-        if temp_df.at[i, "Compare"] == "tmpl":
-            title_end = "self"
-        elif temp_df.at[i, "Compare"] == "subtomo":
-            title_end = "subtomo (" + temp_df.at[i, "Tomo map"] + ")"
-        else:
-            title_end = temp_df.at[i, "Compare"] + " (" + temp_df.at[i, "Tomo map"] + ")"
+        tight_mask_name = temp_df.at[i, "Tight mask"] if "Tight mask" in temp_df.columns else None
+        tight_mask_path: str | None = None
+        if tight_mask_name and not (isinstance(tight_mask_name, float) and pd.isna(tight_mask_name)):
+            candidate = _resolve_input_path(tight_mask_name, parent_folder_path, structure_name)
+            if os.path.isfile(candidate):
+                tight_mask_path = candidate
 
-        figure_title = structure_name + " (" + temp_df.at[i, "Template"] + ") matched with " + title_end
+        # Use the params.csv wedge mask values (which hold auto-named paths when
+        # the columns were not explicitly set in the template list).
+        row = temp_df.loc[i].copy()
+        params_csv_path = output_folder + "params.csv"
+        if os.path.isfile(params_csv_path):
+            params_row = pd.read_csv(params_csv_path).iloc[0]
+            for _col in ("Target wedge mask", "Template wedge mask"):
+                if _col in params_row.index and pd.notna(params_row[_col]):
+                    row[_col] = params_row[_col]
 
-        extenstion_list = ["_scores.em", "_angles_dist_all.em", "_angles_dist_normals.em", "_angles_dist_inplane.em"]
-
-        tmpl_info = [
-            "Symmetry",
-            "Apply wedge",
-            "Degrees",
-            "Apply angular offset",
-            "Binning",
-            "Pixelsize",
-            "Boxsize",
-            "Voxels",
-            "Voxels TM",
-            "Solidity",
-        ]
-
-        temp_df = temp_df.round(decimals=4)
-        tmpl_dict = pd.DataFrame(temp_df.loc[temp_df.index[i], tmpl_info]).to_dict()
-        tmpl_dict = tmpl_dict.get(i)
-
-        peak_info = ["Peak value"]
-        peak_dict = pd.DataFrame(temp_df.loc[temp_df.index[i], peak_info]).to_dict()
-        peak_dict = peak_dict.get(i)
-
-        dist_names = ["dist_all", "dist_normals", "dist_inplane"]
-        dist_dict = {}
-
-        values_temp = np.zeros((3,))
-        peak_center = np.zeros((3,))
-        bb_dim = np.zeros((3,))
-        peak_drop = np.zeros((3,))
-        for d, dim in enumerate(["x", "y", "z"]):
-            peak_center[d] = temp_df.at[i, "Peak " + dim]
-            bb_dim[d] = temp_df.at[i, "Dim " + dim]
-            peak_drop[d] = temp_df.at[i, "Drop " + dim]
-
-        peak_dict["Peak center"] = peak_center
-        tmpl_dict["Dimensions"] = bb_dim
-        peak_dict["Drop"] = peak_drop
-
-        dist_vc = np.zeros((3,))
-        dist_sol = np.zeros((3,))
-        dist_vco = np.zeros((3,))
-        for d, dname in enumerate(dist_names):
-            dist_vc[d] = temp_df.at[i, "VC " + dname]
-            dist_sol[d] = temp_df.at[i, "Solidity " + dname]
-            dist_vco[d] = temp_df.at[i, "VCO " + dname]
-
-        # dist_dict['Dummy'] = 1
-        dist_dict["Dist maps Solidity"] = dist_sol
-        dist_dict["Dist maps VC"] = dist_vc
-        dist_dict["Dist maps VC open"] = dist_vco
-
-        for d, dname in enumerate(dist_names):
-            for j, dim in enumerate(["x", "y", "z"]):
-                values_temp[j] = temp_df.at[i, "O " + dname + " " + dim]
-
-            dist_dict["Open " + dname] = values_temp.copy()
-
-        values_temp = np.zeros((5,))
-
-        for sts in ["Mean", "Median", "Var"]:
-            for r in range(1, 6):
-                values_temp[r - 1] = temp_df.at[i, sts + " " + str(r)]
-            peak_dict[sts] = values_temp.copy()
-
-        dicts = []
-        with np.printoptions(
-            precision=4,
-            suppress=True,
-        ):
-            dicts.append([[k, str(v)] for k, v in tmpl_dict.items()])
-            dicts.append([[k, str(v)] for k, v in peak_dict.items()])
-            dicts.append([[k, str(v)] for k, v in dist_dict.items()])
-
-        # extract the middle cross sections of tight mask
-        cross_slices = []
-        tight_mask = cryomap.read(create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"]))
-        cross_slices.append(cryomap.get_cross_slices(tight_mask))
-
-        # also extract cross sections of output maps where the cc peak centers are
-        for m, ext_name in enumerate(extenstion_list):
-            input_map = cryomap.read(output_folder + output_base + ext_name)
-
-            if m == 0:
-                cross_slices.append(cryomap.get_cross_slices(input_map, slice_numbers=peak_center, axis=[0, 1, 2]))
-
-            cross_slices.append(
-                cryomap.get_cross_slices(input_map, slice_half_dim=5, slice_numbers=peak_center, axis=[0, 1, 2])
-            )
-
-        grid_rows_n = 2
-        unit_size = 5
-        grid_row_ratio = [1.6 * unit_size, 6 * unit_size]
-
-        # check if file for histogram analysis exists or not
-        hist_file = output_folder + output_base + "_gradual_angles_histograms.csv"
-        add_hist = False
-        last_row = 1
-
-        # change the figure layout slightly if hist file exists
-        if os.path.isfile(hist_file):
-            grid_rows_n += 1
-            add_hist = True
-            last_row = 2
-            grid_row_ratio = [1.6 * unit_size, 0.8 * unit_size, 6 * unit_size]
-
-        fig_height = sum(grid_row_ratio) + 0.4
-        widths = [unit_size, unit_size, unit_size, unit_size * 0.05]
-
-        fig = plt.figure(layout="constrained", figsize=(sum(widths), fig_height))
-        fig.suptitle(figure_title, fontsize=16, y=1.008)
-
-        grid_base = gridspec.GridSpec(grid_rows_n, 1, figure=fig, height_ratios=grid_row_ratio)
-        grid_rows = [gridspec.GridSpecFromSubplotSpec(2, 3, subplot_spec=grid_base[0])]
-
-        if add_hist:
-            grid_rows.append(gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=grid_base[1]))
-
-        grid_rows.append(
-            gridspec.GridSpecFromSubplotSpec(
-                6,
-                4,
-                subplot_spec=grid_base[last_row],
-                height_ratios=[unit_size, unit_size, unit_size, unit_size, unit_size, unit_size],
-                width_ratios=widths,
-            )
+        _write_case_summary_html(
+            row=row,
+            output_folder=output_folder,
+            output_base=output_base,
+            tight_mask_path=tight_mask_path,
+            title=f"Summary — index {i}",
         )
 
-        table_plots = []
-        for j in range(3):
-            table_plots.append(fig.add_subplot(grid_rows[0][0, j]))
 
-        col_width = [[0.4, 0.6], [0.3, 0.7], [0.4, 0.6]]
-        for tbl, dc, cw in zip(table_plots, dicts, col_width):
-            tbl_h = tbl.table(colWidths=cw, cellText=dc, bbox=[0, 0, 1, 1])
-            tbl_h.auto_set_font_size(False)
-            tbl_h.set_fontsize(10)
+def create_summary_html_from_folder(output_folder: PathOrStr) -> str:
+    """Generate an HTML summary for a single-case output folder.
 
-        rot_info = pd.read_csv(output_folder + output_base + ".csv", index_col=0)
-        line_profiles = pd.read_csv(output_folder + output_base + "_peak_line_profiles.csv", index_col=0)
+    Reads ``params.csv`` from *output_folder*, reconstructs the parameter row,
+    and delegates to :func:`_write_case_summary_html` using the flat single-case
+    file naming convention.
 
-        if "Tight mask overlap" not in rot_info.columns:
-            print(i)
-            continue
+    Parameters
+    ----------
+    output_folder : PathOrStr
+        Directory written by :func:`run_single_case`.  Must contain
+        ``params.csv``.
 
-        ad_plt = sns.scatterplot(
-            ax=fig.add_subplot(grid_rows[0][1, 0]),
-            data=rot_info,
-            x="Tight mask overlap",
-            y="ccc_masked",
-            linewidth=0,
-            s=5,
-        )
-        ad_plt.set(ylabel="CCC", xlabel="Tight mask overlap (in voxels)")
-        ad_plt = sns.scatterplot(
-            ax=fig.add_subplot(grid_rows[0][1, 1]), data=rot_info, x="ang_dist", y="ccc_masked", linewidth=0, s=5
-        )
-        ad_plt.set(ylabel=None, xlabel="Angular distance (in degrees)")
-        ad_plt = sns.lineplot(ax=fig.add_subplot(grid_rows[0][1, 2]), data=line_profiles[["x", "y", "z"]])
-        ad_plt.set(ylabel=None, xlabel="Position (in voxels)")
+    Returns
+    -------
+    str
+        Path to the written ``summary.html`` file.
 
-        if add_hist:
-            hist_info = pd.read_csv(hist_file, index_col=0)
-            hist_plt = fig.add_subplot(grid_rows[1][0, 0])
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 1.0, num=100), y="ang_dist")
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 1.0, num=100), y="cone_dist")
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 1.0, num=100), y="inplane_dist")
-            hist_plt.set(ylim=(0, 250), ylabel="Number of CCC values (bin size 0.1)", xlabel="CCC")
+    Raises
+    ------
+    FileNotFoundError
+        If ``params.csv`` is not found in *output_folder*.
+    """
+    folder = str(output_folder).rstrip("/\\") + "/"
+    params_path = folder + "params.csv"
+    if not os.path.isfile(params_path):
+        raise FileNotFoundError(f"params.csv not found in {folder!r}")
 
-            hist_info = pd.read_csv(output_folder + output_base + "_gradual_angles_analysis.csv", index_col=0)
-            hist_plt = fig.add_subplot(grid_rows[1][0, 1])
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 359.0, num=359), y="ccc_masked")
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 359.0, num=359), y="cone_ccc_masked")
-            sns.lineplot(ax=hist_plt, data=hist_info, x=np.linspace(0.0, 359.0, num=359), y="inplane_ccc_masked")
-            hist_plt.set(ylabel="CCC", xlabel="Rotation (in degrees)")
+    params_df = pd.read_csv(params_path)
+    row = params_df.iloc[0]
 
-        for c, slice in enumerate(cross_slices):
-            if c <= 1:
-                use_annot = False
-            else:
-                use_annot = True
+    tight_mask_path: str | None = None
+    tight_mask_val = row.get("Tight mask") if hasattr(row, "get") else row.get("Tight mask", None)
+    if tight_mask_val and not (isinstance(tight_mask_val, float) and pd.isna(tight_mask_val)):
+        candidate = str(tight_mask_val)
+        if os.path.isfile(candidate):
+            tight_mask_path = candidate
 
-            f_fmt = ".2f"
-            if c == 0:
-                data_max = 1.0
-                c_scheme = "gray"
-            elif c < 3:
-                data_max = temp_df.at[i, "Peak value"]
-                c_scheme = "viridis"
-            else:
-                data_max = 180
-                c_scheme = "cividis"
-                f_fmt = ".1f"
+    return _write_case_summary_html(
+        row=row,
+        output_folder=folder,
+        output_base="",
+        tight_mask_path=tight_mask_path,
+    )
 
-            hm1 = fig.add_subplot(grid_rows[last_row][c, 0])
-            hm2 = fig.add_subplot(grid_rows[last_row][c, 1])
-            hm3 = fig.add_subplot(grid_rows[last_row][c, 2])
-            cb = fig.add_subplot(grid_rows[last_row][c, 3])
 
-            sns.heatmap(
-                ax=hm1,
-                data=np.flipud(slice[0].T),
-                annot=use_annot,
-                fmt=f_fmt,
-                square=True,
-                cmap=c_scheme,
-                yticklabels=False,
-                xticklabels=False,
-                vmin=0,
-                vmax=data_max,
-                cbar_ax=cb,
-            )
-            sns.heatmap(
-                ax=hm2,
-                data=np.flipud(slice[1].T),
-                annot=use_annot,
-                fmt=f_fmt,
-                square=True,
-                cmap=c_scheme,
-                yticklabels=False,
-                xticklabels=False,
-                vmin=0,
-                vmax=data_max,
-                cbar=False,
-            )
-            sns.heatmap(
-                ax=hm3,
-                data=np.flipud(slice[2].T),
-                annot=use_annot,
-                fmt=f_fmt,
-                square=True,
-                cmap=c_scheme,
-                yticklabels=False,
-                xticklabels=False,
-                vmin=0,
-                vmax=data_max,
-                cbar=False,
-            )
+def params_to_template_row(
+    params_csv: PathOrStr,
+    *,
+    template_columns: list[str] | None = None,
+    output_folder_name: str | None = None,
+) -> pd.Series:
+    """Convert a single-case ``params.csv`` to a template-list-compatible row.
 
-        # plt.tight_layout() # or layout = "constrained" in figure
-        plt.savefig(output_folder + output_base + "_summary.pdf", transparent=True, bbox_inches="tight")
-        plt.close()
+    GUI helper: lets the ppana GUI add a single-case result to an existing
+    template-list DataFrame or build a new one from scratch.
+
+    Parameters
+    ----------
+    params_csv : PathOrStr
+        Path to the ``params.csv`` written by :func:`run_single_case`.
+    template_columns : list of str, optional
+        Column order to enforce.  Defaults to ``list(_TEMPLATE_INPUT_COLS) +
+        list(_RESULT_COLS)``.
+    output_folder_name : str, optional
+        Value to store in the ``"Output folder"`` column.  If ``None``, the
+        parent directory name of *params_csv* is used.
+
+    Returns
+    -------
+    pandas.Series
+        One row compatible with the template-list schema.
+    """
+    params_df = pd.read_csv(str(params_csv))
+    row = params_df.iloc[0].copy()
+
+    if output_folder_name is None:
+        output_folder_name = Path(params_csv).parent.name
+    row["Output folder"] = output_folder_name
+
+    if template_columns is None:
+        template_columns = list(_TEMPLATE_INPUT_COLS) + list(_RESULT_COLS)
+
+    return row.reindex(template_columns)
 
 
 ##########################################################################################################################
@@ -2136,7 +3331,9 @@ def create_summary_pdf(template_list, indices, parent_folder_path):
 
 
 # Check what kind of descriptors skimage can offer
-def get_shape_stats(template_list, indices, shape_type, parent_folder_path):
+def get_shape_stats(
+    template_list: PathOrStr, indices: list[int], shape_type: str, parent_folder_path: PathOrStr
+) -> None:
     """Compute and save shape statistics for specific shapes in a template list.
 
     This function reads path from a CSV file, loads corresponding tight masks, labels
@@ -2145,14 +3342,14 @@ def get_shape_stats(template_list, indices, shape_type, parent_folder_path):
 
     Parameters
     ----------
-    template_list : str or path-like
+    template_list : PathOrStr
         Path to the CSV file containing metadata for all templates and analyses.
     indices : array_like of int
         Rows in `template_list` for which statistics should be computed.
     shape_type : str
         A descriptive label for the type of shape used for analysis. This string
         is appended to the output CSV filename.
-    parent_folder_path : str or path-like
+    parent_folder_path : PathOrStr
         Path to the root directory containing the structure and mask files.
 
     Notes
@@ -2172,29 +3369,13 @@ def get_shape_stats(template_list, indices, shape_type, parent_folder_path):
         '<structure_path>/<output_folder>/id_<index>_shape_stats_<shape_type>.csv'
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         structure_name = temp_df.at[i, "Structure"]
         sharp_mask = cryomap.read(create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tight mask"]))
 
-        mask_label = measure.label(sharp_mask, connectivity=1)
-        mask_stats = pd.DataFrame(
-            measure.regionprops_table(
-                mask_label,
-                properties=(
-                    "label",
-                    "area",
-                    "area_bbox",
-                    "area_convex",
-                    "equivalent_diameter_area",
-                    "euler_number",
-                    "feret_diameter_max",
-                    "inertia_tensor",
-                    "solidity",
-                ),
-            )
-        )
+        stats_df = shape_stats(sharp_mask)
 
         output_base = (
             create_structure_path(parent_folder_path, structure_name)
@@ -2203,86 +3384,10 @@ def get_shape_stats(template_list, indices, shape_type, parent_folder_path):
             + str(i)
             + "_shape_stats_"
         )
-        mask_stats.to_csv(output_base + shape_type + ".csv")
+        stats_df.to_csv(output_base + shape_type + ".csv")
 
 
-def plot_scores_and_peaks(peak_files, plot_title=None, output_file=None):
-    """
-    Plot heatmaps of peak cross-sections for multiple peak-related data arrays.
-
-    This function visualizes peak data from a list of files or arrays by generating
-    heatmaps for three orthogonal 2D slices (X, Y, Z) centered at the main peak.
-    All peaks are normalized to the same value range based on the first peak file.
-
-    Parameters
-    ----------
-    peak_files : list of array_like or list of str
-        List of 3D arrays or file paths containing peak-related data.
-        Each entry is processed using
-        `tmana.create_starting_parameters_2D` to extract peak-centered slices.
-    plot_title : str, optional
-        Title for the entire figure. If None, no title is added.
-    output_file : str, optional
-        Path to save the figure as an image file. If None, the figure is not saved.
-    """
-
-    n_rows = len(peak_files)
-    row_size = 4 * n_rows
-    fig, axs = plt.subplots(n_rows, 4, figsize=(row_size, 100), gridspec_kw={"width_ratios": [20, 20, 20, 1]})
-
-    if plot_title is not None:
-        fig.suptitle(plot_title, fontsize=28, y=1.005)
-
-    peak_center, peak_height, _ = tmana.create_starting_parameters_2D(peak_files[0])
-
-    for i, p in enumerate(peak_files):
-        _, _, peaks = tmana.create_starting_parameters_2D(p, peak_center=peak_center)
-        data_min = np.amin(p)
-
-        sns.heatmap(
-            ax=axs[i][0],
-            data=np.flipud(peaks[:, :, 0].T),
-            square=True,
-            cmap="viridis",
-            annot=False,
-            yticklabels=False,
-            xticklabels=False,
-            vmin=data_min,
-            vmax=peak_height,
-            cbar_ax=axs[i][3],
-        )
-        sns.heatmap(
-            ax=axs[i][1],
-            data=np.flipud(peaks[:, :, 1].T),
-            square=True,
-            cmap="viridis",
-            annot=False,
-            yticklabels=False,
-            xticklabels=False,
-            vmin=data_min,
-            vmax=peak_height,
-            cbar=False,
-        )
-        sns.heatmap(
-            ax=axs[i][2],
-            data=np.flipud(peaks[:, :, 2].T),
-            square=True,
-            cmap="viridis",
-            annot=False,
-            yticklabels=False,
-            xticklabels=False,
-            vmin=data_min,
-            vmax=peak_height,
-            cbar=False,
-        )
-
-    plt.tight_layout()
-
-    if output_file is not None:
-        plt.savefig(output_file, transparent=True, bbox_inches="tight")
-
-
-def compute_peak_shapes(template_list, indices, parent_folder_path):
+def compute_peak_shapes(template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr) -> None:
     """
     Compute and record peak shape statistics from scores maps for selected structures.
 
@@ -2292,17 +3397,17 @@ def compute_peak_shapes(template_list, indices, parent_folder_path):
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV file containing metadata for all templates and analyses.
     indices : list of int
         List of row indices in the template list to process.
-    parent_folder_path : str
+    parent_folder_path : PathOrStr
         Path to the root directory containing structure data and score maps.
 
     Notes
     -----
     - Only rows marked as 'Done == True' in the template list are processed.
-    - Structures named '"membrane"' are skipped.
+    - Structures named ``'membrane'`` are skipped.
     - peak shapes are measured using `tmana.evaluate_scores_map` with
       three thresholding methods:
       triangle, Gaussian, and hard threshold.
@@ -2314,7 +3419,7 @@ def compute_peak_shapes(template_list, indices, parent_folder_path):
       output folder under the name 'peaks.png'.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         if not temp_df.at[i, "Done"]:
@@ -2326,37 +3431,40 @@ def compute_peak_shapes(template_list, indices, parent_folder_path):
         structure_name = temp_df.at[i, "Structure"]
 
         output_base = create_output_base_name(i)
-        output_folder = create_ouptut_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
+        output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
         scores_map = cryomap.read(output_folder + output_base + "_scores.em")
 
-        t_map, tp_shape, peak_value, t_th_map, t_surf = tmana.evaluate_scores_map(
-            scores_map, label_type="ellipsoid", threshold_type="triangle"
-        )
-        g_map, gp_shape, _, g_th_map, g_surf = tmana.evaluate_scores_map(
-            scores_map, label_type="ellipsoid", threshold_type="gauss"
-        )
-        h_map, hp_shape, _, h_th_map, h_surf = tmana.evaluate_scores_map(
-            scores_map, label_type="ellipsoid", threshold_type="hard"
-        )
+        shapes = peak_shapes(scores_map)
 
         for t, p in enumerate(["x", "y", "z"]):
-            temp_df.at[i, "TP " + p] = np.round(tp_shape[t], 3)  # triangle
-            temp_df.at[i, "GP " + p] = np.round(gp_shape[t], 3)  # gaussian
-            temp_df.at[i, "HP " + p] = np.round(hp_shape[t], 3)  # hard
+            temp_df.at[i, "TP " + p] = np.round(shapes["tp_shape"][t], 3)
+            temp_df.at[i, "GP " + p] = np.round(shapes["gp_shape"][t], 3)
+            temp_df.at[i, "HP " + p] = np.round(shapes["hp_shape"][t], 3)
 
-        temp_df.at[i, "Peak value"] = peak_value
+        temp_df.at[i, "Peak value"] = shapes["peak_value"]
 
         temp_df.to_csv(template_list)  # save what was finished in case of a crush
 
-        plot_scores_and_peaks(
-            [scores_map, t_th_map, t_surf, t_map, g_th_map, g_surf, g_map, h_th_map, h_surf, h_map],
+        visplot.plot_scores_and_peaks(
+            [
+                scores_map,
+                shapes["t_th_map"],
+                shapes["t_surf"],
+                shapes["t_map"],
+                shapes["g_th_map"],
+                shapes["g_surf"],
+                shapes["g_map"],
+                shapes["h_th_map"],
+                shapes["h_surf"],
+                shapes["h_map"],
+            ],
             plot_title=structure_name + " id" + str(i),
-            output_file=output_folder + "peaks.png",
+            output_path=output_folder + "peaks.png",
         )
 
 
 ## Function to change the output folder base name
-def rename_folders(template_list, indices, parent_folder_path):
+def rename_folders(template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr) -> None:
     """
     Rename output folders for specified dataset entries and update metadata.
 
@@ -2367,11 +3475,11 @@ def rename_folders(template_list, indices, parent_folder_path):
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV file containing metadata for all templates and analyses.
     indices : iterable of int
         List or array of row indices in `template_list` to process.
-    parent_folder_path : str
+    parent_folder_path : PathOrStr
         Base directory containing all structure folders.
 
     Notes
@@ -2381,7 +3489,7 @@ def rename_folders(template_list, indices, parent_folder_path):
       based on the index.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         structure_path = create_structure_path(parent_folder_path, temp_df.at[i, "Structure"])
@@ -2395,7 +3503,7 @@ def rename_folders(template_list, indices, parent_folder_path):
 
 
 # Function to change the names of TM results -> facilitate reading later on
-def rename_scores_angles(template_list, indices, parent_folder_path):
+def rename_scores_angles(template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr) -> None:
     """
     Rename score and angle-related output files for specified dataset entries.
 
@@ -2406,11 +3514,11 @@ def rename_scores_angles(template_list, indices, parent_folder_path):
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV file containing metadata for all templates and analyses.
     indices : iterable of int
         List or array of row indices in `template_list` to process.
-    parent_folder_path : str
+    parent_folder_path : PathOrStr
         Base directory containing all structure folders.
 
     Notes
@@ -2440,7 +3548,7 @@ def rename_scores_angles(template_list, indices, parent_folder_path):
 
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         structure_name = temp_df.at[i, "Structure"]
@@ -2448,11 +3556,11 @@ def rename_scores_angles(template_list, indices, parent_folder_path):
         if temp_df.at[i, "Compare"] == "tmpl":
             comp_type = "tt_"
         elif temp_df.at[i, "Compare"] == "subtomo":
-            tomo = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Tomo map"])
+            tomo = create_em_path(parent_folder_path, structure_name, temp_df.at[i, "Target map"])
             tomo_number = re.findall(r"\d+", temp_df.at[i, "Tomogram"])[0]
             comp_type = "ts_t" + tomo_number + "_"
         else:
-            tomo = create_em_path(parent_folder_path, temp_df.at[i, "Compare"], temp_df.at[i, "Tomo map"])
+            tomo = create_em_path(parent_folder_path, temp_df.at[i, "Compare"], temp_df.at[i, "Target map"])
             comp_type = "td_" + temp_df.at[i, "Compare"] + "_"
 
         output_base = comp_type + temp_df.at[i, "Map type"]
@@ -2480,7 +3588,7 @@ def rename_scores_angles(template_list, indices, parent_folder_path):
         os.rename(angles_map4, new_angles_map4)
 
 
-def correct_bbox(template_list, indices):
+def correct_bbox(template_list: PathOrStr, indices: list[int]) -> None:
     """
     Increment specific bounding box-related columns by 1 for completed entries.
 
@@ -2491,7 +3599,7 @@ def correct_bbox(template_list, indices):
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV file containing metadata for all templates and analyses.
         The file must include the following columns:
         - "Dim x", "Dim y", "Dim z"
@@ -2502,7 +3610,7 @@ def correct_bbox(template_list, indices):
         List or array of row indices to process within the CSV file.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         if not temp_df.at[i, "Done"]:
@@ -2517,7 +3625,7 @@ def correct_bbox(template_list, indices):
         temp_df.to_csv(template_list)
 
 
-def recompute_dist_maps(template_list, indices, parent_folder_path, angle_list_path):
+def recompute_dist_maps(template_list: PathOrStr, indices: list[int], parent_folder_path: PathOrStr) -> None:
     """
     Recompute angular distance maps for specified entries in a template list.
 
@@ -2527,17 +3635,16 @@ def recompute_dist_maps(template_list, indices, parent_folder_path, angle_list_p
 
     Parameters
     ----------
-    template_list : str
+    template_list : PathOrStr
         Path to the CSV file containing metadata for all templates and analyses.
     indices : iterable of int
         List or array of row indices in the CSV file to process.
-    parent_folder_path : str
-        Base path to the parent folder where structure and output folders are.
-    angle_list_path : str
-        Base path to the directory containing angle list files referenced in the CSV.
+    parent_folder_path : PathOrStr
+        Base path to the parent folder where structure and output folders are. If "Angles"
+        contains a bare filename, it is resolved via ``parent_folder/structure/``.
     """
 
-    temp_df = pd.read_csv(template_list, index_col=0)
+    temp_df = _read_template_list(template_list)
 
     for i in indices:
         if not temp_df.at[i, "Done"]:
@@ -2548,6 +3655,18 @@ def recompute_dist_maps(template_list, indices, parent_folder_path, angle_list_p
         output_base = create_output_base_name(i)
         output_folder = create_output_folder_path(parent_folder_path, structure_name, temp_df.at[i, "Output folder"])
         angles_map = output_folder + output_base + "_angles.em"
-        angle_list = angle_list_path + temp_df.at[i, "Angles"]
-        c_symmetry = temp_df.at[i, "Symmetry"]
-        _, _, _ = tmana.create_angular_distance_maps(angles_map, angle_list, write_out_maps=True, c_symmetry=c_symmetry)
+        angle_list = _resolve_input_path(temp_df.at[i, "Angles"], parent_folder_path, structure_name)
+        cyclic_symmetry = temp_df.at[i, "Symmetry"]
+        starting_angle = np.array([temp_df.at[i, "Phi"], temp_df.at[i, "Theta"], temp_df.at[i, "Psi"]], dtype=float)
+        if temp_df.at[i, "Apply angular offset"]:
+            angular_offset = np.full((3,), float(temp_df.at[i, "Degrees"]) / 2.0)
+        else:
+            angular_offset = None
+        applied_angles = geom.apply_starting_and_offset(
+            ioutils.euler_angles_load(angle_list),
+            starting_angle,
+            angular_offset,
+        )
+        _, _, _ = tmana.create_angular_distance_maps(
+            angles_map, applied_angles, write_out_maps=True, symmetry=cyclic_symmetry
+        )

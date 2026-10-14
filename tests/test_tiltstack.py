@@ -1,9 +1,11 @@
-import matplotlib.pyplot as plt
 from cryocat.utils.ioutils import fileformat_replace_pattern
 from cryocat.core.tiltstack import *
+from cryocat.core import cryomap
+from cryocat.utils.imageutils import dose_attenuator
 from pathlib import Path
 import pytest
 import mrcfile
+import numpy as np
 from scipy.ndimage import gaussian_filter
 import os
 import shutil
@@ -27,7 +29,7 @@ def test_crop():
         tilt_stack=tilt_stack_path,
         new_width=180,
         new_height=150,
-        output_file=tilt_stack_1_path
+        output_path=tilt_stack_1_path
     )
     #when crop is being called, output_order defines returned np.array shape (in this case it's default)
     assert cropped_tilt_1.shape[0] == 180, "Width of the cropped data is incorrect."
@@ -69,7 +71,7 @@ def test_crop():
             tilt_stack = tilt_stack_path,
             new_width=ts_original.width + 10,
             new_height=ts_original.height + 10,
-            output_file=tilt_stack_1_path
+            output_path=tilt_stack_1_path
         )
     #case5: there is no kind of validating data: input could be xyz but my mistake input_order might be zyx, what happens?
 
@@ -85,7 +87,7 @@ def test_sort_tilts_by_angle():
     sorted_stack = sort_tilts_by_angle(
         tilt_stack = tilt_stack_path,
         input_tilts= tilt_angles,
-        output_file=tilt_stack_1_path
+        output_path=tilt_stack_1_path
     )
     print(type(sorted_stack))
     #Visual result confirms the stack is being rearranged considering given iput tilts
@@ -108,7 +110,7 @@ def test_remove_tilts():
     ind = [1]
     result = remove_tilts(
         tilt_stack = tilt_stack_path,
-        output_file=tilt_stack_1_path,
+        output_path=tilt_stack_1_path,
         idx_to_remove=ind
     )
     #output order is by default xyz
@@ -118,14 +120,14 @@ def test_remove_tilts():
     with pytest.raises(IndexError):
         result = remove_tilts(
             tilt_stack = tilt_stack_path,
-            output_file=tilt_stack_1_path,
+            output_path=tilt_stack_1_path,
             idx_to_remove=ind
         )
     #interesting case: all tilts removed: normal execution with empty stack returned
     ind = [1,2,3,4]
     result = remove_tilts(
         tilt_stack = tilt_stack_path,
-        output_file=tilt_stack_2_path,
+        output_path=tilt_stack_2_path,
         idx_to_remove=ind
     )
     assert result.shape[2] == 0 #ts_ntilts - len(ind)
@@ -134,7 +136,7 @@ def test_remove_tilts():
         ind=[]
         result = remove_tilts(
             tilt_stack = tilt_stack_path,
-            output_file=tilt_stack_1_path,
+            output_path=tilt_stack_1_path,
             idx_to_remove=ind
         )
         assert result.shape[2] == ts_ntilts
@@ -150,7 +152,7 @@ def test_bin():
     binned_stack = bin(
         tilt_stack = tilt_stack_path,
         binning_factor= 2,
-        output_file=tilt_stack_1_path
+        output_path=tilt_stack_1_path
     )
     #returned binned_stack has x,y,z. constructor builds automatically z y x
     assert binned_stack.shape == (ts.data.shape[2]//2, ts.data.shape[1]//2, ts.data.shape[0])
@@ -160,7 +162,7 @@ def test_bin():
         binned_stack = bin(
             tilt_stack = tilt_stack_path,
             binning_factor= 0.5,
-            output_file=tilt_stack_1_path
+            output_path=tilt_stack_1_path
         )
 
 def test_calculate_total_dose_batch():
@@ -183,6 +185,26 @@ def test_calculate_total_dose_batch():
     for t in ioutils.tlt_load(tomo_list_path).astype(int):
         if os.path.exists(fileformat_replace_pattern(output_file_path, t, "x", raise_error=False)):
             os.remove(fileformat_replace_pattern(output_file_path, t, "x", raise_error=False))
+
+def test_compute_dose_attenuator_shape():
+    freq_array = np.linspace(0.1, 5.0, 64).reshape(8, 8)
+    q = dose_attenuator(dose=1.0, freq_array=freq_array)
+    assert q.shape == freq_array.shape
+
+
+def test_compute_dose_attenuator_range():
+    freq_array = np.linspace(0.1, 5.0, 100)
+    q = dose_attenuator(dose=1.0, freq_array=freq_array)
+    assert np.all(q >= 0.0)
+    assert np.all(q <= 1.0)
+
+
+def test_compute_dose_attenuator_higher_dose_more_attenuation():
+    freq_array = np.linspace(0.1, 5.0, 50)
+    q_low = dose_attenuator(dose=1.0, freq_array=freq_array)
+    q_high = dose_attenuator(dose=10.0, freq_array=freq_array)
+    assert np.all(q_high <= q_low)
+
 
 def test_dose_filter_single_image():
     """
@@ -222,20 +244,6 @@ def test_dose_filter_single_image():
     assert not np.allclose(image, filtered_image)
     assert not np.allclose(filtered_image, expected_result)
 
-    # plot the original, filtered, and expected images
-    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].imshow(image, cmap='gray')
-    axs[0].set_title("Original Image")
-    axs[0].axis('off')
-    axs[1].imshow(filtered_image, cmap='gray')
-    axs[1].set_title("Filtered Image (Dose Filter)")
-    axs[1].axis('off')
-    axs[2].imshow(expected_result, cmap='gray')
-    axs[2].set_title("Expected Result (Gaussian Filter)")
-    axs[2].axis('off')
-    plt.tight_layout()
-    plt.show()
-
     #Test intermediate steps
     #Test fourier inverse
     image = np.random.rand(64, 64)
@@ -269,7 +277,7 @@ def test_dose_filter():
         tilt_stack = tilt_stack_path,
         pixel_size = pixel_size,
         total_dose=dose,
-        output_file=outputfile
+        output_path=outputfile
     )
     if os.path.exists(outputfile):
         os.remove(outputfile)
@@ -282,7 +290,7 @@ def remove1tiltfortesting():
     removed = str(Path(__file__).parent / "test_data" / "test_minus1_split.mrc")
     _ = remove_tilts(
         tilt_stack=toberemoved,
-        output_file=removed,
+        output_path=removed,
         idx_to_remove=[2]
     )
 def test_split_stack_even_odd():
@@ -330,7 +338,7 @@ def test_merge():
     create_files_for_merging_test()
     res = merge(
         file_path_pattern=dir_pattern,
-        output_file=output_pattern
+        output_path=output_pattern
     )
     ts1path = str(Path(__file__).parent /  "test_data" / "test_merge" / "test_split_1.mrc")
     ts1 = TiltStack(ts1path)
@@ -347,7 +355,7 @@ def test_merge():
 def test_flip_along_axes():
     flipped = flip_along_axes(
         tilt_stack = tilt_stack_path,
-        output_file=flipped_path,
+        output_path=flipped_path,
         axes = ["x","y","z"]
     )
     ts = TiltStack(tilt_stack_path)
@@ -363,19 +371,10 @@ def test_deconvolve():
     tilt_stack_path = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
     expected_output_path = str(Path(__file__).parent / "test_data" / "expected_output.mrc")
     synthetic_input = np.random.rand(4, 128, 128).astype(np.float32)
-    output_mrc = deconvolve(tilt_stack_path, pixel_size_a=3.42, defocus=2.5, output_file=expected_output_path)
+    output_mrc = deconvolve(tilt_stack_path, pixel_size_a=3.42, defocus=2.5, output_path=expected_output_path)
     expected_mrc = TiltStack(expected_output_path).data.transpose(2,1,0)
     assert np.allclose(output_mrc, expected_mrc, atol=1e-5)
     output_numpy = deconvolve(synthetic_input, pixel_size_a=3.42, defocus=4)
-
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(synthetic_input[0], cmap="gray")
-    plt.title("Original Tilt Image")
-    plt.subplot(1, 2, 2)
-    plt.imshow(output_numpy[0], cmap="gray")
-    plt.title("Deconvolved Tilt Image")
-    plt.show()
 
     assert output_numpy.shape == synthetic_input.shape
     assert np.isfinite(output_numpy).all()
@@ -383,65 +382,37 @@ def test_deconvolve():
     assert output_numpy.dtype == synthetic_input.dtype
     assert np.max(output_numpy) <= np.max(synthetic_input) * 2
 
-    input_fft = np.abs(np.fft.fftshift(np.fft.fftn(synthetic_input)))
-    output_fft = np.abs(np.fft.fftshift(np.fft.fftn(output_numpy)))
-    plt.figure(figsize=(10, 5))
-    plt.subplot(1, 2, 1)
-    plt.imshow(np.log1p(np.mean(input_fft, axis=0)), cmap="inferno")
-    plt.title("FFT Input")
-    plt.subplot(1, 2, 2)
-    plt.imshow(np.log1p(np.mean(output_fft, axis=0)), cmap="inferno")
-    plt.title("FFT Output (Deconvolved)")
-    plt.show()
-
-def test_equalize_histogram():
-    def plot_histograms(original, processed, title):
-        fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-        ax[0].hist(original.ravel(), bins=256, color='blue', alpha=0.6, label='Original')
-        ax[1].hist(processed.ravel(), bins=256, color='red', alpha=0.6, label='Processed')
-        ax[0].set_title("Original Histogram")
-        ax[1].set_title(title)
-        ax[0].legend()
-        ax[1].legend()
-        plt.show()
-
-    def check_statistics(original, processed):
-        print("Original Min:", original.min(), "Processed Min:", processed.min())
-        print("Original Max:", original.max(), "Processed Max:", processed.max())
-        print("Original Mean:", original.mean(), "Processed Mean:", processed.mean())
-        print("Original Std:", original.std(), "Processed Std:", processed.std())
-
+def test_equalize_histogram_invalid_method():
     with pytest.raises(ValueError):
         equalize_histogram(
             tilt_stack=tilt_stack_path,
-            output_file=tilt_stack_1_path,
+            output_path=tilt_stack_1_path,
             eh_method="notvalid"
         )
+
+
+@pytest.mark.parametrize("method", ["contrast_stretching", "equalization", "adaptive_eq"])
+def test_equalize_histogram(method):
     synthetic_input = str(Path(__file__).parent / "test_data" / "tilt_stack.mrc")
     synthetic_data = TiltStack(synthetic_input).data
-    for method in ["contrast_stretching", "equalization", "adaptive_eq"]:
-        output_data = equalize_histogram(synthetic_input, eh_method=method)
-        output_data = TiltStack(output_data).data
-        assert output_data.shape == synthetic_data.shape, "Output shape mismatch"
-        assert output_data.dtype == synthetic_data.dtype, "Output data type mismatch"
-        assert np.isfinite(output_data).all(), "Output contains NaN or Inf values"
-        assert not np.allclose(output_data, synthetic_data), "Output is too similar to input"
+    output_data = equalize_histogram(synthetic_input, eh_method=method)
+    output_data = TiltStack(output_data).data
+    assert output_data.shape == synthetic_data.shape
+    assert output_data.dtype == synthetic_data.dtype
+    assert np.isfinite(output_data).all()
+    assert not np.allclose(output_data, synthetic_data)
 
-        plot_histograms(synthetic_data[0], output_data[0], f"{method} Histogram")
-        check_statistics(synthetic_data[0], output_data[0])
+    if method == "equalization":
+        hist_input, _ = np.histogram(synthetic_data.flatten(), bins=256)
+        hist_output, _ = np.histogram(output_data.flatten(), bins=256)
+        assert np.std(hist_output) < np.std(hist_input)
 
-        if method == "equalization":
-            hist_input, _ = np.histogram(synthetic_data.flatten(), bins=256)
-            hist_output, _ = np.histogram(output_data.flatten(), bins=256)
-            assert np.std(hist_output) < np.std(hist_input), "Histogram should be more uniform"
+    if method == "contrast_stretching":
+        assert np.min(output_data.astype(np.float64)) == 0
+        assert np.max(output_data.astype(np.float64)) == 1
 
-        if method == "contrast_stretching":
-            assert np.min(output_data.astype(np.float64)) == 0, "Contrast stretching failed (min)"
-            assert np.max(output_data.astype(np.float64)) == 1, "Contrast stretching failed (max)"
-
-        if method == "adaptive_eq":
-            assert np.all(output_data >= 0) and np.all(
-                output_data <= 1), "Adaptive equalization failed normalization check"
+    if method == "adaptive_eq":
+        assert np.all(output_data >= 0) and np.all(output_data <= 1)
 
 def test_cleanup():
     if os.path.exists(tilt_stack_1_path):
@@ -460,4 +431,45 @@ def test_cleanup():
         os.remove(flipped_path)
     if os.path.exists(str(Path(__file__).parent / "test_data" / "expected_output.mrc")):
         os.remove(str(Path(__file__).parent / "test_data" / "expected_output.mrc"))
+
+
+def test_tiltstack_write_out_output_kwargs_forwarded(tmp_path):
+    data = np.ones((5, 16, 16), dtype=np.float32)
+    ts = TiltStack(data, input_order="zyx")
+    out = str(tmp_path / "ts.mrc")
+    ts.write_out(out, pixel_size=3.14)
+    _, ps, _ = cryomap.get_metadata(out)
+    assert abs(ps - 3.14) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# TiltStack.correct_order: direct tests
+# ---------------------------------------------------------------------------
+
+
+def test_correct_order_zyx_to_xyz_transposes():
+    """With output_order='xyz' the internal zyx data is transposed to (x, y, z)."""
+    data = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)  # (z, y, x)
+    ts = TiltStack(data, input_order="zyx", output_order="xyz")
+    out = ts.correct_order()
+    assert out.shape == (4, 3, 2)
+    np.testing.assert_array_equal(out, data.transpose(2, 1, 0))
+
+
+def test_correct_order_zyx_keeps_layout():
+    """When output_order matches internal zyx layout the array is returned untransposed."""
+    data = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    ts = TiltStack(data, input_order="zyx", output_order="zyx")
+    out = ts.correct_order()
+    assert out.shape == data.shape
+    np.testing.assert_array_equal(out, data)
+
+
+def test_correct_order_casts_dtype_of_new_data():
+    """Passing ``new_data`` of a different dtype recasts it to the stored ``data_type``."""
+    data = np.ones((2, 3, 4), dtype=np.float32)
+    ts = TiltStack(data, input_order="zyx", output_order="zyx")
+    other = np.ones((2, 3, 4), dtype=np.float64)
+    out = ts.correct_order(other)
+    assert out.dtype == np.float32
 

@@ -12,6 +12,7 @@
    Motl advanced <motl_advanced>
    Maps basics <maps_basics>
    Masks basics <masks_basics>
+   Symmetries basics <symmetries_basics>
    Wedge list basics <wedgelist_basics>
 
 ==========

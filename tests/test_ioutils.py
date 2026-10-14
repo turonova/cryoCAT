@@ -87,101 +87,46 @@ def test_get_files_prefix_suffix(tmp_path):
     assert result == sorted(["test_file1.txt", "test_file2.txt", "test_data.doc", "test_file1.csv"])
 
 
-# catch TypeError exception, added check for booleans?
-def test_is_float():
-    # valid float inputs
-    assert is_float(3.14) == True
-    assert is_float(0.0) == True
-    assert is_float(-5.67) == True
-    assert is_float("3.14") == True
-    # not valid inputs
-    assert is_float("hello") == False
-    assert is_float(None) == False  # None value
-    assert is_float("123abc") == False
-    assert is_float([]) == False  # raise exception
-    assert is_float({}) == False
-    assert is_float(True) == False
-    assert is_float(False) == False
+@pytest.mark.parametrize("value, expected", [
+    (3.14, True),
+    (0.0, True),
+    (-5.67, True),
+    ("3.14", True),
+    ("hello", False),
+    (None, False),
+    ("123abc", False),
+    ([], False),
+    ({}, False),
+    (True, False),
+    (False, False),
+])
+def test_is_float(value, expected):
+    assert is_float(value) == expected
 
 
-def test_get_filename_from_path():
-    # filename with extension
-    input_path = "/home/user/documents/file.txt"
-    expected = "file.txt"
-    assert get_filename_from_path(input_path) == expected
-    # filename without extension
-    input_path = "/home/user/documents/file.txt"
-    expected = "file"
-    assert get_filename_from_path(input_path, with_extension=False) == expected
-    # filename with no extension
-    input_path = "file"
-    expected = "file"
-    assert get_filename_from_path(input_path) == expected
-    # multiple directories
-    input_path = "/home/user/documents/folder/subfolder/file.txt"
-    expected = "file.txt"
-    assert get_filename_from_path(input_path) == expected
-    # multiple directories without extension
-    input_path = "/home/user/documents/folder/subfolder/file.txt"
-    expected = "file"
-    assert get_filename_from_path(input_path, with_extension=False) == expected
-    # with a file that has no extension
-    input_path = "/home/user/documents/folder/subfolder/no_extension"
-    expected = "no_extension"
-    assert get_filename_from_path(input_path) == expected
-    # containing a dot but no extension
-    input_path = "/home/user/documents/file.withoutextension"
-    expected = "file.withoutextension"
-    assert get_filename_from_path(input_path) == expected
-    # empty path
-    input_path = ""
-    expected = ""
-    assert get_filename_from_path(input_path) == expected
+@pytest.mark.parametrize("path, with_extension, expected", [
+    ("/home/user/documents/file.txt", True, "file.txt"),
+    ("/home/user/documents/file.txt", False, "file"),
+    ("file", True, "file"),
+    ("/home/user/documents/folder/subfolder/file.txt", True, "file.txt"),
+    ("/home/user/documents/folder/subfolder/file.txt", False, "file"),
+    ("/home/user/documents/folder/subfolder/no_extension", True, "no_extension"),
+    ("/home/user/documents/file.withoutextension", True, "file.withoutextension"),
+    ("", True, ""),
+    ("/home/user/documents/special@file#name!.txt", True, "special@file#name!.txt"),
+    ("/home/user/documents/file_éxample.txt", True, "file_éxample.txt"),
+    ("/home/user/documents/.hiddenfile.txt", True, ".hiddenfile.txt"),
+    ("/home/user/documents/....", True, "...."),
+    ("/home/user/documents/file with spaces.txt", True, "file with spaces.txt"),
+    ("/home/user/documents/file.with.many.dots", True, "file.with.many.dots"),
+])
+def test_get_filename_from_path(path, with_extension, expected):
+    assert get_filename_from_path(path, with_extension=with_extension) == expected
 
-    # leading/trailing spaces
-    input_path = "  /home/user/documents/file.txt  "
-    expected = "file.txt"
-    assert get_filename_from_path(input_path.strip()) == expected
 
-    # special characters in the filename
-    input_path = "/home/user/documents/special@file#name!.txt"
-    expected = "special@file#name!.txt"
-    assert get_filename_from_path(input_path) == expected
-    # unicode characters
-    input_path = "/home/user/documents/file_éxample.txt"
-    expected = "file_éxample.txt"
-    assert get_filename_from_path(input_path) == expected
-    # long file path
-    input_path = "/home/user/documents/" + "a" * 255 + ".txt"
-    expected = "a" * 255 + ".txt"
-    assert get_filename_from_path(input_path) == expected
-
-    # multiple dots but no extension
-    input_path = "/home/user/documents/file.with.many.dots"
-    expected = "file.with.many.dots"
-    assert get_filename_from_path(input_path) == expected
-
-    # TO ADD EXCEPTION, to check this edge case
-    # not a string
-    """
-    input_path = None
-    expected = None
-    assert get_filename_from_path(input_path) == expected
-    """
-
-    # edge case
-    input_path = "/home/user/documents/.hiddenfile.txt"
-    expected = ".hiddenfile.txt"
-    assert get_filename_from_path(input_path) == expected
-    # containing only dots
-    input_path = "/home/user/documents/...."
-    expected = "...."
-    assert get_filename_from_path(input_path) == expected
-
-    # spaces in filename
-    input_path = "/home/user/documents/file with spaces.txt"
-    expected = "file with spaces.txt"
-    assert get_filename_from_path(input_path) == expected
+def test_get_filename_from_path_long():
+    long_path = "/home/user/documents/" + "a" * 255 + ".txt"
+    assert get_filename_from_path(long_path) == "a" * 255 + ".txt"
 
 
 def test_get_number_of_lines_with_character():
@@ -212,31 +157,34 @@ def test_get_number_of_lines_with_character():
     os.remove(test_filename)
 
 
-def test_fileformat_replace_pattern():
-    # padding needed
-    assert fileformat_replace_pattern("some_text_$AAA_rest", 79, "A") == "some_text_079_rest"
-    # no padding needed
-    assert fileformat_replace_pattern("file_/$AAA/$B.txt", 123, "A") == "file_/123/$B.txt"
-    # number too big for pattern
+@pytest.mark.parametrize("fmt, number, letter, expected", [
+    ("some_text_$AAA_rest", 79, "A", "some_text_079_rest"),
+    ("file_/$AAA/$B.txt", 123, "A", "file_/123/$B.txt"),
+    ("file_$AA_$BB_end", 7, "A", "file_07_$BB_end"),
+    ("file_$AA_$BB_end", 5, "B", "file_$AA_05_end"),
+    ("path_$AAA/$BB/$CC_$DD.txt", 42, "A", "path_042/$BB/$CC_$DD.txt"),
+    ("path_$AAA/$BB/$CC_$DD.txt", 3, "B", "path_$AAA/03/$CC_$DD.txt"),
+    ("example_$A.txt", 2, "A", "example_2.txt"),
+    ("example_$AA/$A/$B.txt", 2, "A", "example_02/2/$B.txt"),
+])
+def test_fileformat_replace_pattern_valid(fmt, number, letter, expected):
+    assert fileformat_replace_pattern(fmt, number, letter) == expected
+
+
+def test_fileformat_replace_pattern_number_too_large():
     with pytest.raises(ValueError, match=re.escape("Number '12345' has more digits than string '$A'.")):
         fileformat_replace_pattern("file_/$A/$B.txt", 12345, "A")
-    # pattern not present -raise exception
+
+
+def test_fileformat_replace_pattern_missing_letter_raises():
     with pytest.raises(
         ValueError, match=re.escape("The format file_/$A/$B.txt does not contain any sequence of \\$ followed by C.")
     ):
         fileformat_replace_pattern("file_/$A/$B.txt", 123, "C")
-    # no error if pattern is absent and raise_error false
+
+
+def test_fileformat_replace_pattern_missing_letter_no_raise():
     assert fileformat_replace_pattern("file_/$A/$B.txt", 123, "C", raise_error=False) == "file_/$A/$B.txt"
-    # other multiple cases
-    assert fileformat_replace_pattern("file_$AA_$BB_end", 7, "A") == "file_07_$BB_end"
-    assert fileformat_replace_pattern("file_$AA_$BB_end", 5, "B") == "file_$AA_05_end"
-    # complex input and multiple patterns
-    assert fileformat_replace_pattern("path_$AAA/$BB/$CC_$DD.txt", 42, "A") == "path_042/$BB/$CC_$DD.txt"
-    assert fileformat_replace_pattern("path_$AAA/$BB/$CC_$DD.txt", 3, "B") == "path_$AAA/03/$CC_$DD.txt"
-    # single letter
-    assert fileformat_replace_pattern("example_$A.txt", 2, "A") == "example_2.txt"
-    # more than 1 pattern, what happens
-    assert fileformat_replace_pattern("example_$AA/$A/$B.txt", 2, "A") == "example_02/2/$B.txt"
 
 
 # Doesn't handle reading floats and booleans
@@ -3373,41 +3321,89 @@ def create_test_csv_angles(angles, order):
     return file_path
 
 
-def test_rot_angles_load():
-    # 4 x 3 (N x (phi,theta,psi))
-    angles_phi_theta_psi = np.array([[1, 4, 30, 45], [2, 5, 60, 45], [3, 6, 90, 120]])
+def test_euler_angles_load():
+    # 3 x 3 (N x (phi,theta,psi))
+    angles_phi_theta_psi = np.array([[1, 4, 30], [2, 5, 60], [3, 6, 90]])
+    result_phi_psi_theta_np = np.array([[1, 30, 4], [2, 60, 5], [3, 90, 6]])
 
-    # N lines: 4 arrays
-    result_phi_theta_psi = np.array([[1, 2, 3], [4, 5, 6], [30, 60, 90], [45, 45, 120]])
-    result_phi_psi_theta = np.array([[1, 3, 2], [4, 6, 5], [30, 90, 60], [45, 120, 45]])
+    # Testing passing list or tuple
+    list_phi_theta_psi = [1, 2, 3]
+    tuple_phi_theta_psi = (1, 2, 3)
+    result_phi_theta_psi_tl = np.array([1, 2, 3])
 
-    # Passing nparray: result is equal to input
-    # zxz or zzx doesn't matter when passing a numpy array
-    np.testing.assert_array_equal(angles_phi_theta_psi, rot_angles_load(angles_phi_theta_psi))
+    np.testing.assert_array_equal(result_phi_theta_psi_tl, euler_angles_load(list_phi_theta_psi))
+    np.testing.assert_array_equal(result_phi_theta_psi_tl, euler_angles_load(tuple_phi_theta_psi))
+
+    # N lines: 3 arrays
+    result_phi_theta_psi = np.array([[1, 2, 3], [4, 5, 6], [30, 60, 90]]) #, [45, 45, 120]])
+    result_phi_psi_theta = np.array([[1, 3, 2], [4, 6, 5], [30, 90, 60]]) #, [45, 120, 45]])
+
+    # Passing ndarray
+    np.testing.assert_array_equal(angles_phi_theta_psi, euler_angles_load(angles_phi_theta_psi))
+    np.testing.assert_array_equal(result_phi_psi_theta_np, euler_angles_load(angles_phi_theta_psi, "zzx"))
 
     # testing csv path
-    # he lines in csv:
+    # the lines in csv:
     # phi, theta, psi
     # phi1, theta1, psi1
     filepath = create_test_csv_angles(angles_phi_theta_psi, "zxz")
-    np.testing.assert_array_equal(rot_angles_load(str(filepath), "zxz"), result_phi_theta_psi)
+    np.testing.assert_array_equal(euler_angles_load(str(filepath), "zxz"), result_phi_theta_psi)
     # the lines in csv: must be the same as before: we want this by our will
     filepath = create_test_csv_angles(angles_phi_theta_psi, "zzx")
-    np.testing.assert_array_equal(rot_angles_load(str(filepath), "zzx"), result_phi_theta_psi)
+    np.testing.assert_array_equal(euler_angles_load(str(filepath), "zzx"), result_phi_theta_psi)
     # Testing exception being raised if not valid path is being passed
     with pytest.raises(ValueError):
-        rot_angles_load("random")
+        euler_angles_load("random")
 
     # Testing exception being raised if passed csv doesn't contain 3 columns (phi,theta,psi)
     with pytest.raises(ValueError):
         filepath = create_test_csv_angles(angles_phi_theta_psi, "exception")
-        result = rot_angles_load((str(filepath), "zxz"))
+        result = euler_angles_load((str(filepath), "zxz"))
+    
+    # testing wrong shape of the inputs
+    with pytest.raises(ValueError):
+        euler_angles_load(np.array([1,3,5,7]))
 
     # Test file cleanup
     if os.path.exists(filepath):
         os.remove(filepath)
     if os.path.exists(Path(__file__).parent / "test_data" / "TS_018" / "angles_test.csv"):
         os.remove(Path(__file__).parent / "test_data" / "TS_018" / "angles_test.csv")
+
+
+def test_angles_save_round_trip(tmp_path):
+    """angles_save + euler_angles_load are inverse operations."""
+    from cryocat.utils.ioutils import angles_save, euler_angles_load
+
+    angles = np.array([[0.0, 45.0, 90.0], [30.0, 60.0, 120.0], [180.0, 0.0, 270.0]])
+    out = tmp_path / "angles.csv"
+    angles_save(angles, str(out))
+
+    loaded = euler_angles_load(str(out))
+    np.testing.assert_allclose(loaded, angles, atol=1e-9)
+
+
+def test_angles_save_single_row(tmp_path):
+    """angles_save handles a single-row array."""
+    from cryocat.utils.ioutils import angles_save, euler_angles_load
+
+    angles = np.array([[10.0, 20.0, 30.0]])
+    out = tmp_path / "single.csv"
+    angles_save(angles, str(out))
+
+    loaded = euler_angles_load(str(out))
+    np.testing.assert_allclose(loaded, angles, atol=1e-9)
+
+
+def test_angles_save_invalid_shape(tmp_path):
+    """angles_save raises ValueError for arrays that are not (N, 3)."""
+    from cryocat.utils.ioutils import angles_save
+
+    with pytest.raises(ValueError):
+        angles_save(np.array([1.0, 2.0, 3.0]), str(tmp_path / "bad.csv"))  # 1-D
+
+    with pytest.raises(ValueError):
+        angles_save(np.array([[1.0, 2.0], [3.0, 4.0]]), str(tmp_path / "bad2.csv"))  # 2 cols
 
 
 def test_tlt_load():
@@ -3731,18 +3727,18 @@ Line 5
     with open(test_file, "w") as f:
         f.write(content)
     # Test case 3: Check if output file is written
-    output_file = Path(__file__).parent / "test_data" / "TS_018" / "output_file.txt"
+    output_path = Path(__file__).parent / "test_data" / "TS_018" / "output_path.txt"
     lines_to_remove = 0  # Remove first line
-    result = remove_lines(str(test_file), lines_to_remove, number_start=0, output_file=str(output_file))
+    result = remove_lines(str(test_file), lines_to_remove, number_start=0, output_path=str(output_path))
     # Verify if the output file was created
-    assert output_file.exists()
+    assert output_path.exists()
     # Read the content of the output file
-    with open(output_file, "r") as f:
+    with open(output_path, "r") as f:
         output_content = f.readlines()
     # Check if the output content is as expected
     assert output_content == ["Line 2\n", "Line 3\n", "Line 2\n", "Line 4\n", "Test 1\n", "Line 5\n"]
     # Clean up the created files
-    output_file.unlink()
+    output_path.unlink()
     test_file.unlink()
 
     if os.path.exists(test_file):
@@ -4037,11 +4033,11 @@ def test_defocus_remove_file_entries(tmp_path):
 
     # Chiamata alla funzione
     defocus_remove_file_entries(
-        input_file=str(input_file_path),
+        input_path=str(input_file_path),
         entries_to_remove=entries_to_remove,
         file_type="gctf",
         numbered_from_1=True,
-        output_file=str(output_file_path),
+        output_path=str(output_file_path),
     )
 
     # Contenuto atteso
@@ -4077,11 +4073,11 @@ def test_defocus_remove_file_entries(tmp_path):
     output_file_path_ctffind4 = tmp_path / "test_ctffind4_output.txt"
 
     defocus_remove_file_entries(
-        input_file=str(input_file_path_ctffind4),
+        input_path=str(input_file_path_ctffind4),
         entries_to_remove=entries_to_remove_ctffind4,
         file_type="ctffind4",
         numbered_from_1=True,
-        output_file=str(output_file_path_ctffind4),
+        output_path=str(output_file_path_ctffind4),
     )
 
     # Expected output: keep lines 0, 2, 4 (zero-based)
@@ -4223,6 +4219,66 @@ def test_relion_ctffind4_read():
     print(result)
 
 
+def test_relion_ctffind4_read_direct():
+    """Directly invoke the loader; must return the canonical 5-column defocus DataFrame."""
+    file_path = Path(__file__).parent / "test_data" / "dc02t01_ctf.star"
+    result = ioutils.relion_ctffind4_read(str(file_path))
+    assert isinstance(result, pd.DataFrame)
+    assert list(result.columns) == [
+        "defocus1", "defocus2", "astigmatism", "phase_shift", "defocus_mean",
+    ]
+    assert len(result) > 0
+
+
+# ---------------------------------------------------------------------------
+# extract_defocus_data
+# ---------------------------------------------------------------------------
+
+def test_extract_defocus_data_basic():
+    df = pd.DataFrame({
+        "rlnDefocusU": [20000.0, 22000.0],
+        "rlnDefocusV": [19000.0, 21000.0],
+        "rlnDefocusAngle": [45.0, 90.0],
+        "rlnPhaseShift": [0.0, 1.0],
+    })
+    result = extract_defocus_data(df, "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", phase_col="rlnPhaseShift")
+    assert list(result.columns) == ["defocus1", "defocus2", "astigmatism", "phase_shift", "defocus_mean"]
+    assert len(result) == 2
+    np.testing.assert_allclose(result["astigmatism"].values, [45.0, 90.0])
+    np.testing.assert_allclose(result["phase_shift"].values, [0.0, 1.0])
+
+
+def test_extract_defocus_data_no_phase_col():
+    df = pd.DataFrame({
+        "defU": [10000.0],
+        "defV": [11000.0],
+        "angle": [30.0],
+    })
+    result = extract_defocus_data(df, "defU", "defV", "angle")
+    assert (result["phase_shift"] == 0.0).all()
+
+
+def test_extract_defocus_data_missing_phase_col_in_df():
+    df = pd.DataFrame({
+        "rlnDefocusU": [10000.0],
+        "rlnDefocusV": [10000.0],
+        "rlnDefocusAngle": [0.0],
+    })
+    result = extract_defocus_data(df, "rlnDefocusU", "rlnDefocusV", "rlnDefocusAngle", phase_col="rlnPhaseShift")
+    assert (result["phase_shift"] == 0.0).all()
+
+
+def test_extract_defocus_data_mean_is_average():
+    df = pd.DataFrame({
+        "u": [20000.0],
+        "v": [10000.0],
+        "a": [0.0],
+    })
+    result = extract_defocus_data(df, "u", "v", "a")
+    expected_mean = (result["defocus1"].iloc[0] + result["defocus2"].iloc[0]) / 2.0
+    np.testing.assert_allclose(result["defocus_mean"].iloc[0], expected_mean)
+
+
 # ── df_load ───────────────────────────────────────────────────────────────────
 
 
@@ -4354,10 +4410,11 @@ def test_fsc_read_txt(tmp_path):
     ],
 )
 def test_fsc_read_txt_missing_params(tmp_path, pixel_size, box_size):
+    """When pixel_size or box_size is absent, .txt returns shell indices."""
     txt_path = str(tmp_path / "fsc.txt")
     np.savetxt(txt_path, [0.9, 0.8])
-    with pytest.raises(ValueError, match="pixel_size and box_size are required"):
-        ioutils.fsc_read(txt_path, pixel_size=pixel_size, box_size=box_size)
+    df = ioutils.fsc_read(txt_path, pixel_size=pixel_size, box_size=box_size)
+    np.testing.assert_array_equal(df["x"].values, [1.0, 2.0])
 
 
 def test_fsc_read_unsupported_extension(tmp_path):
@@ -4368,3 +4425,259 @@ def test_fsc_read_unsupported_extension(tmp_path):
 def test_fsc_write_unsupported_extension(tmp_path):
     with pytest.raises(ValueError, match="Unsupported FSC output format"):
         ioutils.fsc_write(str(tmp_path / "fsc.txt"), [0.1], [0.9])
+
+
+def test_cmm_read_error_invalid_marker_file(tmp_path):
+    # Create a non-XML file
+    non_xml_path = tmp_path / "not_an_xml.txt"
+    non_xml_path.write_text("This is not an XML file.")
+    with pytest.raises(ValueError, match="not a valid marker file"):
+        ioutils.cmm_read(str(non_xml_path))
+
+def test_cmm_read_error_file_not_found(tmp_path):
+    invalid_file = tmp_path / "nonexistent_file.cmm"
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        ioutils.cmm_read(str(invalid_file))
+
+def test_cmm_read():
+    current_dir = Path(__file__).parent
+    df = pd.DataFrame({
+        "id": ["2", "4"],
+        "x": [112.0, 184.2],
+        "y": [156.2, 111.9],
+        "z": [184.5, 156.7],
+        "r":["1", "1"],
+        "g":["1", "1"],
+        "b":["0", "0"],
+        "radius":["3","3"]
+    })
+    cmm_file_path = str(current_dir / "test_data" / "test_marker_file.cmm")
+    result = ioutils.cmm_read(cmm_file_path)
+    pd.testing.assert_frame_equal(result, df)
+
+
+@pytest.mark.parametrize(
+        "input_data", [
+            {"x":[1]},
+            pd.DataFrame({"x":[1],"Y":[2],"random_col":[3]}),
+            np.asarray([[[23,34,45],[3,4,5],[4,5,6]]]),
+            np.asarray([[1,2],[34,45]]),
+            np.asarray([23,45,56])    
+        ]
+        )
+def test_marker_coords_invalid_input(input_data):
+    with pytest.raises(ValueError, match="Invalid input"):
+        ioutils.marker_coords_load(input_data)
+
+def test_marker_coords_file_not_found(tmp_path):
+    invalid_file = tmp_path / "nonexistent_file.txt"
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        ioutils.marker_coords_load(str(invalid_file))
+
+
+def test_marker_coords_invalid_input_from_file(tmp_path):
+    invalid_marker_content = pd.DataFrame({"x":[1],"Y":[2]})
+    invalid_file = tmp_path / "invalid_marker_file.csv"
+    invalid_marker_content.to_csv(invalid_file, header=False)
+    with pytest.raises(ValueError, match="Invalid input"):
+        ioutils.marker_coords_load(invalid_file)
+
+
+@pytest.mark.parametrize("input_data",[
+    pd.DataFrame({"x":[1,2],"y":[3,4],"Z":[5,6],"extra_col":["some","extra"]}),
+    pd.DataFrame({"x":[1,2],"y":[3,4],"Z":[5,6]}),
+    np.asarray([[1,2,3],[4,5,6]]),
+    1,
+    1.0,
+    [1,2,3],
+    (1,2,3),
+])
+def test_marker_coords_load_not_from_file(input_data):
+    result = ioutils.marker_coords_load(input_data)
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+
+def test_marker_coords_load_from_csv_file(tmp_path):
+    test_csv_file = tmp_path / "test_marker.csv"
+    content_test = pd.DataFrame({"x":[1,2],"y":[3,4],"z":[5,6]})
+    content_test = content_test.astype(float)
+    content_test.to_csv(test_csv_file, header=False, index=False)
+    result = ioutils.marker_coords_load(str(test_csv_file))
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+    pd.testing.assert_frame_equal(result, content_test) 
+
+def test_marker_coords_load_from_txt_file(tmp_path):
+    test_txt_file = tmp_path / "test_marker.txt"
+    content_test = np.asarray([[1,2,3],[4,5,6]])
+    np.savetxt(test_txt_file, content_test, fmt="%.1f")
+    expected = pd.DataFrame({"x":[1.0,4.0],"y":[2.0,5.0],"z":[3.0,6.0]})
+    result = ioutils.marker_coords_load(str(test_txt_file))
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+    pd.testing.assert_frame_equal(result, expected)
+
+def test_marker_coords_load_from_cmm():
+    current_dir = Path(__file__).parent
+    cmm_file_path = str(current_dir / "test_data" / "test_marker_file.cmm")
+    expected = df = pd.DataFrame({
+        "x": [112.0, 184.2],
+        "y": [156.2, 111.9],
+        "z": [184.5, 156.7], 
+    })
+    pd.testing.assert_frame_equal(expected, ioutils.marker_coords_load(cmm_file_path))
+
+
+def test_write_coords_to_cmm_file_error_wrong_extension():
+    with pytest.raises(ValueError, match="Invalid output file name"):
+        ioutils.write_coords_to_cmm_file([1,1,1], "dummy_file.txt")
+
+@pytest.mark.parametrize("coords", [
+    {"x":1, "y":2, "z":3},
+    np.asarray([1,2,3,4]),
+    np.random.rand(2,3,3),
+    np.random.rand(2,4),
+    pd.DataFrame({"x":[1,2], "y":[23,34]})
+])
+def test_write_coords_to_cmm_file_error_invalid_input(coords):
+    with pytest.raises(ValueError, match="Invalid input"):
+        ioutils.write_coords_to_cmm_file(coords, "dummy_file.cmm")
+
+@pytest.mark.parametrize("coords", [
+    12,
+    12.0,
+    [12,12,12],
+    (12,12,12),
+    np.asarray([12,12,12]),
+
+])
+def test_write_coords_to_cmm_file_triplet(tmp_path, coords):
+    out_cmm_file = tmp_path / "test_write_coords.cmm"
+    ioutils.write_coords_to_cmm_file(coords, str(out_cmm_file))
+    result = ioutils.marker_coords_load(str(out_cmm_file))
+    expected = pd.DataFrame({"x":[12.0], "y":[12.0], "z":[12.0]})
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+    pd.testing.assert_frame_equal(result, expected)
+
+
+@pytest.mark.parametrize("coords",[
+    pd.DataFrame({"x":[1,2,3], "y":[4,5,6], "z":[7,8,9]}),
+    pd.DataFrame({"X":[1,2,3], "Y":[4,5,6], "Z":[7,8,9]}),
+    pd.DataFrame({"x":[1,2,3], "y":[4,5,6], "z":[7,8,9], "extra_col":["extra", "test", "stuff"]}),
+    np.asarray([[1,4,7],[2,5,8],[3,6,9]])
+])
+def test_write_coords_to_cmm_file_2d(tmp_path, coords):
+    out_cmm_file = tmp_path / "test_write_coords.cmm"
+    ioutils.write_coords_to_cmm_file(coords, str(out_cmm_file))
+    result = ioutils.marker_coords_load(str(out_cmm_file))
+    expected = pd.DataFrame({"x":[1,2,3], "y":[4,5,6], "z":[7,8,9]})
+    expected = expected.astype(float)
+    assert isinstance(result, pd.DataFrame)
+    assert result.columns.tolist() == ["x","y","z"]
+    pd.testing.assert_frame_equal(result, expected)
+
+
+# =============================================================================
+# Warp XML loader tests
+# =============================================================================
+
+WARP_DIR = os.path.join(os.path.dirname(__file__), "test_data", "motl_data", "warp_mapping")
+PRE_DIR = os.path.join(WARP_DIR, "preMA")
+POST_DIR = os.path.join(WARP_DIR, "postMA")
+
+
+class TestWarpXmlLoader:
+    def test_load_pre_has_volume_dims(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(PRE_DIR, "TS_204.xml"))
+        assert ts["volume_dims"] is not None
+        assert ts["image_dims"] is not None
+        assert ts["volume_dims"].shape == (3,)
+        assert ts["image_dims"].shape == (2,)
+
+    def test_load_post_missing_volume_dims_returns_none(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        assert ts["volume_dims"] is None
+        assert ts["image_dims"] is None
+
+    def test_load_post_pixel_size(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        assert abs(ts["pixel_size"] - 1.971) < 1e-4
+
+    def test_set_volume_geometry_patches_none(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        ref = ioutils.read_warp_tilt_xml(os.path.join(PRE_DIR, "TS_204.xml"))
+        ioutils.set_volume_geometry(ts, volume_dims=ref["volume_dims"], image_dims=ref["image_dims"])
+        assert ts["volume_dims"] is not None
+        np.testing.assert_array_almost_equal(ts["volume_dims"], ref["volume_dims"])
+
+    def test_set_volume_geometry_image_dims_defaults_to_xy(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        vol = np.array([8000.0, 8000.0, 4000.0])
+        ioutils.set_volume_geometry(ts, volume_dims=vol)
+        np.testing.assert_array_almost_equal(ts["image_dims"], vol[:2])
+
+    def test_check_same_tiltseries_ok(self):
+        old = ioutils.read_warp_tilt_xml(os.path.join(PRE_DIR, "TS_204.xml"))
+        new = ioutils.read_warp_tilt_xml(os.path.join(POST_DIR, "TS_204.xml"))
+        ok, msg = ioutils.check_same_tiltseries(old, new)
+        assert ok, msg
+
+    def test_tilt_matrix_is_orthogonal(self):
+        ts = ioutils.read_warp_tilt_xml(os.path.join(PRE_DIR, "TS_204.xml"))
+        for t in range(len(ts["tilt_matrices"])):
+            R = ts["tilt_matrices"][t]
+            assert R.shape == (3, 3)
+            np.testing.assert_allclose(R @ R.T, np.eye(3), atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# removed_tilts_load
+# ---------------------------------------------------------------------------
+
+def test_removed_tilts_load_from_ndarray():
+    arr = np.array([-60.0, -30.0, 0.0, 30.0, 60.0])
+    result = ioutils.removed_tilts_load(arr)
+    np.testing.assert_array_equal(result, arr)
+
+
+def test_removed_tilts_load_from_ndarray_returns_float():
+    arr = np.array([-60, -30, 0, 30, 60], dtype=int)
+    result = ioutils.removed_tilts_load(arr)
+    assert result.dtype == float
+
+
+def test_removed_tilts_load_from_ndarray_flattens():
+    arr = np.array([[-60.0], [-30.0], [0.0]])
+    result = ioutils.removed_tilts_load(arr)
+    assert result.ndim == 1
+    np.testing.assert_array_equal(result, [-60.0, -30.0, 0.0])
+
+
+def test_removed_tilts_load_from_dataframe():
+    df = pd.DataFrame({"removed_tilts": [-60.0, -30.0, 0.0]})
+    result = ioutils.removed_tilts_load(df)
+    np.testing.assert_array_equal(result, np.array([-60.0, -30.0, 0.0]))
+
+
+def test_removed_tilts_load_from_dataframe_missing_column():
+    df = pd.DataFrame({"other_col": [-60.0]})
+    with pytest.raises(ValueError, match="removed_tilts"):
+        ioutils.removed_tilts_load(df)
+
+
+def test_removed_tilts_load_from_star_file(tmp_path):
+    star_content = (
+        "data_\n\nloop_\n_removed_tilts\n"
+        "-60.000000\n-30.000000\n0.000000\n"
+    )
+    star_file = tmp_path / "removed_tilts.star"
+    star_file.write_text(star_content)
+    result = ioutils.removed_tilts_load(str(star_file))
+    np.testing.assert_allclose(result, [-60.0, -30.0, 0.0])
+
+
+def test_removed_tilts_load_invalid_type():
+    with pytest.raises(ValueError):
+        ioutils.removed_tilts_load(42)
+

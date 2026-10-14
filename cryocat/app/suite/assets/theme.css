@@ -1,0 +1,33 @@
+:root {
+    --color1: #AED6F1;
+    --color2: #85C1E9;
+    --color3: #5DADE2;
+    --color4: #3498DB;
+    --color5: #2E86C1;
+    --color6: #A9CCE3;
+    --color7: #7FB3D3;
+    --color8: #5499C7;
+    --color9: #1A5276;
+    --color10: #154360;
+    --color11: #EBF5FB;
+    --color12: #0B2434;
+    --color13: #85C1E9;
+}
+
+/* tango palette — colours only, scoped to the tango page wrapper */
+.tango-theme {
+    --color1:  #AEC684;
+    --color2:  #83BA99;
+    --color3:  #59AFAF;
+    --color4:  #74A9B7;
+    --color5:  #A6A5B9;
+    --color6:  #B09BB6;
+    --color7:  #938CB0;
+    --color8:  #7E7DA8;
+    --color9:  #826C9F;
+    --color10: #865B96;
+    --color11: #fbedff;
+    --color12: #14041a;
+    --color13: #83BA99;
+}
+

@@ -1,0 +1,712 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<TiltSeries DataDirectory="/leo/work/bturo/algae/warp2/tomostar" AreAnglesInverted="False" PlaneNormal="0.139033899, 0.0410785712, 0.989435196" LevelAngleX="0" LevelAngleY="0" Bfactor="0" Weight="1" MagnificationCorrection="1, 0, 0, 1" VolumeDimensionsAngstrom="8073.21582, 8073.21582, 4336.2002" ImageDimensionsAngstrom="8073.21582, 8073.21582" UnselectFilter="False" UnselectManual="" CTFResolutionEstimate="5.8">
+  <Angles>-50
+-46
+-44
+-42
+-38
+-36.0099983
+-34
+-32
+-30
+-28
+-26.0100002
+-24.0100002
+-22.0100002
+-20.0100002
+-18.0100002
+-16.0100002
+-14.0100002
+-12.0100002
+-10.0100002
+-8.01000023
+-6.01000023
+-4.01000023
+-2.00999999
+-0.00999999978
+1.99000001
+3.99000001
+5.98999977
+7.98999977
+9.98999977
+11.9799995
+13.9899998
+15.9899998
+17.9899998
+19.9899998
+21.9899998
+23.9899998
+25.9899998
+27.9799995
+29.9799995
+31.9799995
+33.9900017
+35.9900017
+37.9900017
+39.9900017
+41.9900017
+43.9900017
+45.9799995
+47.9900017
+49.9700012
+51.9900017
+53.9700012
+55.9700012
+57.9799995</Angles>
+  <Dose>124.800003
+122.400002
+120.000008
+117.600006
+112.800003
+105.600006
+103.200005
+96
+93.6000061
+86.4000015
+84
+76.8000031
+74.4000015
+67.2000046
+64.8000031
+57.6000023
+55.2000008
+48
+45.6000023
+38.4000015
+36
+28.8000011
+26.4000015
+19.2000008
+16.8000011
+9.60000038
+7.20000029
+0
+2.4000001
+4.80000019
+12
+14.4000006
+21.6000004
+24
+31.2000008
+33.6000023
+40.8000031
+43.2000008
+50.4000015
+52.8000031
+60.0000038
+62.4000015
+69.6000061
+72
+79.2000046
+81.6000061
+88.8000031
+91.2000046
+98.4000015
+100.800003
+108.000008
+110.400002
+115.200005</Dose>
+  <UseTilt>True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True
+True</UseTilt>
+  <AxisAngle>82.8995514
+82.8995438
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514
+82.8995514</AxisAngle>
+  <AxisOffsetX>-17.0229416
+-30.5582638
+91.4625244
+-36.4968872
+-33.890377
+105.019287
+-41.5965385
+117.577034
+-40.345417
+112.065689
+-44.6776161
+112.830223
+-43.8109207
+110.802399
+-31.758255
+91.9385376
+-9.39885139
+71.777359
+-10.8217516
+69.9752426
+4.76903057
+68.5476913
+37.7196007
+59.1726608
+75.1967926
+100.367538
+-115.245659
+-38.2063065
+-23.9908161
+-26.5776768
+-66.5812912
+-33.4315491
+-29.5365105
+-55.9533272
+-25.7020817
+-54.1827888
+-16.9397583
+-77.0780945
+-4.04745817
+-84.9227448
+15.089777
+-97.3220749
+10.243927
+-93.651619
+25.5644093
+-93.0395966
+28.9668846
+-86.5816803
+15.0125027
+-72.1867981
+0.00839846395
+-43.5037575
+-9.68773365</AxisOffsetX>
+  <AxisOffsetY>151.234955
+162.307922
+125.031479
+170.011398
+149.06366
+157.470245
+211.541199
+202.123688
+229.414413
+208.856293
+264.508545
+221.228653
+261.022003
+257.521454
+290.841583
+244.122391
+328.045258
+270.361267
+305.412567
+335.605164
+319.594757
+383.669067
+430.056274
+414.443665
+611.857544
+851.670288
+-780.978149
+-425.018127
+-9.16138744
+-211.897766
+-317.766479
+-299.512909
+-335.086884
+-330.334412
+-339.92627
+-324.794861
+-346.614929
+-323.168427
+-390.595154
+-345.978394
+-355.627899
+-374.084381
+-340.443329
+-326.057648
+-333.86853
+-276.704437
+-338.2211
+-286.234406
+-377.248352
+-265.340759
+-333.144104
+-178.216232
+-312.951874</AxisOffsetY>
+  <MoviePath>../warp_frameseries/L02_ts_004_0000_-50.0.mrc
+../warp_frameseries/L02_ts_004_0000_-46.0.mrc
+../warp_frameseries/L02_ts_004_0000_-44.0.mrc
+../warp_frameseries/L02_ts_004_0000_-42.0.mrc
+../warp_frameseries/L02_ts_004_0000_-38.0.mrc
+../warp_frameseries/L02_ts_004_0000_-36.0.mrc
+../warp_frameseries/L02_ts_004_0000_-34.0.mrc
+../warp_frameseries/L02_ts_004_0000_-32.0.mrc
+../warp_frameseries/L02_ts_004_0000_-30.0.mrc
+../warp_frameseries/L02_ts_004_0000_-28.0.mrc
+../warp_frameseries/L02_ts_004_0000_-26.0.mrc
+../warp_frameseries/L02_ts_004_0000_-24.0.mrc
+../warp_frameseries/L02_ts_004_0000_-22.0.mrc
+../warp_frameseries/L02_ts_004_0000_-20.0.mrc
+../warp_frameseries/L02_ts_004_0000_-18.0.mrc
+../warp_frameseries/L02_ts_004_0000_-16.0.mrc
+../warp_frameseries/L02_ts_004_0000_-14.0.mrc
+../warp_frameseries/L02_ts_004_0000_-12.0.mrc
+../warp_frameseries/L02_ts_004_0000_-10.0.mrc
+../warp_frameseries/L02_ts_004_0000_-8.0.mrc
+../warp_frameseries/L02_ts_004_0000_-6.0.mrc
+../warp_frameseries/L02_ts_004_0000_-4.0.mrc
+../warp_frameseries/L02_ts_004_0000_-2.0.mrc
+../warp_frameseries/L02_ts_004_0000_-0.0.mrc
+../warp_frameseries/L02_ts_004_0000_2.0.mrc
+../warp_frameseries/L02_ts_004_0000_4.0.mrc
+../warp_frameseries/L02_ts_004_0000_6.0.mrc
+../warp_frameseries/L02_ts_004_0000_8.0.mrc
+../warp_frameseries/L02_ts_004_0000_10.0.mrc
+../warp_frameseries/L02_ts_004_0000_12.0.mrc
+../warp_frameseries/L02_ts_004_0000_14.0.mrc
+../warp_frameseries/L02_ts_004_0000_16.0.mrc
+../warp_frameseries/L02_ts_004_0000_18.0.mrc
+../warp_frameseries/L02_ts_004_0000_20.0.mrc
+../warp_frameseries/L02_ts_004_0000_22.0.mrc
+../warp_frameseries/L02_ts_004_0000_24.0.mrc
+../warp_frameseries/L02_ts_004_0000_26.0.mrc
+../warp_frameseries/L02_ts_004_0000_28.0.mrc
+../warp_frameseries/L02_ts_004_0000_30.0.mrc
+../warp_frameseries/L02_ts_004_0000_32.0.mrc
+../warp_frameseries/L02_ts_004_0000_34.0.mrc
+../warp_frameseries/L02_ts_004_0000_36.0.mrc
+../warp_frameseries/L02_ts_004_0000_38.0.mrc
+../warp_frameseries/L02_ts_004_0000_40.0.mrc
+../warp_frameseries/L02_ts_004_0000_42.0.mrc
+../warp_frameseries/L02_ts_004_0000_44.0.mrc
+../warp_frameseries/L02_ts_004_0000_46.0.mrc
+../warp_frameseries/L02_ts_004_0000_48.0.mrc
+../warp_frameseries/L02_ts_004_0000_50.0.mrc
+../warp_frameseries/L02_ts_004_0000_52.0.mrc
+../warp_frameseries/L02_ts_004_0000_54.0.mrc
+../warp_frameseries/L02_ts_004_0000_56.0.mrc
+../warp_frameseries/L02_ts_004_0000_58.0.mrc</MoviePath>
+  <FOVFraction>0.978799999
+0.976999998
+0.975099981
+0.975399971
+0.97420001
+0.972100019
+0.9727
+0.969699979
+0.968500018
+0.965200007
+0.961000025
+0.958700001
+0.954699993
+0.949999988
+0.9454
+0.944000006
+0.935299993
+0.935899973
+0.930999994
+0.925300002
+0.925400019
+0.917800009
+0.912899971
+0.913699985
+0.892499983
+0.864499986
+0.874199986
+0.917599976
+0.942799985
+0.939999998
+0.935699999
+0.941299975
+0.941900015
+0.94569999
+0.949400008
+0.953999996
+0.956900001
+0.961300015
+0.962499976
+0.967299998
+0.970799983
+0.971300006
+0.97420001
+0.973399997
+0.975600004
+0.975000024
+0.976999998
+0.976700008
+0.978799999
+0.978399992
+0.980499983
+0.98089999
+0.9824</FOVFraction>
+  <CTF>
+    <Param Name="PixelSize" Value="1.971"/>
+    <Param Name="PixelSizeDeltaPercent" Value="0"/>
+    <Param Name="PixelSizeAngle" Value="0"/>
+    <Param Name="Distortion" Value="1, 0, 0, 1"/>
+    <Param Name="Cs" Value="2.7"/>
+    <Param Name="Cc" Value="2.7"/>
+    <Param Name="Voltage" Value="300"/>
+    <Param Name="Defocus" Value="2.70863"/>
+    <Param Name="DefocusDelta" Value="0.00257106832"/>
+    <Param Name="DefocusAngle" Value="11"/>
+    <Param Name="Amplitude" Value="0.07"/>
+    <Param Name="PhaseShift" Value="0"/>
+    <Param Name="Bfactor" Value="0"/>
+    <Param Name="BfactorDelta" Value="0"/>
+    <Param Name="BfactorAngle" Value="0"/>
+    <Param Name="Scale" Value="1"/>
+    <Param Name="Thickness" Value="0"/>
+    <Param Name="BeamTilt" Value="0,0"/>
+    <Param Name="BeamTilt2" Value="1,0,1"/>
+    <Param Name="ZernikeCoeffsOdd" Value=""/>
+    <Param Name="ZernikeCoeffsEven" Value=""/>
+  </CTF>
+  <GridCTF Width="1" Height="1" Depth="53" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="2.41826129"/>
+    <Node X="0" Y="0" Z="1" Value="2.40547085"/>
+    <Node X="0" Y="0" Z="2" Value="2.37962961"/>
+    <Node X="0" Y="0" Z="3" Value="2.39659214"/>
+    <Node X="0" Y="0" Z="4" Value="2.59774065"/>
+    <Node X="0" Y="0" Z="5" Value="2.59100938"/>
+    <Node X="0" Y="0" Z="6" Value="2.61259413"/>
+    <Node X="0" Y="0" Z="7" Value="2.58793592"/>
+    <Node X="0" Y="0" Z="8" Value="2.63854122"/>
+    <Node X="0" Y="0" Z="9" Value="2.46103501"/>
+    <Node X="0" Y="0" Z="10" Value="2.47399712"/>
+    <Node X="0" Y="0" Z="11" Value="2.58253026"/>
+    <Node X="0" Y="0" Z="12" Value="2.61052084"/>
+    <Node X="0" Y="0" Z="13" Value="2.59195781"/>
+    <Node X="0" Y="0" Z="14" Value="2.62450767"/>
+    <Node X="0" Y="0" Z="15" Value="2.63363767"/>
+    <Node X="0" Y="0" Z="16" Value="2.65180326"/>
+    <Node X="0" Y="0" Z="17" Value="2.6143961"/>
+    <Node X="0" Y="0" Z="18" Value="2.64021254"/>
+    <Node X="0" Y="0" Z="19" Value="2.65349197"/>
+    <Node X="0" Y="0" Z="20" Value="2.68248177"/>
+    <Node X="0" Y="0" Z="21" Value="2.64999628"/>
+    <Node X="0" Y="0" Z="22" Value="2.7010715"/>
+    <Node X="0" Y="0" Z="23" Value="2.6960187"/>
+    <Node X="0" Y="0" Z="24" Value="2.7209928"/>
+    <Node X="0" Y="0" Z="25" Value="2.7013514"/>
+    <Node X="0" Y="0" Z="26" Value="2.71139956"/>
+    <Node X="0" Y="0" Z="27" Value="2.62598991"/>
+    <Node X="0" Y="0" Z="28" Value="2.56359148"/>
+    <Node X="0" Y="0" Z="29" Value="2.499753"/>
+    <Node X="0" Y="0" Z="30" Value="2.75196242"/>
+    <Node X="0" Y="0" Z="31" Value="2.76669645"/>
+    <Node X="0" Y="0" Z="32" Value="2.78589773"/>
+    <Node X="0" Y="0" Z="33" Value="2.80780458"/>
+    <Node X="0" Y="0" Z="34" Value="2.82749939"/>
+    <Node X="0" Y="0" Z="35" Value="2.75616598"/>
+    <Node X="0" Y="0" Z="36" Value="2.80884409"/>
+    <Node X="0" Y="0" Z="37" Value="2.78241038"/>
+    <Node X="0" Y="0" Z="38" Value="2.87856197"/>
+    <Node X="0" Y="0" Z="39" Value="2.91361976"/>
+    <Node X="0" Y="0" Z="40" Value="2.94534135"/>
+    <Node X="0" Y="0" Z="41" Value="3.01571512"/>
+    <Node X="0" Y="0" Z="42" Value="2.86183524"/>
+    <Node X="0" Y="0" Z="43" Value="2.92885041"/>
+    <Node X="0" Y="0" Z="44" Value="2.88565493"/>
+    <Node X="0" Y="0" Z="45" Value="2.86552501"/>
+    <Node X="0" Y="0" Z="46" Value="2.84661484"/>
+    <Node X="0" Y="0" Z="47" Value="2.97296"/>
+    <Node X="0" Y="0" Z="48" Value="2.87823033"/>
+    <Node X="0" Y="0" Z="49" Value="3.00541592"/>
+    <Node X="0" Y="0" Z="50" Value="2.83310246"/>
+    <Node X="0" Y="0" Z="51" Value="2.82413173"/>
+    <Node X="0" Y="0" Z="52" Value="2.89605188"/>
+  </GridCTF>
+  <GridCTFDefocusDelta Width="1" Height="1" Depth="53" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="1" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="2" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="3" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="4" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="5" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="6" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="7" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="8" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="9" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="10" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="11" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="12" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="13" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="14" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="15" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="16" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="17" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="18" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="19" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="20" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="21" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="22" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="23" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="24" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="25" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="26" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="27" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="28" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="29" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="30" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="31" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="32" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="33" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="34" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="35" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="36" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="37" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="38" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="39" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="40" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="41" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="42" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="43" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="44" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="45" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="46" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="47" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="48" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="49" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="50" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="51" Value="0.00257106824"/>
+    <Node X="0" Y="0" Z="52" Value="0.00257106824"/>
+  </GridCTFDefocusDelta>
+  <GridCTFDefocusAngle Width="1" Height="1" Depth="53" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="11"/>
+    <Node X="0" Y="0" Z="1" Value="11"/>
+    <Node X="0" Y="0" Z="2" Value="11"/>
+    <Node X="0" Y="0" Z="3" Value="11"/>
+    <Node X="0" Y="0" Z="4" Value="11"/>
+    <Node X="0" Y="0" Z="5" Value="11"/>
+    <Node X="0" Y="0" Z="6" Value="11"/>
+    <Node X="0" Y="0" Z="7" Value="11"/>
+    <Node X="0" Y="0" Z="8" Value="11"/>
+    <Node X="0" Y="0" Z="9" Value="11"/>
+    <Node X="0" Y="0" Z="10" Value="11"/>
+    <Node X="0" Y="0" Z="11" Value="11"/>
+    <Node X="0" Y="0" Z="12" Value="11"/>
+    <Node X="0" Y="0" Z="13" Value="11"/>
+    <Node X="0" Y="0" Z="14" Value="11"/>
+    <Node X="0" Y="0" Z="15" Value="11"/>
+    <Node X="0" Y="0" Z="16" Value="11"/>
+    <Node X="0" Y="0" Z="17" Value="11"/>
+    <Node X="0" Y="0" Z="18" Value="11"/>
+    <Node X="0" Y="0" Z="19" Value="11"/>
+    <Node X="0" Y="0" Z="20" Value="11"/>
+    <Node X="0" Y="0" Z="21" Value="11"/>
+    <Node X="0" Y="0" Z="22" Value="11"/>
+    <Node X="0" Y="0" Z="23" Value="11"/>
+    <Node X="0" Y="0" Z="24" Value="11"/>
+    <Node X="0" Y="0" Z="25" Value="11"/>
+    <Node X="0" Y="0" Z="26" Value="11"/>
+    <Node X="0" Y="0" Z="27" Value="11"/>
+    <Node X="0" Y="0" Z="28" Value="11"/>
+    <Node X="0" Y="0" Z="29" Value="11"/>
+    <Node X="0" Y="0" Z="30" Value="11"/>
+    <Node X="0" Y="0" Z="31" Value="11"/>
+    <Node X="0" Y="0" Z="32" Value="11"/>
+    <Node X="0" Y="0" Z="33" Value="11"/>
+    <Node X="0" Y="0" Z="34" Value="11"/>
+    <Node X="0" Y="0" Z="35" Value="11"/>
+    <Node X="0" Y="0" Z="36" Value="11"/>
+    <Node X="0" Y="0" Z="37" Value="11"/>
+    <Node X="0" Y="0" Z="38" Value="11"/>
+    <Node X="0" Y="0" Z="39" Value="11"/>
+    <Node X="0" Y="0" Z="40" Value="11"/>
+    <Node X="0" Y="0" Z="41" Value="11"/>
+    <Node X="0" Y="0" Z="42" Value="11"/>
+    <Node X="0" Y="0" Z="43" Value="11"/>
+    <Node X="0" Y="0" Z="44" Value="11"/>
+    <Node X="0" Y="0" Z="45" Value="11"/>
+    <Node X="0" Y="0" Z="46" Value="11"/>
+    <Node X="0" Y="0" Z="47" Value="11"/>
+    <Node X="0" Y="0" Z="48" Value="11"/>
+    <Node X="0" Y="0" Z="49" Value="11"/>
+    <Node X="0" Y="0" Z="50" Value="11"/>
+    <Node X="0" Y="0" Z="51" Value="11"/>
+    <Node X="0" Y="0" Z="52" Value="11"/>
+  </GridCTFDefocusAngle>
+  <GridCTFPhase Width="1" Height="1" Depth="53" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+    <Node X="0" Y="0" Z="1" Value="0"/>
+    <Node X="0" Y="0" Z="2" Value="0"/>
+    <Node X="0" Y="0" Z="3" Value="0"/>
+    <Node X="0" Y="0" Z="4" Value="0"/>
+    <Node X="0" Y="0" Z="5" Value="0"/>
+    <Node X="0" Y="0" Z="6" Value="0"/>
+    <Node X="0" Y="0" Z="7" Value="0"/>
+    <Node X="0" Y="0" Z="8" Value="0"/>
+    <Node X="0" Y="0" Z="9" Value="0"/>
+    <Node X="0" Y="0" Z="10" Value="0"/>
+    <Node X="0" Y="0" Z="11" Value="0"/>
+    <Node X="0" Y="0" Z="12" Value="0"/>
+    <Node X="0" Y="0" Z="13" Value="0"/>
+    <Node X="0" Y="0" Z="14" Value="0"/>
+    <Node X="0" Y="0" Z="15" Value="0"/>
+    <Node X="0" Y="0" Z="16" Value="0"/>
+    <Node X="0" Y="0" Z="17" Value="0"/>
+    <Node X="0" Y="0" Z="18" Value="0"/>
+    <Node X="0" Y="0" Z="19" Value="0"/>
+    <Node X="0" Y="0" Z="20" Value="0"/>
+    <Node X="0" Y="0" Z="21" Value="0"/>
+    <Node X="0" Y="0" Z="22" Value="0"/>
+    <Node X="0" Y="0" Z="23" Value="0"/>
+    <Node X="0" Y="0" Z="24" Value="0"/>
+    <Node X="0" Y="0" Z="25" Value="0"/>
+    <Node X="0" Y="0" Z="26" Value="0"/>
+    <Node X="0" Y="0" Z="27" Value="0"/>
+    <Node X="0" Y="0" Z="28" Value="0"/>
+    <Node X="0" Y="0" Z="29" Value="0"/>
+    <Node X="0" Y="0" Z="30" Value="0"/>
+    <Node X="0" Y="0" Z="31" Value="0"/>
+    <Node X="0" Y="0" Z="32" Value="0"/>
+    <Node X="0" Y="0" Z="33" Value="0"/>
+    <Node X="0" Y="0" Z="34" Value="0"/>
+    <Node X="0" Y="0" Z="35" Value="0"/>
+    <Node X="0" Y="0" Z="36" Value="0"/>
+    <Node X="0" Y="0" Z="37" Value="0"/>
+    <Node X="0" Y="0" Z="38" Value="0"/>
+    <Node X="0" Y="0" Z="39" Value="0"/>
+    <Node X="0" Y="0" Z="40" Value="0"/>
+    <Node X="0" Y="0" Z="41" Value="0"/>
+    <Node X="0" Y="0" Z="42" Value="0"/>
+    <Node X="0" Y="0" Z="43" Value="0"/>
+    <Node X="0" Y="0" Z="44" Value="0"/>
+    <Node X="0" Y="0" Z="45" Value="0"/>
+    <Node X="0" Y="0" Z="46" Value="0"/>
+    <Node X="0" Y="0" Z="47" Value="0"/>
+    <Node X="0" Y="0" Z="48" Value="0"/>
+    <Node X="0" Y="0" Z="49" Value="0"/>
+    <Node X="0" Y="0" Z="50" Value="0"/>
+    <Node X="0" Y="0" Z="51" Value="0"/>
+    <Node X="0" Y="0" Z="52" Value="0"/>
+  </GridCTFPhase>
+  <GridMovementX Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridMovementX>
+  <GridMovementY Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridMovementY>
+  <GridVolumeWarpX Width="1" Height="1" Depth="1" Duration="1">
+    <Node X="0" Y="0" Z="0" W="0" Value="0"/>
+  </GridVolumeWarpX>
+  <GridVolumeWarpY Width="1" Height="1" Depth="1" Duration="1">
+    <Node X="0" Y="0" Z="0" W="0" Value="0"/>
+  </GridVolumeWarpY>
+  <GridVolumeWarpZ Width="1" Height="1" Depth="1" Duration="1">
+    <Node X="0" Y="0" Z="0" W="0" Value="0"/>
+  </GridVolumeWarpZ>
+  <GridAngleX Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridAngleX>
+  <GridAngleY Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridAngleY>
+  <GridAngleZ Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridAngleZ>
+  <GridDoseBfacs Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridDoseBfacs>
+  <GridDoseBfacsDelta Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridDoseBfacsDelta>
+  <GridDoseBfacsAngle Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridDoseBfacsAngle>
+  <GridDoseWeights Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="1"/>
+  </GridDoseWeights>
+  <GridLocationBfacs Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="0"/>
+  </GridLocationBfacs>
+  <GridLocationWeights Width="1" Height="1" Depth="1" MarginX="0" MarginY="0" MarginZ="0">
+    <Node X="0" Y="0" Z="0" Value="1"/>
+  </GridLocationWeights>
+</TiltSeries>

@@ -5,121 +5,315 @@ import re
 import warnings
 
 from skimage import measure
-from skimage import morphology
 
 from cryocat.core import cryomap
 from cryocat.utils import geom
+from cryocat.utils import imageutils
 from cryocat.utils import ioutils
 from cryocat.core import cryomotl
 from cryocat.core import cryomask
+from cryocat._types import (
+    DataSource,
+    Symmetry,
+    MapSource,
+    EulerAngles,
+    PathOrStr,
+    MotlType,
+    RelionVersion,
+    TripletLike,
+    ThresholdType,
+)
+from cryocat.core.cryomotl import MotlSource
 
-from lmfit import models
 import skimage
+from typing import Literal
 from scipy.spatial import KDTree
 from sklearn.cluster import DBSCAN
 
 
-def scores_extract_particles(
-    scores_map,
-    angles_map,
-    angles_list,
-    tomo_id,
-    particle_diameter,
-    object_id=None,
-    scores_threshold=None,
-    sigma_threshold=None,
-    cluster_size=None,
-    n_particles=None,
-    output_path=None,
-    output_type="emmotl",
-    angles_order="zxz",
-    symmetry="c1",
-    angles_numbering=0,
-    tomo_mask=None,
-):
-    """Extracts particles from scores maps produced by template matching
-       with GAPSTOP(TM) or STOPGAP.
+def extract_peak_orientations(
+    peak_coords: np.ndarray,
+    angles_map: MapSource,
+    angles_list: EulerAngles,
+    angles_numbering: Literal[0, 1] = 0,
+    angles_order: Literal["zxz", "zzx"] = "zxz",
+    symmetry: Symmetry = "c1",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Extract the Euler angles corresponding to the provided peak coordinates from the angles map and list.
+
+    If the template is symmetric, each particle is given a randomly chosen
+    symmetric copy of its orientation: ``R @ g`` with ``g`` drawn uniformly from
+    the group's rotations (template-side symmetry, as for particle-list angles).
+    All copies look identical, but a search restricted to one part of the
+    orientations (e.g. :func:`cryocat.utils.geom.generate_angles` with
+    ``symmetry``) would otherwise give every particle an orientation in that
+    same part; the random copy spreads them evenly over the equivalent ones.
+    For C_n this is a random multiple of 360/n degrees added to phi.
 
     Parameters
     ----------
-    scores_map : str or array-like
-        Path to the scores map file or the scores map array.
-    angles_map : str or array-like
-        Path to the angles map file or the angles map array.
-    angles_list : str or array-like
-        Path to the angles list file or the angles list array.
-    tomo_id : int
-        Identifier for the tomogram from which particles are being extracted.
-    particle_diameter : float
-        Diameter of the particle to be used for extraction and clustering.
-    object_id : int, optional
-        Identifier for the object within the tomogram. Defaults to None.
-    scores_threshold : float, optional
-        "Direct" threshold for the scores map. If set, all values below this threshold
-        will be removed from the scores map. This parameter is useful if one knows
-        exact threshold for the scores map. Defaults to None.
-    sigma_threshold : float, optional
-        Number of standard deviations above the mean to consider as threshold for
-        particle extraction. This parameter is prefered over the scores threshold for
-        "batch" processing since the exact scores threshold might differ between
-        different scores maps, while the sigma confidence is relatively stable.
-        If None, the threshold is computed using
-        :meth:`cryocat.tmana.compute_scores_map_threshold_triangle` function.
-        Defaults to None.
-    cluster_size : int, optional
-        Minimum number of particles required to form a cluster. Defaults to None.
-    n_particles : int, optional
-        Maximum number of particles to extract. Defaults to None.
-    output_path : str, optional
-        Path to save the output file. If the output_path is not specified no file
-        will be written out. Defaults to None.
-    output_type : str, {"emmotl", "stopgap", "relion"}
-        Type of the file to be written out. The options are "emmotl", "stopgap",
-        "relion". This parameter is used only if output_path is not None. Defaults
-        to "emmotl".
+    peak_coords : numpy.ndarray
+        Array of shape (N, 3) containing the coordinates of the detected peaks (particles) in the scores map.
+    angles_map : MapSource
+        Path to the angles map file or a pre-loaded array.  Each voxel stores
+        the index of the best-matching angle in ``angles_list``.
+    angles_list : EulerAngles
+        Path to the rotation-angles file or a pre-loaded (N, 3) array of
+        Euler angles (phi, theta, psi).
+    angles_numbering : int, {0, 1}
+        Index offset applied to values read from ``angles_map`` before
+        indexing into ``angles_list``.  STOPGAP angle maps are 1-based, so
+        set this to 1; GAPSTOP(TM) maps are 0-based (default 0).
     angles_order : str, {"zxz", "zzx"}
-        Order of rotation angles in the angles list. For lists generated by STOPGAP
-        use "zzx". For GAPSTOP(TM) use the same angle_order that was used in the
-        list generation (default is "zxz"). Defaults to "zxz".
-    symmetry : str, default="c1"
-        Symmetry to be applied. The function currently supports only cyclic (C)
-        symmetries. If a non-C symmetry is provided, it raises warning and defaults
-        to "c1". Defaults to "c1".
-    angles_numbering : int, default=0
-        Adjusts the indexing of angles from the angles map. Angle maps from STOPGAP
-        start numbering from 1 and thus angles_numbering should be set to 1 to fetch
-        correct angles from the angle lists. GAPSTOP(TM) numbers from 0.
-        Defaults to 0.
-    tomo_mask: str or array-like, optional
-        Path to a binary tomogram mask file or an array containing the mask. If
-        provided the scores maps are multiplied with the mask prior any further
-        processing.
+        Euler-angle convention of ``angles_list``.  Use "zzx" for STOPGAP
+        angle lists and "zxz" for GAPSTOP(TM) lists.  Defaults to "zxz".
+    symmetry : Symmetry
+        Symmetry of the template (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``), in the canonical frame of :mod:`cryocat.utils.symmetry`
+        (C_n/D_n: n-fold axis along z; see
+        :func:`cryocat.utils.symmetry.reduce_angle_grid` Notes). Normalized via
+        :func:`cryocat.utils.geom.as_symmetry`. Default is "c1" (no change).
 
     Returns
     -------
-    motl : Motl object
-        Motl object containing the extracted particle coordinates, scores,
-        and orientations.
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        Three arrays containing the phi, theta, and psi angles (zxz, degrees)
+        corresponding to the provided peak coordinates, always in cryoCAT's
+        canonical form (phi and psi in [-180, 180], theta in [0, 180]; for
+        theta 0 or 180 the whole spin is in phi and psi = 0) regardless of
+        whether ``angles_list`` itself was in that form. This holds for C1
+        too (no symmetric copy is assigned there, only canonicalization).
 
-    Raises
-    ------
-    Warning
-        If a non-supported symmetry is provided, a warning is issued and the symmetry
-        is set to "c1".
+    Warns
+    -----
+    UserWarning
+        For D/T/O/I: the template is assumed to be in the canonical frame;
+        if it is not, the assigned symmetric copies (and thus the angles) are wrong.
 
     Notes
     -----
-    The function supports only cyclic (C) symmetries. If a non-C symmetry is provided,
-    it defaults to "c1".
+    The random choice uses NumPy's global random state (``np.random``), so
+    calling ``np.random.seed`` beforehand makes the result reproducible.
+    Before 2026-10-02 C_n added the multiple of 360/n to phi without wrapping
+    and D/T/O/I were ignored; for C_n the chosen copies (for a given seed)
+    and the rotations are unchanged, only their Euler form is now canonical.
+    Before 2026-10-08, C1 returned ``angles_list`` angles unchanged, even if
+    they were outside the canonical ranges.
     """
 
-    if symmetry.lower().startswith("c"):
-        symmetry = int(re.findall(r"\d+", symmetry)[-1])
-    else:
+    angles_map = cryomap.read(angles_map)
+    anglist = ioutils.euler_angles_load(angles_list, angles_order=angles_order)
+
+    # retrieve symmetry
+    group, order = geom.as_symmetry(symmetry)
+    symmetry = geom.resolve_symmetry_argument(symmetry, None)
+    if group != "C":
         warnings.warn(
-            f"Only C symmetry is supported. Provided {symmetry} " f"is currently not supported and will be ignored."
+            f"Symmetry {symmetry}: the template is assumed to be in cryoCAT's canonical frame "
+            "(see cryocat.utils.symmetry.reduce_angle_grid Notes); if it is not, the assigned "
+            "symmetric copies are wrong. Align the template before running template matching.",
+            UserWarning,
         )
-        symmetry = 1
+
+    # Parse angle index
+    ang_idx = angles_map[peak_coords[:, 0], peak_coords[:, 1], peak_coords[:, 2]].astype(int) - angles_numbering
+
+    # Angle lookup to retrieve the actual Euler angles from the angle_list
+    phi = anglist[ang_idx, 0]
+    theta = anglist[ang_idx, 1]
+    psi = anglist[ang_idx, 2]
+
+    if phi.shape[0] > 0:
+        if symmetry != "C1":
+            phi, theta, psi = _random_symmetric_copies(phi, theta, psi, symmetry)
+        else:
+            # No symmetric copy to assign, but still put the same rotation into canonical Euler form
+            phi, theta, psi = _canonical_euler(phi, theta, psi)
+
+    return phi, theta, psi
+
+
+def _euler_to_canonical(rots) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Read back a batch of rotations as zxz Euler angles in cryoCAT's canonical ranges.
+
+    Parameters
+    ----------
+    rots : scipy.spatial.transform.Rotation
+        A batch of N rotations (N > 0).
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        phi, theta, psi (zxz, degrees), each shape ``(N,)``, in scipy's ranges
+        (phi, psi in [-180, 180], theta in [0, 180]).
+    """
+    with warnings.catch_warnings():
+        # theta 0/180: scipy warns and puts the whole spin into phi; the rotation is still exact
+        warnings.filterwarnings("ignore", message="Gimbal lock")
+        angles = np.atleast_2d(rots.as_euler("zxz", degrees=True))
+    return angles[:, 0], angles[:, 1], angles[:, 2]
+
+
+def _canonical_euler(
+    phi: np.ndarray, theta: np.ndarray, psi: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Rewrite zxz Euler angles into cryoCAT's canonical ranges, without changing the rotation.
+
+    ``angles_list`` entries (e.g. loaded from a STOPGAP/GAPSTOP file) are not
+    guaranteed to already lie in cryoCAT's ranges (phi, psi in [-180, 180],
+    theta in [0, 180]); this round-trips them through
+    :class:`scipy.spatial.transform.Rotation` so they do, independently of any
+    symmetry handling.
+
+    Parameters
+    ----------
+    phi, theta, psi : numpy.ndarray
+        Shape ``(N,)`` with N > 0, zxz Euler angles in degrees, any range.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        phi, theta, psi of the same rotations, in canonical ranges.
+    """
+    from scipy.spatial.transform import Rotation as srot
+
+    rots = srot.from_euler("zxz", np.column_stack([phi, theta, psi]), degrees=True)
+    return _euler_to_canonical(rots)
+
+
+def _random_symmetric_copies(
+    phi: np.ndarray, theta: np.ndarray, psi: np.ndarray, symmetry: Symmetry
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Replace each orientation ``R`` by ``R @ g``, with ``g`` drawn at random from the group.
+
+    Parameters
+    ----------
+    phi, theta, psi : numpy.ndarray
+        Shape ``(N,)`` with N > 0, zxz Euler angles in degrees.
+    symmetry : Symmetry
+        Any group (C, D, T, O, I), in the canonical frame of :mod:`cryocat.utils.symmetry`.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        phi, theta, psi of the copies (zxz, degrees, as returned by
+        :meth:`scipy.spatial.transform.Rotation.as_euler`).
+
+    Notes
+    -----
+    The group rotations are listed identity first; for C_n in the order
+    ``k * 360/n`` (k = 0..n-1), so a given random state picks the same copy as
+    the former ``phi + np.random.choice(np.linspace(0, 360, n + 1)[:-1])``.
+    """
+    # local import: symmetry imports geom, keep tmana's module-level imports unchanged
+    from scipy.spatial.transform import Rotation as srot
+    from cryocat.utils.symmetry import get_symmetry_rotations
+
+    g_mats = get_symmetry_rotations(symmetry)
+    pick = np.random.choice(len(g_mats), size=phi.shape[0])
+    rots = srot.from_euler("zxz", np.column_stack([phi, theta, psi]), degrees=True) * srot.from_matrix(g_mats[pick])
+    return _euler_to_canonical(rots)
+
+
+def scores_extract_particles(
+    scores_map: MapSource,
+    angles_map: MapSource,
+    angles_list: EulerAngles,
+    tomo_id: int,
+    particle_diameter: float,
+    object_id: int | None = None,
+    scores_threshold: float | None = None,
+    sigma_threshold: float | None = None,
+    cluster_size: int | None = None,
+    n_particles: int | None = None,
+    angles_order: Literal["zxz", "zzx"] = "zxz",
+    angles_numbering: Literal[0, 1] = 0,
+    symmetry: Symmetry = "c1",
+    tomo_mask: MapSource | None = None,
+    output_path: PathOrStr | None = None,
+    output_motl_type: MotlType = "emmotl",
+    **output_kwargs,
+) -> "MotlSource":
+    """Extract particles from template-matching scores maps produced by GAPSTOP(TM) or STOPGAP.
+
+    Voxels above a score threshold are collected, deduplicated using a greedy
+    distance filter (keeping the highest-scoring position within each
+    ``particle_diameter``-radius neighborhood), clustered with DBSCAN, and
+    assembled into a :class:`cryocat.core.cryomotl.Motl` with orientations
+    looked up from the corresponding angles map.  Particle coordinates are
+    stored in 1-based indexing.
+
+    Parameters
+    ----------
+    scores_map : MapSource
+        Path to the scores map file or a pre-loaded array.
+    angles_map : MapSource
+        Path to the angles map file or a pre-loaded array.  Each voxel stores
+        the index of the best-matching angle in ``angles_list``.
+    angles_list : EulerAngles
+        Path to the rotation-angles file or a pre-loaded (N, 3) array of
+        Euler angles (phi, theta, psi).
+    tomo_id : int
+        Tomogram identifier written into the output motl.
+    particle_diameter : float
+        Particle diameter in voxels. Used as the minimum centre-to-centre separation between
+        kept particles in the greedy deduplication step - one full diameter, so kept particles
+        do not overlap - and as twice the eps parameter for DBSCAN clustering.
+    object_id : int, optional
+        Object identifier written into the output motl.  Defaults to 1.
+    scores_threshold : float, optional
+        Absolute score threshold.  Voxels with scores at or below this value
+        are discarded.  Takes priority over ``sigma_threshold``; if set,
+        ``sigma_threshold`` is ignored.  Defaults to None.
+    sigma_threshold : float, optional
+        Threshold expressed as mean + ``sigma_threshold`` * std of the scores
+        map.  Only used when ``scores_threshold`` is None.  If both are None
+        the threshold is determined automatically via
+        :meth:`cryocat.analysis.tmana.compute_scores_map_threshold_triangle`.
+        Defaults to None.
+    cluster_size : int, optional
+        Minimum number of candidate positions required for a DBSCAN cluster to
+        be retained.  Clusters with fewer members are discarded entirely.
+        Defaults to None (all clusters kept).
+    n_particles : int, optional
+        Maximum number of particles to return, taken in descending score order.
+        Defaults to None (no limit).
+    angles_order : str, {"zxz", "zzx"}
+        Euler-angle convention of ``angles_list``.  Use "zzx" for STOPGAP
+        angle lists and "zxz" for GAPSTOP(TM) lists.  Defaults to "zxz".
+    angles_numbering : int, default=0
+        Index offset applied to values read from ``angles_map`` before
+        indexing into ``angles_list``.  STOPGAP angle maps are 1-based, so
+        set this to 1; GAPSTOP(TM) maps are 0-based (default 0).
+    symmetry : Symmetry, default="c1"
+        Symmetry of the template (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``), in the canonical frame of :mod:`cryocat.utils.symmetry`. Each
+        particle gets a randomly chosen symmetric copy of its orientation (for
+        C_n: a random multiple of 360/n degrees added to phi). D/T/O/I issue a
+        warning reminding that the template must be in the canonical frame.
+        See :func:`extract_peak_orientations`.
+    tomo_mask : MapSource, optional
+        Path to a binary tomogram mask or a pre-loaded array.  When provided,
+        the scores map is multiplied by this mask before thresholding.
+        Defaults to None.
+    output_path : PathOrStr, optional
+        Path to write the output motl.  No file is written when None.
+        Defaults to None.
+    output_motl_type : MotlType, optional
+        Format of the output particle list. Defaults to "emmotl".
+    **output_kwargs
+        Additional keyword arguments passed to the motl converter when preparing the
+        output particle list and writing the output file.
+        See :func:`cryocat.core.cryomotl.motl_converter_kwargs` for details.
+
+    Returns
+    -------
+    motl : Motl or None
+        :class:`cryocat.core.cryomotl.Motl` containing extracted particle
+        coordinates, scores, and orientations.  Returns ``None`` when no
+        voxel exceeds the threshold.
+
+    """
 
     # load the scores map
     scores_map = cryomap.read(scores_map)
@@ -128,7 +322,7 @@ def scores_extract_particles(
     angles_map = cryomap.read(angles_map)
 
     # Read angle list.
-    anglist = ioutils.rot_angles_load(angles_list, angles_order=angles_order)
+    anglist = ioutils.euler_angles_load(angles_list, angles_order=angles_order)
 
     # load and apply a tomogram mask if any:
     if tomo_mask is not None:
@@ -222,24 +416,19 @@ def scores_extract_particles(
         # if n_particles is not None and c >= n_particles:
         #    break
 
-    # Remaining positions
+    # Remaining positions and their scores (both subset by the same mask)
     rpos = filtered_coords[filtered_hit_idx]
+    rscores = filtered_scores[filtered_hit_idx]
+
     if n_particles is not None:
-        rpos = rpos[0 : min(rpos.shape[0], n_particles), :]
-        filtered_scores = filtered_scores[0 : min(rpos.shape[0], n_particles)]
+        n_keep = min(rpos.shape[0], n_particles)
+        rpos = rpos[:n_keep, :]
+        rscores = rscores[:n_keep]
 
-    # Fill orientation and scores
-    # Parse angle index
-    ang_idx = angles_map[rpos[:, 0], rpos[:, 1], rpos[:, 2]].astype(int) - angles_numbering
-
-    phi = anglist[ang_idx, 0]
-    theta = anglist[ang_idx, 1]
-    psi = anglist[ang_idx, 2]
-
-    if symmetry > 1:
-        add_phi = np.linspace(0, 360, symmetry + 1)
-        add_phi = add_phi[:-1]
-        phi = phi + np.random.choice(add_phi, size=phi.shape[0])
+    # Fill orientations
+    phi, theta, psi = extract_peak_orientations(
+        rpos, angles_map, angles_list, angles_numbering=angles_numbering, angles_order=angles_order, symmetry=symmetry
+    )
 
     ##### Generate motivelist #####
     print("Generating motivelist...")
@@ -250,7 +439,7 @@ def scores_extract_particles(
             "x": rpos[:, 0] + 1,
             "y": rpos[:, 1] + 1,
             "z": rpos[:, 2] + 1,
-            "score": filtered_scores,
+            "score": rscores,
             "class": 1,
             "tomo_id": tomo_id,
             "object_id": object_id,
@@ -264,296 +453,233 @@ def scores_extract_particles(
     del s_ind, scored_coords
     gc.collect()
 
-    if output_path is not None:
-        if output_type == "emmotl":
-            motl.write_out(output_path)
-        elif output_type == "stopgap":
-            sg_motl = cryomotl.StopgapMotl(motl.df)
-            sg_motl.write_out(output_path=output_path)
-        elif output_type == "relion":
-            rel_motl = cryomotl.RelionMotl(motl.df)
-            rel_motl.write_out(output_path=output_path)
-        else:
-            raise ValueError(f"The output motl type {output_type} is not currently supported.")
+    motl = cryomotl.motl_converter_kwargs(motl, output_motl_type, output_path=output_path, **output_kwargs)
 
     return motl
 
 
-def compute_scores_map_threshold_triangle(scores_map):
-    """Compute a threshold value from a scores map using the triangle method.
+def compute_scores_map_threshold_triangle(scores_map: MapSource) -> float:
+    """Compute a threshold from a scores map using a triangle method on sorted values.
 
-    This function applies the triangle thresholding algorithm to a 1D or flattened
-    array of scores, which is often used for image histogram thresholding. The
-    algorithm finds a threshold by maximizing the distance from a line drawn between
-    the peak and the lowest level of the histogram.
+    The input array is flattened and sorted in ascending order.  A straight
+    line is drawn from the first positive value to the maximum value.  The
+    threshold is the sorted value whose perpendicular distance from that line
+    is greatest — analogous to the triangle/chord method used for histogram
+    thresholding, but applied directly to the empirical CDF of the scores
+    rather than to binned counts.
 
     Parameters
     ----------
-    scores_map : array_like
-        Input array containing scores or intensity values. The data will be flattened
-        and sorted internally.
+    scores_map : MapSource
+        Path to the scores map file or pre-loaded array of any shape containing score or intensity values.
+        The array is flattened and sorted internally; the original shape is not modified.
 
     Returns
     -------
     float
-        The threshold value determined by the triangle method.
+        Threshold value.  Score values strictly above this threshold are
+        considered signal in the calling code.
 
     Notes
     -----
-    - The method sorts the input data, identifies the histogram peak, and calculates
-      a threshold that maximizes the distance to the line between the peak and the
-      lowest non-zero level.
-    - If the left tail of the histogram is shorter, the data is flipped before
-      calculation to ensure robustness.
-    - This implementation omits an additional constant factor used in some ImageJ
-      implementations as it does not affect threshold location.
+    - Because the method operates on sorted values, the "peak" is always the
+      maximum of the array (last element after sorting), not a histogram mode.
+    - The flip branch (reversing the sorted array when the peak lies closer to
+      the low end) is inherited from the histogram variant of the algorithm but
+      is never triggered on sorted data where the maximum is by definition at
+      the far right.  It is retained for completeness.
+    - This implementation omits an additive constant present in some ImageJ
+      versions; the omission does not affect the threshold location.
     """
 
-    sp = np.sort(scores_map, axis=None)
-    nbins = len(sp)
-
-    # Find peak, lowest and highest gray levels.
-    arg_peak_height = np.argmax(sp)
-    peak_height = sp[arg_peak_height]
-    arg_low_level, arg_high_level = np.where(sp > 0)[0][[0, -1]]
-
-    # Flip is True if left tail is shorter.
-    flip = arg_peak_height - arg_low_level < arg_high_level - arg_peak_height
-    if flip:
-        sp = sp[::-1]
-        arg_low_level = nbins - arg_high_level - 1
-        arg_peak_height = nbins - arg_peak_height - 1
-
-    # If flip == True, arg_high_level becomes incorrect
-    # but we don't need it anymore.
-    del arg_high_level
-
-    # Set up the coordinate system.
-    width = arg_peak_height - arg_low_level
-    x1 = np.arange(width)
-    y1 = sp[x1 + arg_low_level]
-
-    # Normalize.
-    norm = np.sqrt(peak_height**2 + width**2)
-    peak_height /= norm
-    width /= norm
-
-    # Maximize the length.
-    # The ImageJ implementation includes an additional constant when calculating
-    # the length, but here we omit it as it does not affect the location of the
-    # minimum.
-    length = peak_height * x1 - width * y1
-    arg_level = np.argmax(length) + arg_low_level
-
-    if flip:
-        arg_level = nbins - arg_level - 1
-
-    return sp[arg_level]
+    scores_map = cryomap.read(scores_map)
+    return imageutils.triangle_threshold(scores_map)
 
 
-def create_starting_parameters_1D(input_map, peak_tolerance=20):
-    """Identify peak values in central part of a map and extract 1D line profiles
-    along each axis for all peaks.
+def create_starting_parameters_1D(
+    input_map: MapSource, peak_tolerance: int = 20
+) -> tuple[tuple[int, ...], float, np.ndarray]:
+    """Locate the highest-scoring position within a central region and extract 1D profiles.
 
-    This function applies a spherical mask to restrict the peak search to a central region
-    of the input map, identifies the coordinates of the highest value within that region,
-    determines the global peak value, and extracts the intensity profiles along the x, y,
-    and z axes passing through the peak.
+    A spherical mask of radius ``peak_tolerance`` is applied to restrict the
+    peak search to the centre of the map.  The coordinates of the maximum
+    within the masked region are returned together with three 1D intensity
+    profiles along each array axis through that position.
 
     Parameters
     ----------
-    input_map : ndarray
-        A 3D NumPy array representing the map (e.g., a correlation or density map).
+    input_map : MapSource
+        Path to map file or pre-loaded 3D array representing the map (e.g. a cross-correlation or density map).
     peak_tolerance : int, optional
-        Radius of the spherical mask, in voxels, used to limit the peak search to the
-        central region of the map. Default is 20.
+        Radius of the spherical search mask in voxels.  Only the peak within
+        this sphere around the map centre is considered.  Default is 20.
 
     Returns
     -------
     peak_center : tuple of int
-        The (x, y, z) voxel coordinates of the detected peak center, found within the
-        masked region.
+        Array indices (dim0, dim1, dim2) of the detected peak, i.e. the
+        highest-valued voxel inside the masked region.
     peak_height : float
-        The maximum value in the entire `input_map` (global peak value).
+        Global maximum of the unmasked ``input_map``.
     profiles : ndarray of shape (N, 3)
-        The 1D intensity profiles along x, y, and z through the peak center.
-        Each column corresponds to one axis:
-        column 0 = x-axis profile,
-        column 1 = y-axis profile,
-        column 2 = z-axis profile.
+        1D intensity profiles through ``peak_center`` along each array axis.
+        Column 0 varies along dim0 (x), column 1 along dim1 (y), column 2
+        along dim2 (z).  N equals the length of the corresponding axis.
 
     Notes
     -----
-    - The peak location is determined within the masked region, but the peak height
-      is taken from the global maximum of the unmasked `input_map`.
-    - The spherical mask is centered on the map center, not the detected peak.
-    - This method is useful for analyzing the sharpness and anisotropy of a central peak.
+    - The peak location is determined within the masked region, but
+      ``peak_height`` is the global maximum of the full unmasked map.
+    - The spherical mask is centred on the map centre, not on the peak.
     """
-
-    peak_mask = cryomask.spherical_mask(np.asarray(input_map.shape), radius=peak_tolerance)
-    masked_map = input_map * peak_mask
-    peak_center = np.unravel_index(np.argmax(masked_map), shape=masked_map.shape)
+    input_map = cryomap.read(input_map)
+    peak_center = imageutils.find_peak_3d(input_map, search_radius=peak_tolerance)
     peak_height = np.amax(input_map)
-
-    x_profile = input_map[:, peak_center[1], peak_center[2]]
-    y_profile = input_map[peak_center[0], :, peak_center[2]]
-    z_profile = input_map[peak_center[0], peak_center[1], :]
-
-    profiles = np.vstack((x_profile, y_profile, z_profile))
-
-    return peak_center, peak_height, profiles.T
+    profiles = imageutils.extract_orthogonal_lines_1d(input_map, peak_center)
+    return peak_center, peak_height, profiles
 
 
-def create_starting_parameters_2D(input_map, peak_tolerance=20, peak_center=None):
-    """Generate 2D cross-sectional slices and peak parameters from a 3D input map.
+def create_starting_parameters_2D(
+    input_map: MapSource, peak_tolerance: int = 20, peak_center: tuple[int, ...] | int | None = None
+) -> tuple[tuple[int, ...] | np.ndarray, float, np.ndarray]:
+    """Extract three orthogonal 2D slices and peak parameters from a 3D map.
 
-    This function extracts three orthogonal 2D slices (XY, YZ, XZ) through the
-    specified or automatically determined peak of a 3D volume. It optionally
-    restricts the search for the peak to a spherical region defined by `peak_tolerance`.
+    Three planes — XY (fixed z), YZ (fixed x), and XZ (fixed y) — are
+    extracted through the detected or supplied peak position and stacked into
+    a single array.  Requires a cubic input volume (all three dimensions equal)
+    so that the three 2D slices share the same shape.
 
     Parameters
     ----------
-    input_map : array_like
-        A 3D array representing the input map or volume from which to extract slices.
+    input_map : MapSource
+        Path to map file or pre-loaded 3D cubic array representing the map or volume.
     peak_tolerance : int, optional
-        Radius of the spherical mask (in voxels) used to restrict the search for the
-        peak when `peak_center` is not provided. Default is 20.
+        Radius in voxels of the spherical search mask used when ``peak_center``
+        is not provided.  Default is 20.
     peak_center : tuple of int, optional
-        Coordinates (x, y, z) of the peak in the 3D volume. If None, the peak is
-        automatically determined as the maximum value within the spherical mask.
+        Array indices (x, y, z) of the peak.  When supplied, the peak search is
+        skipped and this position is used directly.  Defaults to None (automatic
+        detection within the spherical mask).
 
     Returns
     -------
     peak_center : tuple of int
-        Coordinates (x, y, z) of the identified peak in the input volume.
+        Array indices (x, y, z) of the peak position used for slicing.
     peak_height : float
-        Intensity value at the peak location.
-    slices : ndarray
-        A 3D array containing three orthogonal 2D slices stacked along the third
-        axis. The slices correspond to the XY, YZ, and XZ planes passing through
-        the peak.
-
-    Notes
-    -----
-    - The function assumes that `input_map` is a 3D array.
-    - The returned slices are aligned such that the first two dimensions correspond
-      to the plane axes, and the third dimension indexes the three planes (XY, YZ, XZ).
+        When ``peak_center`` is None: global maximum of ``input_map``.
+        When ``peak_center`` is provided: value of the *masked* map at that
+        position, which is 0 if the supplied point lies outside the spherical
+        mask.
+    slices : ndarray of shape (N, N, 3)
+        Three orthogonal slices stacked along the last axis:
+        ``slices[:, :, 0]`` = XY plane (fixed z = peak_center[2]),
+        ``slices[:, :, 1]`` = YZ plane (fixed x = peak_center[0]),
+        ``slices[:, :, 2]`` = XZ plane (fixed y = peak_center[1]).
+        N is the common edge length of the cubic volume.
     """
 
-    peak_mask = cryomask.spherical_mask(np.asarray(input_map.shape), radius=peak_tolerance)
-    masked_map = input_map * peak_mask
+    input_map = cryomap.read(input_map)
+
     if peak_center is None:
-        peak_center = np.unravel_index(np.argmax(masked_map), shape=masked_map.shape)
+        peak_center = imageutils.find_peak_3d(input_map, search_radius=peak_tolerance)
         peak_height = np.amax(input_map)
     else:
-        peak_height = masked_map[peak_center[0], peak_center[1], peak_center[2]]
+        # peak_center = geom.as_triplet(peak_center)
+        volume_center = np.asarray(input_map.shape) // 2
+        dist = np.linalg.norm(np.asarray(peak_center) - volume_center)
+        peak_height = (
+            float(input_map[peak_center[0], peak_center[1], peak_center[2]]) if dist <= peak_tolerance else 0.0
+        )
 
-    xy_plane = input_map[:, :, peak_center[2]]
-    yz_plane = input_map[peak_center[0], :, :]
-    xz_plane = input_map[:, peak_center[1], :]
-
-    slices = np.stack((xy_plane, yz_plane, xz_plane), axis=2)
-
+    slices = imageutils.extract_orthogonal_slices_2d(input_map, peak_center)
     return peak_center, peak_height, slices
 
 
-def compute_gaussian_threshold(input_map):
-    """Compute an average Gaussian-based threshold from 1D profiles of a 3D map.
+def compute_gaussian_threshold(input_map: MapSource) -> float:
+    """Estimate the peak intensity of a 3D map by Gaussian fitting of 1D profiles.
 
-    This function extracts 1D profiles along three principal axes passing through
-    the peak of a 3D input map, fits a Gaussian model to each profile, and returns
-    the average peak height as a threshold value.
+    Three 1D profiles through the detected peak (one per array axis) are each
+    fitted with a Gaussian model.  The mean of the three fitted peak heights
+    (``amplitude / (sigma * sqrt(2π))``) is returned as the threshold estimate.
 
     Parameters
     ----------
-    input_map : array_like
-        A 3D array representing the input map or volume from which 1D profiles
-        are extracted.
+    input_map : MapSource
+        Path to map file or pre-loaded 3D array representing the map or volume to analyse.
 
     Returns
     -------
     threshold : float
-        The average Gaussian peak height computed from the three orthogonal 1D profiles.
+        Mean Gaussian peak height averaged over the three orthogonal 1D profiles
+        through the map's central peak.
 
     Notes
     -----
-    - Internally, the function uses ``create_starting_parameters_1D`` to determine
-      the peak location and extract 1D intensity profiles.
-    - Gaussian fitting is performed using ``lmfit.models.GaussianModel``.
-    - The peak center along each axis is constrained to ±1 voxel around the
-      detected peak.
-    - The returned threshold represents a robust estimate of the map's peak intensity
-      suitable for downstream processing such as masking or segmentation.
+    - Peak detection uses :func:`create_starting_parameters_1D` with
+      ``peak_tolerance=20``.
+    - Gaussian fitting is performed with ``lmfit.models.GaussianModel``.
+    - The Gaussian centre along each axis is constrained to ±1 voxel around
+      the detected peak position.
     """
 
-    pc, ph, profiles = create_starting_parameters_1D(input_map, peak_tolerance=20)
-
-    heights = []
-    for i in range(3):
-        rt_line = profiles[:, i]
-        x = np.linspace(0, rt_line.shape[0], rt_line.shape[0])
-        y = rt_line
-        mod = models.GaussianModel()
-
-        # params = mod.make_params(center=24, sigma=0.5)
-        params = mod.guess(rt_line, x)
-
-        # you can place min/max bounds on parameters
-        params["amplitude"].min = 0
-        params["sigma"].min = 0
-        params["center"].min = pc[i] - 1
-        params["center"].max = pc[i] + 1
-
-        # pars = mod.guess(y, x=x)
-        out = mod.fit(y, params, x=x)
-
-        heights.append(out.params["height"].value)
-
-    return np.mean(np.asarray(heights))
+    input_map = cryomap.read(input_map)
+    return imageutils.gaussian_threshold(input_map)
 
 
-def get_ellipsoid_label(input_map, peak_coordinates, map_threshold=0.0):
-    """Generate a labeled ellipsoid around a peak in a 3D map.
+def get_ellipsoid_label(
+    input_map: MapSource, peak_coordinates: tuple[int, int, int], map_threshold: float = 0.0
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Fit an ellipsoid to the connected region around a peak and return the filled volume.
 
-    This function thresholds a 3D map, identifies the connected component containing
-    a specified peak, fits an ellipsoid to its surface, and returns a labeled volume
-    corresponding to the fitted ellipsoid along with geometric properties.
+    The input map is binarised by treating voxels equal to ``map_threshold`` as
+    background (label 2) and all others as foreground (label 1).  The connected
+    component containing ``peak_coordinates`` is isolated, its surface is
+    extracted with marching cubes, an ellipsoid is fitted to those surface
+    vertices, and a filled ellipsoid mask is returned.
 
     Parameters
     ----------
-    input_map : array_like
-        A 3D array representing the input volumetric map.
+    input_map : MapSource
+        Path to map file or pre-loaded 3D array representing the volumetric map to segment.
     peak_coordinates : tuple of int
-        Coordinates (z, y, x) of the peak around which the ellipsoid is fitted.
+        Array indices (dim0, dim1, dim2) of a voxel inside the target region.
     map_threshold : float, optional
-        Intensity threshold for initial map segmentation. Voxels equal to this value
-        are temporarily shifted to avoid labeling conflicts. Default is 0.0.
+        Value used to distinguish background from foreground during
+        binarisation.  Voxels with this exact value become background (label 2)
+        and all others become foreground (label 1) before connected-component
+        labelling.  Default is 0.0.
 
     Returns
     -------
     fitted_label : ndarray
-        A 3D array of the same shape as `input_map` where voxels inside the fitted
-        ellipsoid are labeled as 1 and others as 0.
-    radii_sorted : ndarray
-        Array of the lengths of the principal axes of the fitted ellipsoid, sorted
-        by magnitude.
+        Binary 3D array (same shape as ``input_map``) filled inside the fitted
+        ellipsoid (1) and zero outside.
+    radii_sorted : ndarray of shape (3,)
+        Full axis lengths (diameter, not radius) of the fitted ellipsoid,
+        reordered so that element 0 corresponds to the spatial axis (x, y, or z)
+        that the first principal axis most closely aligns with, element 1 to the
+        second, and element 2 to the third.
     surface_fit : ndarray
-        A 3D binary array representing the ellipsoid surface obtained via marching cubes.
+        Binary 3D array marking the ellipsoid surface voxels obtained from
+        marching cubes (value 1 on the surface, 0 elsewhere).
     th_map : ndarray
-        Thresholded map where only the connected component containing the peak is labeled.
+        Binary 3D array containing only the connected component that includes
+        ``peak_coordinates`` (1 inside the component, 0 elsewhere).
 
     Notes
     -----
-    - Uses `skimage.measure.label` for connected component labeling.
-    - Uses `skimage.measure.marching_cubes` to extract the ellipsoid surface.
-    - Ellipsoid fitting and voxel filling are performed with functions from `geom`.
-    - Radii are doubled to represent full axis lengths.
+    - Connected-component labelling uses face connectivity (connectivity=1).
+    - Ellipsoid fitting and volume filling are performed by
+      :func:`cryocat.utils.geom.fit_ellipsoid` and
+      :func:`cryocat.utils.geom.fill_ellipsoid`.
     """
+
+    input_map = cryomap.read(input_map)
 
     # shift the thresholding, otherwise only 1 label is found
     th_map = np.where(input_map == map_threshold, 2.0, 1.0)
-    labeled_th_map = measure.label(th_map, connectivity=1)
-    central_label = labeled_th_map[peak_coordinates[0], peak_coordinates[1], peak_coordinates[2]]
+    labeled_th_map = imageutils.label_connected_components(th_map)
+    central_label = imageutils.label_at_point(labeled_th_map, peak_coordinates)
     th_map = np.where(labeled_th_map == central_label, 1.0, 0.0)
 
     ellipsoid_verts, _, _, _ = measure.marching_cubes(th_map, level=0.5)
@@ -580,45 +706,55 @@ def get_ellipsoid_label(input_map, peak_coordinates, map_threshold=0.0):
     return fitted_label, radii_sorted, surface_fit, th_map
 
 
-def get_central_plane_labels(input_map, peak_coordinates, map_threshold=0.0):
-    """
-    Generate central plane labels and approximate ellipsoid dimensions from a 3D map.
+def get_central_plane_labels(
+    input_map: MapSource, peak_coordinates: tuple[int, int, int], map_threshold: float = 0.0
+) -> tuple[np.ndarray, tuple[float, float, float]]:
+    """Label central-plane ellipses in a 3D map and estimate ellipsoid half-lengths.
 
-    This function thresholds a 3D input map, extracts central XY, YZ, and XZ planes
-    at the provided peak coordinates, labels connected components in each plane,
-    fits ellipses to the central components, and combines the results into a 3D
-    label mask. It also computes approximate half-lengths of the ellipsoid axes
-    based on the fitted ellipses.
+    Three orthogonal planes (XY at fixed z, YZ at fixed x, XZ at fixed y)
+    through ``peak_coordinates`` are extracted from the binarised map.  In each
+    plane the connected component containing the peak is identified with
+    ``skimage.measure.regionprops``, an ellipse is fitted to it, and the
+    resulting filled ellipse mask is written back into the corresponding plane
+    of the 3D output mask.
+
+    .. note::
+        Requires a cubic input volume (all three dimensions equal) because the
+        YZ and XZ planes are stored in a buffer dimensioned to match the XY plane.
 
     Parameters
     ----------
-    input_map : array_like
-        A 3D array representing the volumetric data to process. Works best for cubic volumes.
+    input_map : MapSource
+        Path to volume file or pre-loaded 3D cubic array to process.
     peak_coordinates : tuple of int
-        Coordinates (z, y, x) specifying the peak around which central planes are extracted.
+        Array indices (x, y, z) specifying a voxel inside the target region.
     map_threshold : float, optional
-        Intensity value used to threshold the input map. Voxels equal to this value
-        are shifted to avoid labeling conflicts. Default is 0.0.
+        Value used to separate background from foreground.  Voxels equal to
+        this value become background (label 2) and all others become foreground
+        (label 1) before connected-component labelling.  Default is 0.0.
 
     Returns
     -------
     label_mask : ndarray
-        A 3D array of the same shape as `input_map`, where voxels corresponding to
-        the central-plane ellipses are labeled as 1 and others as 0.
+        Binary 3D array (same shape as ``input_map``) that is 1 at voxels
+        belonging to the three in-plane ellipse masks and 0 elsewhere.  Where
+        planes overlap the mask is clipped to 1.
     ellipsoid_half_lengths : tuple of float
-        Approximate half-lengths (along x, y, z) of the ellipsoid derived from the
-        major and minor axes of the ellipses fitted in the central planes.
+        Estimated half-lengths (x, y, z) of the ellipsoid.  Each half-length
+        is the average of the two semi-axis measurements obtained from the two
+        orthogonal planes that contain the corresponding spatial axis.
 
     Notes
     -----
-    - Uses `skimage.measure.label` to label connected components in 2D planes.
-    - Ellipses are fitted to the central labeled component in each plane using
-      `skimage.draw.ellipse`.
-    - The function accumulates ellipse masks from all three central planes to form
-      a 3D label mask.
-    - The returned `ellipsoid_half_lengths` are calculated as half the sum of major
-      and minor axes contributions across the three planes.
+    - Ellipse properties (major/minor axis lengths, orientation, centroid) are
+      derived from ``skimage.measure.regionprops_table``.
+    - ``skimage.draw.ellipse`` is used to rasterise (fill) the fitted ellipse
+      into a binary mask; it does not perform fitting itself.
+    - The accumulation of three plane masks into ``label_mask`` uses ``+=``
+      followed by ``np.clip``, so overlapping regions are retained as 1.
     """
+
+    input_map = cryomap.read(input_map)
 
     # shift the thresholding, otherwise only 1 label is found
     th_map = np.where(input_map == map_threshold, 2.0, 1.0)
@@ -638,7 +774,7 @@ def get_central_plane_labels(input_map, peak_coordinates, map_threshold=0.0):
     size_x, size_y, size_z = (0.0, 0.0, 0.0)
 
     for i in range(3):
-        plane_label = measure.label(planes[:, :, i], connectivity=1)
+        plane_label = imageutils.label_connected_components(planes[:, :, i])
         plane_props = pd.DataFrame(
             measure.regionprops_table(
                 plane_label, properties=["label", "centroid", "axis_major_length", "axis_minor_length", "orientation"]
@@ -691,42 +827,49 @@ def get_central_plane_labels(input_map, peak_coordinates, map_threshold=0.0):
     return label_mask, ellipsoid_half_lengths
 
 
-def get_central_label(map, peak_coordinates):
-    """
-    Extract the central labeled region in a 3D map and compute its dimensions.
+def get_central_label(
+    input_map: MapSource, peak_coordinates: tuple[int, int, int]
+) -> tuple[np.ndarray, tuple[int, int, int]]:
+    """Isolate the connected foreground region around a peak and measure its extent.
 
-    This function thresholds the input 3D map, labels connected components,
-    identifies the component containing the specified peak coordinates,
-    and calculates the extents of this central component along each axis.
+    Zero-valued voxels are treated as background (mapped to label 2) and
+    non-zero voxels as foreground (mapped to label 1) before connected-component
+    labelling.  The component that contains ``peak_coordinates`` is returned as
+    a binary mask, and the span of that component along three 1D lines through
+    the peak (one per axis) is reported as the size.
 
     Parameters
     ----------
-    map : array_like
-        A 3D array representing the volumetric data to process.
+    input_map : MapSource
+        Path to map file or pre-loaded 3D array.  Zero values are treated as background; all other values as
+        foreground.
     peak_coordinates : tuple of int
-        Coordinates (z, y, x) specifying a voxel within the central region.
+        Array indices (x, y, z) of a voxel inside the target connected region.
 
     Returns
     -------
     labeled_mask : ndarray
-        A 3D array of the same shape as `map`, where voxels belonging to the
-        central region are labeled as 1, and all others as 0.
+        Binary 3D array (same shape as ``map``) that is 1 inside the connected
+        component containing ``peak_coordinates`` and 0 elsewhere.
     size_xyz : tuple of int
-        Extent of the central region along each axis in the order (size_x, size_y, size_z).
+        Span of the labeled region along each axis measured on the 1D lines
+        through the peak: (size_x, size_y, size_z).  Concretely, size_x is the
+        number of consecutive labeled voxels along dim0 at
+        (dim1=peak_y, dim2=peak_z), and analogously for y and z.
 
     Notes
     -----
-    - Uses `skimage.measure.label` to label connected components in 3D.
-    - The central region is determined by the component containing the voxel
-      at `peak_coordinates`.
-    - The size along each axis is computed from the first and last non-zero voxel
-      positions in that axis.
+    - Connectivity is face-based (connectivity=1).
+    - Sizes reflect the extent along the axis *lines through the peak*, not the
+      full bounding-box extent of the connected component.
     """
 
+    input_map = cryomap.read(input_map)
+
     # shift the thresholding, otherwise only 1 label is found
-    th_map = np.where(map == 0.0, 2.0, 1.0)
-    labeled_mask = measure.label(th_map, connectivity=1)
-    central_label = labeled_mask[peak_coordinates[0], peak_coordinates[1], peak_coordinates[2]]
+    th_map = np.where(input_map == 0.0, 2.0, 1.0)
+    labeled_mask = imageutils.label_connected_components(th_map)
+    central_label = imageutils.label_at_point(labeled_mask, peak_coordinates)
     labeled_mask = np.where(labeled_mask == central_label, 1.0, 0.0)
 
     profile_x = np.nonzero(labeled_mask[:, peak_coordinates[1], peak_coordinates[2]])[0]
@@ -740,50 +883,71 @@ def get_central_label(map, peak_coordinates):
     return labeled_mask, size_xyz
 
 
-def evaluate_scores_map(input_map, label_type="plane", threshold_type="gauss"):
-    """
-    Evaluate a 3D scores map and extract labeled regions based on thresholding.
+def evaluate_scores_map(
+    input_map: MapSource, label_type: str = "plane", threshold_type: ThresholdType = "gauss"
+) -> tuple[np.ndarray, tuple[float, float, float], float, np.ndarray, np.ndarray | list]:
+    """Threshold a 3D scores map, label the central region, and return geometry estimates.
 
-    This function computes a threshold for the input 3D map, generates a binary mask,
-    and extracts labeled regions according to the specified label type.
-    It supports Gaussian, triangle, or hard thresholding methods.
+    The peak position is located with :func:`create_starting_parameters_2D`.  A
+    threshold is computed according to ``threshold_type``, the map is binarised,
+    and the selected labelling strategy extracts the peak region and estimates
+    its dimensions.
 
     Parameters
     ----------
-    input_map : array_like
-        A 3D array representing the volumetric score map to evaluate.
+    input_map : MapSource
+        Path to map file or pre-loaded 3D scores map to analyse.
     label_type : str, optional
-        Type of region labeling to perform. Options are:
-        - "ellipsoid" : fits an ellipsoid to the central region
-        - "plane"     : extracts central planes through the peak
-        - others   : extracts the central connected region
-        Default is "plane".
-    threshold_type : str, optional
-        Method for thresholding the input map. Options are:
-        - "gauss"     : uses a Gaussian-based threshold
-        - "triangle"  : uses a triangle-based threshold
-        - "hard"      : sets threshold as half the peak height
-        Default is "gauss".
+        Strategy for labelling the thresholded region:
+
+        - ``"ellipsoid"`` — fit an ellipsoid to the central connected component
+          (calls :func:`get_ellipsoid_label`).
+        - ``"plane"`` — extract three orthogonal central-plane ellipses
+          (calls :func:`get_central_plane_labels`).
+        - any other string — return the central connected component as-is
+          (calls :func:`get_central_label`).
+
+        Default is ``"plane"``.
+    threshold_type : ThresholdType, optional
+        Thresholding method:
+
+        - ``"gauss"`` — Gaussian peak height minus one standard deviation of
+          the map.
+        - ``"triangle"`` — triangle threshold plus one standard deviation of
+          the map.
+        - ``"hard"`` — half the detected peak height.
+
+        Default is ``"gauss"``.
 
     Returns
     -------
     labeled_map : ndarray
-        The input map multiplied by the labeled mask, isolating the selected region.
+        ``input_map`` multiplied element-wise by the binary label mask, i.e.
+        the original scores retained only inside the labelled region.
     sizes : tuple of float
-        The estimated extents of the labeled region along each axis.
+        Estimated region dimensions.  For ``"ellipsoid"`` and ``"plane"``:
+        half-lengths along (x, y, z).  For other label types: full extents
+        along the axis lines through the peak (see :func:`get_central_label`).
     peak_height : float
-        The peak value in the input map, computed using `create_starting_parameters_2D`.
+        Global maximum of ``input_map`` as returned by
+        :func:`create_starting_parameters_2D`.
     thresholded_map : ndarray
-        The input map after applying the threshold, with values outside the region set to zero.
+        For ``"plane"`` and central-label types: ``input_map`` with all values
+        at or below the threshold set to zero.  For ``"ellipsoid"``: the binary
+        connected-component map returned by :func:`get_ellipsoid_label`
+        (overwrites the threshold map).
     surface : ndarray or list
-        For ellipsoid labeling, a 3D array representing the fitted ellipsoid surface.
-        For plane or other labeling, returns an empty list.
+        For ``"ellipsoid"``: binary 3D array of the fitted ellipsoid surface.
+        For all other label types: empty list.
 
     Raises
     ------
     ValueError
-        If `threshold_type` is not one of "gauss", "triangle", or "hard".
+        If ``threshold_type`` is not one of ``"gauss"``, ``"triangle"``, or
+        ``"hard"``.
     """
+
+    input_map = cryomap.read(input_map)
 
     pc, ph, slices = create_starting_parameters_2D(input_map)
 
@@ -817,47 +981,46 @@ def evaluate_scores_map(input_map, label_type="plane", threshold_type="gauss"):
     return labeled_map, sizes, ph, th_map, surface
 
 
-def filter_dist_maps(dist_maps, th_mask, min_angles_voxel_count):
-    """
-    Filter 3D distance maps by applying a threshold mask and removing small connected regions.
+def filter_dist_maps(
+    dist_maps: np.ndarray, th_mask: np.ndarray, min_angles_voxel_count: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Remove small connected regions from a stack of 3D distance maps.
 
-    This function iterates over each 3D distance map in a 4D array, applies a
-    threshold mask, labels connected regions, and removes regions smaller than a
-    specified minimum voxel count. The resulting maps are updated to retain only
-    sufficiently large connected regions.
+    Each distance map in ``dist_maps`` is masked with ``th_mask``, connected
+    regions are labelled, and any region with fewer than
+    ``min_angles_voxel_count`` voxels is zeroed out.  Removing a small region
+    from one map also removes the corresponding voxels from ``th_mask``,
+    propagating the constraint to subsequent maps.  A second pass then applies
+    the final mask to all maps for consistency.
 
     Parameters
     ----------
-    dist_maps : ndarray
-        A 4D array of shape (X, Y, Z, N), where each 3D volume along the last axis
-        represents a distance map to filter.
-    th_mask : ndarray
-        A 3D binary mask applied to each distance map. Regions with zero values in
-        this mask are ignored.
+    dist_maps : ndarray of shape (X, Y, Z, N)
+        Stack of N distance maps to filter.  Modified in place.
+    th_mask : ndarray of shape (X, Y, Z)
+        Binary mask.  Voxels that are zero here are excluded from labelling.
+        The mask is progressively narrowed as small regions are removed.
     min_angles_voxel_count : int
-        Minimum number of voxels required for a connected region to be kept.
-        Regions smaller than this threshold are removed.
+        Minimum connected-region size (in voxels) to retain.
 
     Returns
     -------
     dist_maps : ndarray
-        The filtered 4D distance maps with small regions removed and threshold mask applied.
+        Filtered distance maps (same object as input, modified in place).
     th_mask : ndarray
-        The updated 3D mask after removing small regions. This mask can be used for
-        further processing or filtering.
+        Updated binary mask after removal of all small regions across all maps.
 
     Notes
     -----
-    - Connectivity is set to 1 when labeling regions, meaning only direct neighbors
-      along each axis are considered connected.
-    - The function multiplies each distance map by the updated mask twice, first to
-      remove small regions in each map individually, and again to ensure consistency
-      across all maps.
+    - Connected-component labelling uses face connectivity (connectivity=1).
+    - Because the mask is updated iteratively during the first pass, a region
+      that was borderline-large in map *i* may be eliminated when map *i+1* is
+      processed.  The second pass re-applies the final mask uniformly.
     """
 
     for j in range(dist_maps.shape[3]):
         dist_maps[:, :, :, j] *= th_mask
-        dist_label = measure.label(dist_maps[:, :, :, j], connectivity=1)
+        dist_label = imageutils.label_connected_components(dist_maps[:, :, :, j])
         dist_props = pd.DataFrame(measure.regionprops_table(dist_label, properties=("label", "area")))
         too_small_dist = dist_props.loc[dist_props["area"] < min_angles_voxel_count, "label"].values
         th_mask = np.where(np.isin(dist_label, too_small_dist), 0.0, dist_label)
@@ -871,55 +1034,71 @@ def filter_dist_maps(dist_maps, th_mask, min_angles_voxel_count):
 
 
 def create_angular_distance_maps(
-    angles_map, angles_list, output_file_base=None, write_out_maps=True, c_symmetry=1, angles_order="zxz"
-):
-    """
-    Generate angular distance maps from an orientation map and a list of reference angles.
+    angles_map: MapSource,
+    angles_list: EulerAngles,
+    output_file_base: str | None = None,
+    write_out_maps: bool = True,
+    symmetry: Symmetry = "C1",
+    angles_order: Literal["zxz", "zzx"] = "zxz",
+    *,
+    cyclic_symmetry: Symmetry | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute per-voxel angular distance maps relative to the first entry in the angles list.
 
-    This function computes three types of angular distance maps for a given orientation
-    map: total angular distance, distance of the rotation axis (normals), and in-plane
-    rotation distance. The distances are calculated relative to a zero rotation
-    reference and can optionally be written to disk.
+    Each voxel of ``angles_map`` stores a 0-based index into ``angles_list``
+    (unset voxels carry the sentinel value ``-1`` and receive distance 0).
+    For every orientation in the list the total angular distance, the distance
+    of the rotation axis (normals), and the in-plane rotation distance relative
+    to ``angles_list[0]`` are computed.  These distances are then mapped back
+    onto the volume via the index map to produce three 3D distance volumes.
 
     Parameters
     ----------
-    angles_map : str or ndarray
-        Path to the orientation map file (if str) or a preloaded orientation map array.
-        Values are assumed to be 1-based indices corresponding to rows in `angles_list`.
-    angles_list : str or ndarray
-        Path to a file containing the reference rotation angles or a preloaded array of
-        Euler angles (shape: [num_angles, 3]). The rotation order is specified by
-        `angles_order`.
+    angles_map : MapSource
+        Path to the orientation-index map or a pre-loaded integer array.
+        Values are 0-based indices; ``-1`` marks voxels with no valid orientation.
+    angles_list : EulerAngles
+        Path to the rotation-angles file or a pre-loaded (N, 3) array of
+        Euler angles.  The angle convention is given by ``angles_order``.
+        Normalized via :func:`cryocat.utils.ioutils.euler_angles_load`.
     output_file_base : str, optional
-        Base path for writing output maps. If None and `angles_map` is a file path,
-        the base name of the file is used. Required if `write_out_maps` is True and
-        `angles_map` is an array.
+        Base path (without extension) for the three output ``.em`` files.
+        When None and ``angles_map`` is a file path, the path without the
+        last three characters is used.  When None and ``angles_map`` is an
+        array, ``write_out_maps`` is silently set to False. Default is None.
     write_out_maps : bool, default=True
-        Whether to write the generated maps to disk as `.em` files.
-    c_symmetry : int, default=1
-        C symmetry used to account for equivalent rotations.
-    angles_order : str, default='zxz'
-        The Euler angles convention used in `angles_list`.
+        Whether to save the three distance maps to disk as ``.em`` files
+        (``*_dist_all.em``, ``*_dist_normals.em``, ``*_dist_inplane.em``)
+        in single precision.
+    symmetry : Symmetry, default="C1"
+        Cyclic symmetry passed to :func:`cryocat.utils.geom.compare_rotations`
+        when computing angular distances. Normalized via :func:`cryocat.utils.geom.as_symmetry`.
+        D/T/O/I raise ``NotImplementedError`` (cone and in-plane distances are
+        not defined for them).
+    angles_order : str, {"zxz", "zzx"}
+        Euler-angle convention used in ``angles_list``. Defaults to "zxz".
+    cyclic_symmetry : Symmetry, optional
+        Deprecated alias of ``symmetry`` (emits a :class:`DeprecationWarning`).
 
     Returns
     -------
     ang_dist_map : ndarray
-        3D array of total angular distances for each voxel relative to zero rotation.
+        3D map of total angular distances from ``angles_list[0]``.
     dist_normals_map : ndarray
-        3D array of angular distances corresponding to the rotation axes (normals).
+        3D map of rotation-axis (normal) distances from ``angles_list[0]``.
     dist_inplane_map : ndarray
-        3D array of angular distances corresponding to in-plane rotations.
+        3D map of in-plane rotation distances from ``angles_list[0]``.
 
     Notes
     -----
-    - The function assumes that the orientation map contains integer indices referring
-      to rows of the angles list.
-
-    - Distances are computed using the `geom.compare_rotations` function, which
-      handles the symmetry specified by `c_symmetry`.
-
-    - Output maps are written in single precision (`np.single`) when `write_out_maps` is True.
-
+    - All distances are measured relative to the *first* angle in
+      ``angles_list`` (index 0).  Pass applied angles (output of
+      :func:`cryocat.utils.geom.apply_starting_and_offset`) so that
+      ``angles_list[0]`` equals the starting orientation.
+    - Voxels with index ``-1`` (no valid orientation) receive distance 0.
+    - If ``output_file_base`` cannot be determined and ``write_out_maps`` is
+      True, writing is silently disabled (the ``ValueError`` in the code is
+      constructed but not raised; this is a known limitation).
     """
 
     if output_file_base is None:
@@ -929,19 +1108,33 @@ def create_angular_distance_maps(
             ValueError("The output_file_base was not specified -> " "the maps will not be written out!")
             write_out_maps = False
 
+    symmetry = geom.resolve_symmetry_argument(symmetry, cyclic_symmetry)
     angles_map = cryomap.read(angles_map).astype(int)
+    angles = ioutils.euler_angles_load(angles_list, angles_order)
 
     map_shape = angles_map.shape
-    angles = ioutils.rot_angles_load(angles_list, angles_order)
 
     zero_rotations = np.tile(angles[0, :], (angles.shape[0], 1))
-    dist_all, dist_normals, dist_inplane = geom.compare_rotations(zero_rotations, angles, c_symmetry)
+    dist_all, dist_normals, dist_inplane = geom.compare_rotations(
+        geom.as_rotation(zero_rotations, euler_order="zxz"),
+        geom.as_rotation(angles, euler_order="zxz"),
+        symmetry,
+    )
 
-    angles_array = angles_map.flatten() - 1
+    # angles_map stores 0-based indices; -1 marks voxels with no valid angle.
+    idx_flat = angles_map.flatten()
+    valid = idx_flat >= 0
 
-    ang_dist_map = dist_all[angles_array].reshape(map_shape)
-    dist_normals_map = dist_normals[angles_array].reshape(map_shape)
-    dist_inplane_map = dist_inplane[angles_array].reshape(map_shape)
+    ang_dist_flat = np.zeros(idx_flat.size)
+    dist_normals_flat = np.zeros(idx_flat.size)
+    dist_inplane_flat = np.zeros(idx_flat.size)
+    ang_dist_flat[valid] = dist_all[idx_flat[valid]]
+    dist_normals_flat[valid] = dist_normals[idx_flat[valid]]
+    dist_inplane_flat[valid] = dist_inplane[idx_flat[valid]]
+
+    ang_dist_map = ang_dist_flat.reshape(map_shape)
+    dist_normals_map = dist_normals_flat.reshape(map_shape)
+    dist_inplane_map = dist_inplane_flat.reshape(map_shape)
 
     if write_out_maps:
         cryomap.write(ang_dist_map, output_file_base + "_dist_all.em", data_type=np.single)
@@ -952,95 +1145,134 @@ def create_angular_distance_maps(
 
 
 def select_peaks(
-    scores_map,
-    angles_map,
-    angles_file,
-    peak_number=None,
-    create_dist_maps=False,
-    dist_maps_list=["_dist_all", "_dist_normals", "_dist_inplane"],
-    dist_maps_name_base=None,
-    write_dist_maps=False,
-    min_peak_voxel_count=7,
-    min_angles_voxel_count=7,
-    template_mask=None,
-    template_radius=2,
-    edge_masking=None,
-    tomo_mask=None,
-    output_motl_name=None,
-    tomo_number=None,
-    angles_order="zxz",
-):
-    """Automatic peak selection.
+    scores_map: MapSource,
+    angles_map: MapSource,
+    angles_list: EulerAngles,
+    peak_number: int | None = None,
+    create_dist_maps: bool = False,
+    dist_maps_list: list[str] = ["_dist_all", "_dist_normals", "_dist_inplane"],
+    dist_maps_name_base: str | None = None,
+    write_dist_maps: bool = False,
+    min_peak_voxel_count: int = 7,
+    min_angles_voxel_count: int = 7,
+    template_mask: MapSource | None = None,
+    template_radius: int = 2,
+    edge_masking: TripletLike | None = None,
+    tomo_mask: MapSource | None = None,
+    tomo_number: int | None = None,
+    angles_order: Literal["zxz", "zzx"] = "zxz",
+    output_path: PathOrStr | None = None,
+    output_motl_type: MotlType = "emmotl",
+    **output_kwargs,
+) -> tuple[MotlSource, np.ndarray]:
+    """Select peaks from a template-matching scores map using angular-distance constraints.
+
+    The algorithm:
+
+    1. Thresholds the scores map with the triangle method and optionally
+       applies a tomogram mask and edge mask.
+    2. Removes thresholded regions that are smaller than
+       ``min_peak_voxel_count`` voxels.
+    3. Loads or computes angular-distance maps and filters out small connected
+       regions from them (``min_angles_voxel_count``).
+    4. Iterates over candidate voxels in descending score order.  A candidate
+       is accepted if (a) its particle mask does not overlap with any already-
+       accepted particle, (b) the thresholded scores region inside the mask
+       meets ``min_peak_voxel_count``, and (c) every distance map also has a
+       connected region of at least ``min_angles_voxel_count`` voxels at that
+       position.  Accepted particles are stamped into an occupancy volume and
+       their footprint removed from subsequent candidate checks.
 
     Parameters
     ----------
-    scores_map : ndarray or str
-        Map with CCC scores (either path to it or loaded as ndarray)
-    angles_map : ndarray or str
-        Map with angle indices (either path to it or loaded as ndarray)
-    angles_file : ndarray or str
-        Angle list used in TM (either path to it or loaded as ndarray). If ndarray is
-        provided it has to be in correct order - phi, theta, psi
-    peak_number : int
-        Number of peaks to return. Defaults to None.
-    create_dist_maps : bool
-        Whether to create distance maps. They have to be provided for the
-        computation. Defaults to False.
-    dist_maps_list : list
-        What distance map(s) to use for the analysis. At least one has to be
-        specified. Defaults to all of them: ['_dist_all','_dist_normals','_dist_inplane'].
-    dist_maps_name_base : str
-        Path and base name of the distance maps. Defaults to None.
-    write_dist_maps : bool
-        Whether to write the created distance maps or not. Used only if
-        create_dist_maps is True. Defaults to False.
-    min_peak_voxel_count : int
-        Size of the minimum volume each peak should have (in voxels). Defaults to 7.
-    min_angles_voxel_count : int
-        Size of the minimum volume each distance map should have around each peak
-        (in voxels). Defaults to 7.
-    template_mask : ndarray or str
-        Mask for masking out the volume around the seleceted peak (either path to it
-        or loaded as ndarray). Ideally a tight mask with hard edges, that is NOT
-        hollow (even for hollow structures). Defaults to None.
-    template_radius : int
-        The radius of a sphere to use for masking out the volume around the selected
-        peak. Used only if the template mask is not specified. Defaults to 2.
-    edge_masking : int or ndarray of shape (3
-        Dimensions of edges to mask out (). Defaults to None.
-    tomo_mask : ndarray
-        Mask to exclude regions from the analysis. It has to be the same size as the
-        scores map. Defaults to None.
-    output_motl_name : str
-        Name of the output motl. Defaults to None which results in no motl to be
-        written out.
-    tomo_number : int
-        Number of tomogram to be stored in motl. Defaults to None.
-    "_dist_normals" :
-
-    "_dist_inplane"] :
+    scores_map : MapSource
+        Path to the CCC scores map or a pre-loaded array.
+    angles_map : MapSource
+        Path to the angle-index map or a pre-loaded array.  Values are 1-based
+        indices into ``angles_list`` (converted to 0-based internally).
+    angles_list : EulerAngles
+        Path to the rotation-angles file or a pre-loaded (N, 3) array in
+        (phi, theta, psi) order.
+    peak_number : int, optional
+        Maximum number of peaks to select.  Defaults to None (select all
+        passing candidates).
+    create_dist_maps : bool, optional
+        When True, angular-distance maps are computed on the fly from
+        ``angles_map`` and ``angles_list``.  When False, they are read from
+        disk using ``dist_maps_name_base``.  Defaults to False.
+    dist_maps_list : list of str, optional
+        Subset of distance maps to use.  Each entry must be one of
+        ``"_dist_all"``, ``"_dist_normals"``, ``"_dist_inplane"``.
+        Defaults to all three.
+    dist_maps_name_base : str, optional
+        Base path for the distance map files (without the suffix and
+        ``.em`` extension).  Required when ``create_dist_maps`` is False.
+        Defaults to None.
+    write_dist_maps : bool, optional
+        Whether to save freshly computed distance maps to disk.  Only
+        relevant when ``create_dist_maps`` is True.  Defaults to False.
+    min_peak_voxel_count : int, optional
+        Minimum connected-region size (voxels) in the thresholded scores map
+        required for a candidate to be accepted.  Defaults to 7.
+    min_angles_voxel_count : int, optional
+        Minimum connected-region size (voxels) in each distance map required
+        for a candidate to be accepted.  Defaults to 7.
+    template_mask : MapSource, optional
+        Path to a particle mask or a pre-loaded array.  Used to define the
+        volume carved out around each accepted peak.  Should be a solid mask
+        (no hollow interiors).  When None, a spherical mask of radius
+        ``template_radius`` is used.  Defaults to None.
+    template_radius : int, optional
+        Radius in voxels of the fallback spherical particle mask, used only
+        when ``template_mask`` is None.  Defaults to 2.
+    edge_masking : int or ndarray of shape (3,), optional
+        Width in voxels of the border to exclude on each side of the
+        tomogram.  A single integer applies the same width to all three axes;
+        a length-3 array specifies per-axis widths.  Defaults to None (no
+        edge masking).
+    tomo_mask : MapSource, optional
+        Path to tomogram mask file or pre-loaded binary mask with the same shape as the scores map.
+        Zero-valued regions are excluded from peak search.  Defaults to None.
+    tomo_number : int, optional
+        Tomogram identifier stored in ``tomo_id`` column of the output motl.
+        Defaults to None.
+    angles_order :str, {"zxz", "zzx"}, optional
+        Euler-angle convention of ``angles_list``.  Defaults to ``"zxz"``.
+    output_path : PathOrStr, optional
+        Path to write the output motl.  No file is written when
+        None.  Defaults to None.
+    output_motl_type : MotlType, optional
+        Format of the output particle list. Defaults to "emmotl".
+    **output_kwargs
+        Additional keyword arguments passed to the motl converter when preparing the
+        output particle list and writing the output file.
+        See :func:`cryomotl.motl_converter_kwargs` for details.
 
 
     Returns
     -------
-    output_motl : cryomotl.Motl
-        Motl with the selected peaks.
+    output_motl : Motl
+        :class:`cryocat.core.cryomotl.Motl` containing the selected peak
+        coordinates, orientations, and scores.
     empty_label : ndarray
-        Map with the selected peaks (same size as scores map).
+        Occupancy volume of the same shape as the scores map.  Each accepted
+        particle contributes its (possibly rotated) particle mask to this
+        array via accumulation; values ≥ 1 indicate occupied voxels.
 
     Raises
     ------
     ValueError
-        If the edge_masking is not specified as one number nor ndsarray of shape (3,)
+        If ``edge_masking`` is neither a single integer nor an array of
+        shape (3,).
     ValueError
-        If the dist_maps_list contains unknown dist map specifier
+        If an entry in ``dist_maps_list`` is not one of the recognised
+        suffixes.
     ValueError
-        If the create_dist_maps is False and the dist_maps_name_base is not specified
-
+        If ``create_dist_maps`` is False and ``dist_maps_name_base`` is None.
     """
 
     # load the angles
-    angles = ioutils.rot_angles_load(angles_file, angles_order=angles_order)
+    angles = ioutils.euler_angles_load(angles_list, angles_order=angles_order)
     angles_map = (cryomap.read(angles_map) - 1).astype(int)
 
     # get threshold and threshold map
@@ -1049,15 +1281,17 @@ def select_peaks(
     th_map = np.where(scores_map >= th, 1.0, 0.0)
 
     if tomo_mask is not None:
+        tomo_mask = cryomap.read(tomo_mask)
         th_map *= tomo_mask
 
     if edge_masking is not None:
+        edge_masking = geom.as_triplet(edge_masking, dtype=int)
         edge_mask = np.zeros(th_map.shape)
 
-        if isinstance(edge_masking, int):
-            edge_masking = np.full((3,), edge_masking)
-        elif edge_masking.shape[0] != 3:
-            raise ValueError("The edge mask has to be single number or 3 numbers - " "one for each dimension.")
+        # if isinstance(edge_masking, int):
+        #     edge_masking = np.full((3,), edge_masking)
+        # elif edge_masking.shape[0] != 3:
+        #     raise ValueError("The edge mask has to be single number or 3 numbers - " "one for each dimension.")
         edge_mask[
             edge_masking[0] : -edge_masking[0], edge_masking[1] : -edge_masking[1], edge_masking[2] : -edge_masking[2]
         ] = 1
@@ -1068,7 +1302,7 @@ def select_peaks(
 
     if create_dist_maps:
         temp_dist_maps = create_angular_distance_maps(
-            angles_map, angles_file, output_file_base=dist_maps_name_base, write_out_maps=write_dist_maps
+            angles_map, angles_list, output_file_base=dist_maps_name_base, write_out_maps=write_dist_maps
         )
         for j, d_name in enumerate(dist_maps_list):
             if d_name == "_dist_all":
@@ -1087,7 +1321,7 @@ def select_peaks(
 
     th_map_d = th_map
 
-    labels = measure.label(th_map, connectivity=1)
+    labels = imageutils.label_connected_components(th_map)
     props = pd.DataFrame(measure.regionprops_table(labels, properties=("label", "area")))
 
     too_small_peaks = props.loc[props["area"] < min_peak_voxel_count, "label"].values
@@ -1098,15 +1332,15 @@ def select_peaks(
 
     for j in range(n_dist_maps):
         dist_temp = np.zeros(th_map.shape)
-        dist_label = measure.label(dist_maps[:, :, :, j], connectivity=1)
-        dist_props = pd.DataFrame(measure.regionprops_table(dist_label, properties=("label", "bbox")))
+        dist_label = imageutils.label_connected_components(dist_maps[:, :, :, j])
+        dist_props = imageutils.get_label_bounding_box(dist_label)
         labels, xs, xe, ys, ye, zs, ze = dist_props[
             ["label", "bbox-0", "bbox-3", "bbox-1", "bbox-4", "bbox-2", "bbox-5"]
         ].T.to_numpy()
         for l in range(labels.shape[0]):
             label_cut = dist_label[xs[l] : xe[l], ys[l] : ye[l], zs[l] : ze[l]]
             label_cut = np.where(label_cut == labels[l], 1.0, 0.0)
-            label_open = morphology.binary_opening(label_cut, footprint=np.ones((2, 2, 2)), out=None)
+            label_open = imageutils.morphology_open_close(label_cut, footprint=np.ones((2, 2, 2)), operation="open")
             dist_temp[xs[l] : xe[l], ys[l] : ye[l], zs[l] : ze[l]] = np.where(
                 label_open == 1, dist_maps[xs[l] : xe[l], ys[l] : ye[l], zs[l] : ze[l], j], 0.0
             )
@@ -1154,8 +1388,10 @@ def select_peaks(
         overlap_voxels = np.count_nonzero(empty_label[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2]] * p_particle)
 
         if overlap_voxels == 0 and np.all(cut_coord < me):
-            th_label = measure.label(th_map[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2]] * p_particle)
-            th_label_id = th_label[cut_coord[0], cut_coord[1], cut_coord[2]]
+            th_label = imageutils.label_connected_components(
+                th_map[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2]] * p_particle
+            )
+            th_label_id = imageutils.label_at_point(th_label, cut_coord)
 
             if th_label_id == 0:
                 peak_area = 0
@@ -1165,8 +1401,10 @@ def select_peaks(
                 peak_area = np.count_nonzero(np.where(th_label == th_label_id, 1.0, 0.0))
                 angle_size = min_angles_voxel_count
                 for j in range(n_dist_maps):
-                    dist_label = measure.label(dist_maps[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2], j] * p_particle)
-                    dist_label_id = dist_label[cut_coord[0], cut_coord[1], cut_coord[2]]
+                    dist_label = imageutils.label_connected_components(
+                        dist_maps[ls[0] : le[0], ls[1] : le[1], ls[2] : le[2], j] * p_particle
+                    )
+                    dist_label_id = imageutils.label_at_point(dist_label, cut_coord)
                     if dist_label_id == 0:
                         angle_size = 0
                         print(idx_3d)
@@ -1237,9 +1475,159 @@ def select_peaks(
 
     output_motl = cryomotl.Motl(motl_df)
 
-    if output_motl_name is not None:
-        output_motl.write_to_emfile(output_motl_name)
-
     print(f"Number of selected peaks: {output_motl.df.shape[0]}")
 
+    output_motl = cryomotl.motl_converter_kwargs(
+        output_motl, output_motl_type, output_path=output_path, **output_kwargs
+    )
+
     return output_motl, empty_label
+
+
+def scores_extract_particles_around_positions(
+    scores_map: MapSource,
+    angles_map: MapSource,
+    angles_list: EulerAngles,
+    input_motl: MotlSource,
+    radius: int,
+    tomo_id: int,
+    object_id: int | None = None,
+    angles_order: Literal["zxz", "zzx"] = "zxz",
+    angles_numbering: Literal[0, 1] = 0,
+    symmetry: Symmetry = "c1",
+    tomo_mask: MapSource | None = None,
+    output_path: PathOrStr | None = None,
+    output_motl_type: MotlType = "emmotl",
+    **output_kwargs,
+) -> "MotlSource":
+    """Extract maximum scoring particles and their orientations from scores maps produced by GAPSTOP(TM) or STOPGAP
+    around coordinates given in an input motivelist.  For each coordinate, the maximum score is searched in a spherical
+    neighborhood of given radius (specified by the ``radius`` parameter), and the corresponding euler angles are
+    looked up from the corresponding angles mape.  Optionally, a tomogram mask can be applied to exclude certain regions
+    from the search.
+
+    Parameters
+    ----------
+    scores_map : MapSource
+        Path to the scores map file or a pre-loaded array.
+    angles_map : MapSource
+        Path to the angles map file or a pre-loaded array.  Each voxel stores
+        the index of the best-matching angle in ``angles_list``.
+    angles_list : EulerAngles
+        Path to the rotation-angles file or a pre-loaded (N, 3) array of
+        Euler angles (phi, theta, psi). The angle convention is given by ``angles_order``.
+        Normalized via :func:`cryocat.utils.ioutils.euler_angles_load`.
+    input_motl : MotlSource
+        Path to the input motivelist file or a pre-loaded :class:`Motl` object.
+        The coordinates in this motl are used as centers for peak search in the
+        scores map.
+    radius : int
+        Radius in voxels of the neighborhood around each input particle coordinate in ``input_motl``
+        to search for the maximum score. The search is performed using the function
+        :func:`cryocat.utils.imageutils.find_peak_3d`
+    tomo_id : int
+        Tomogram identifier written into the output motl.
+    object_id : int, optional
+        Object identifier written into the output motl.  Defaults to None.
+    angles_order : str, {"zxz", "zzx"}
+        Euler-angle convention of ``angles_list``.  Defaults to ``"zxz"``.
+    angles_numbering : int, {0, 1}
+        Index offset applied to values read from ``angles_map`` before
+        indexing into ``angles_list``.  STOPGAP angle maps are 1-based, so
+        set this to 1; GAPSTOP(TM) maps are 0-based (default 0).
+    symmetry : Symmetry, default="c1"
+        Symmetry of the template (``"C5"``, ``5``, ``"D3"``, ``"T"``, ``"O"``,
+        ``"I"``), in the canonical frame of :mod:`cryocat.utils.symmetry`. Each
+        particle gets a randomly chosen symmetric copy of its orientation (for
+        C_n: a random multiple of 360/n degrees added to phi). D/T/O/I issue a
+        warning reminding that the template must be in the canonical frame.
+        See :func:`extract_peak_orientations`.
+    tomo_mask : MapSource, optional
+        Path to a binary tomogram mask or a pre-loaded array.  When provided,
+        the scores map is multiplied by this mask before thresholding and the
+        input_motl is cleaned using :meth:`cryocat.core.cryomotl.clean_by_tomo_mask`.
+        Defaults to None.
+    output_pat : PathOrStr, optional
+        Path to write the output motl.  No file is written when None.
+        Defaults to None.
+    output_motl_type : MotlType, optional
+        Format of the output particle list. Defaults to "emmotl".
+    **output_kwargs
+        Additional keyword arguments passed to the motl converter when preparing the
+        output particle list and writing the output file.
+        See :func:`cryomotl.motl_converter_kwargs` for details.
+
+    Returns
+    -------
+    motl : Motl
+        :class:`cryocat.core.cryomotl.Motl` containing extracted particle
+        coordinates, scores, and orientations.
+    """
+
+    # load the scores map
+    scores_map = cryomap.read(scores_map)
+
+    # load the input motl
+    input_motl = cryomotl.Motl.load(input_motl)
+
+    # load and apply a tomogram mask if any:
+    if tomo_mask is not None:
+        tomo_mask = cryomap.read(tomo_mask)
+        scores_map = scores_map * tomo_mask  # filter scores map
+
+        # clean the input motl from particles that are outside the mask (i.e. whose coordinates fall in masked-out regions of the scores map)
+        input_motl.clean_by_tomo_mask(
+            [tomo_id], tomo_mask, boundary_type="whole", box_size=radius * 2
+        )  # this will remove particles whose coordinates fall in masked-out regions of the scores map, as well as particles whose neighborhood (defined by box_size) is not fully contained in the unmasked region of the scores map
+
+    if object_id is None:
+        object_id = 1
+
+    coords = input_motl.get_coordinates()  # 2d ndarray of shape (N,3)
+
+    peak_coords = []
+
+    # extract coordinates and scores of the max scoring peak in the defined neighborhood of each particle, as well as the corresponding angles
+    for coord in coords:
+
+        # peak coordinates
+        max_coords = np.array(imageutils.find_peak_3d(scores_map, radius, coord - 1))
+        peak_coords.append(max_coords)
+
+    peak_coords = np.vstack(peak_coords)
+
+    # extract the scores at the peak coordinates
+    peak_scores = scores_map[peak_coords[:, 0], peak_coords[:, 1], peak_coords[:, 2]]
+
+    # extract Euler angles
+    phi, theta, psi = extract_peak_orientations(
+        peak_coords,
+        angles_map,
+        angles_list,
+        angles_numbering=angles_numbering,
+        angles_order=angles_order,
+        symmetry=symmetry,
+    )
+
+    ##### Generate motivelist #####
+    print("Generating motivelist...")
+
+    motl = cryomotl.Motl()
+    motl.fill(
+        {
+            "x": peak_coords[:, 0] + 1,
+            "y": peak_coords[:, 1] + 1,
+            "z": peak_coords[:, 2] + 1,
+            "score": peak_scores,
+            "class": 1,
+            "tomo_id": tomo_id,
+            "object_id": object_id,
+            "phi": phi,
+            "theta": theta,
+            "psi": psi,
+            "subtomo_id": np.arange(1, peak_coords.shape[0] + 1),
+        }
+    )
+    motl = cryomotl.motl_converter_kwargs(motl, output_motl_type, output_path=output_path, **output_kwargs)
+
+    return motl
