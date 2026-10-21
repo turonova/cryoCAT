@@ -2662,6 +2662,11 @@ class Motl:
         symmetry: Symmetry,
         xyz_shift: ArrayLike,
         symmetry_orientation: RotationLike | None = None,
+        *,
+        order_column: MotlColumn = "geom1",
+        original_subtomo_id_column: MotlColumn = "geom5",
+        split_into_objects: bool = False,
+        original_object_id_column: MotlColumn = "geom4",
     ) -> "Motl":
         """Split the motive list into asymmetric subunits.
 
@@ -2684,6 +2689,20 @@ class Motl:
             re-expressed in this orientation (``R @ g @ R.T``) before
             splitting. Must describe a single rotation. Default is None: the
             reference is assumed to be in the canonical orientation.
+        order_column : MotlColumn, default=``"geom1"``
+            Column written with the 1-based subunit index (1 … *n_subunits*).
+        original_subtomo_id_column : MotlColumn, default=``"geom5"``
+            Column in which the original ``subtomo_id`` of each source
+            particle is preserved before the ids are renumbered.
+        split_into_objects : bool, default=False
+            When ``True`` each source particle becomes its own object: the
+            ``object_id`` column is renumbered so that all subunits derived
+            from the same source particle share a unique id.  The original
+            ``object_id`` values are written to *original_object_id_column*
+            before renumbering.
+        original_object_id_column : MotlColumn, default=``"geom4"``
+            Column used to store the pre-split ``object_id`` when
+            *split_into_objects* is ``True``.  Ignored otherwise.
 
         Returns
         -------
@@ -2744,9 +2763,13 @@ class Motl:
         new_motl_df[["shift_x", "shift_y", "shift_z"]] = (
             new_motl_df[["shift_x", "shift_y", "shift_z"]].astype(float)
         )
-        new_motl_df["geom5"] = new_motl_df["subtomo_id"]
+        new_motl_df[original_subtomo_id_column] = new_motl_df["subtomo_id"]
         new_motl_df = new_motl_df.sort_values(by="subtomo_id")
-        new_motl_df["geom2"] = np.tile(np.arange(1, n_subunits + 1).reshape(n_subunits, 1), (len(self.df), 1))
+        new_motl_df[order_column] = np.tile(np.arange(1, n_subunits + 1).reshape(n_subunits, 1), (len(self.df), 1))
+
+        if split_into_objects:
+            new_motl_df[original_object_id_column] = new_motl_df["object_id"]
+            new_motl_df["object_id"] = np.repeat(np.arange(1, len(self.df) + 1), n_subunits)
 
         euler_angles = new_motl_df[["phi", "theta", "psi"]]
         rotations = rot.from_euler(seq="zxz", angles=euler_angles, degrees=True)

@@ -533,3 +533,40 @@ def _run_script(code: str) -> dict:
         return ns
     finally:
         sys.modules.pop("testmod", None)
+
+
+# ── _kwargs_str placeholder filtering ────────────────────────────────────────
+
+class TestKwargsStrPlaceholderFiltering:
+
+    def _event_with_kwargs_src(self, kwargs_src: dict) -> dict:
+        return _call(1, fn="testmod.FakeMotl.op", kwargs_src=kwargs_src)
+
+    def test_ndarray_placeholder_renders_as_none(self):
+        """kwargs_src values starting with '...' must render as None, not as literal '...'."""
+        ev = self._event_with_kwargs_src({
+            "arr": "...  # ndarray shape (56, 3): value passed, not representable as source"
+        })
+        out = render_script([_sev(), ev])
+        call_lines = [l for l in out.splitlines() if "FakeMotl.op(" in l]
+        assert call_lines, "call must appear in output"
+        assert "arr=None" in call_lines[0], f"expected arr=None, got: {call_lines[0]}"
+        assert "..." not in call_lines[0], f"raw placeholder must not appear in script: {call_lines[0]}"
+
+    def test_ndarray_placeholder_produces_valid_python(self):
+        """Script with a placeholder kwarg must be parseable by ast.parse."""
+        ev = self._event_with_kwargs_src({
+            "path": "'/data/motl.em'",
+            "mask": "...  # ndarray shape (10, 10, 10): value passed, not representable as source",
+        })
+        out = render_script([_sev(), ev])
+        ast.parse(out)  # must not raise SyntaxError
+
+    def test_self_sentinel_not_emitted_as_kwarg(self):
+        """The '<self>' sentinel key must not appear in the rendered call expression."""
+        ev = self._event_with_kwargs_src({
+            "<self>": None,
+            "distance": "20",
+        })
+        out = render_script([_sev(), ev])
+        assert "<self>" not in out, f"sentinel key must not leak into script: {out}"

@@ -87,6 +87,8 @@ POOL_STORES = [
     dcc.Store(id=ids.DATA_POOL_REVS,    data={}),  # { data_id: int } — shared revision map
     dcc.Store(id=ids.GRAPH_POOL_REGISTRY, data={}),  # { graph_id: {graph_id, label, kind} }
     dcc.Store(id=ids.GRAPH_POOL_NEXT_ID, data=1),  # monotone counter for stable graph_id
+    dcc.Store(id="app-spinner-loading", data=True),   # True while initial page load is pending
+    dcc.Store(id="app-spinner-active",  data=False),  # True while an operation is running
 ]
 
 
@@ -155,6 +157,26 @@ app.layout = dbc.Container(
             style={"display": "flex", "alignItems": "center"},
         ),
         html.Div(
+            id="app-spinner",
+            className="app-spinner",
+            children=[
+                html.Div(
+                    [
+                        html.Img(src="/assets/frame1.png", className="spinner-frame frame1"),
+                        html.Img(src="/assets/frame2.png", className="spinner-frame frame2"),
+                    ],
+                    className="spinner-default",
+                ),
+                html.Div(
+                    [
+                        html.Img(src="/assets/tango_frame1.png", className="spinner-frame tframe1"),
+                        html.Img(src="/assets/tango_frame2.png", className="spinner-frame tframe2"),
+                    ],
+                    className="spinner-tango",
+                ),
+            ],
+        ),
+        html.Div(
             [
                 html.Div(
                     "Loading cryoCAT…",
@@ -177,6 +199,7 @@ app.layout = dbc.Container(
 _route_outputs = [Output(ids.page_wrap_id(t["id"]), "style") for t in TOOLS] + [
     Output(ids.SUITE_TOOL_SELECTOR, "children"),
     Output("suite-startup-indicator", "style"),
+    Output("app-spinner-loading", "data"),
 ]
 
 
@@ -184,7 +207,7 @@ _route_outputs = [Output(ids.page_wrap_id(t["id"]), "style") for t in TOOLS] + [
 def _route(pathname):
     active_id = _resolve_active_tool(pathname)
     styles = [{"display": "block"} if t["id"] == active_id else {"display": "none"} for t in TOOLS]
-    return *styles, _tool_selector(active_id), {"display": "none"}
+    return *styles, _tool_selector(active_id), {"display": "none"}, False
 
 
 # ── Callback registration ───────────────────────────────────────────────────────
@@ -202,6 +225,18 @@ register_log_panel_callbacks(app, "suite-log", open_btn_id="suite-open-log-btn")
 register_console_callbacks(app, "suite-console")
 for _t in TOOLS:
     _PAGES[_t["id"]].register_callbacks(app)
+
+# Spinner — show during initial load and while an operation is running.
+app.clientside_callback(
+    """
+    function(loading, active) {
+        return {display: (loading || active) ? 'block' : 'none'};
+    }
+    """,
+    Output("app-spinner", "style"),
+    Input("app-spinner-loading", "data"),
+    Input("app-spinner-active", "data"),
+)
 
 # W1 — centralized body[data-tool] setter so CSS palette scoping works for all tools.
 # Output to suite-url.hash is a dummy (returns no_update); hash is not used anywhere.

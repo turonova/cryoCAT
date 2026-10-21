@@ -441,7 +441,7 @@ def flatten_result_dict(raw: dict) -> pd.DataFrame | None:
 
 # ── Dispatch helpers ──────────────────────────────────────────────────────────
 
-def run_operation(fn, kwargs: dict):
+def run_operation(fn, kwargs: dict, *, kwargs_src_override: dict | None = None):
     """Invoke a cryocat function through the logging chokepoint.
 
     Use in **commit callbacks** only (Create, Save, Apply, Add to pool).
@@ -452,7 +452,7 @@ def run_operation(fn, kwargs: dict):
     and records any Motl result in the source side-table.
     """
     from cryocat.app.logger import invoke_operation
-    return invoke_operation(fn, kwargs)
+    return invoke_operation(fn, kwargs, kwargs_src_override=kwargs_src_override)
 
 
 def run_operation_to_pool(

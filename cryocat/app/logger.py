@@ -216,6 +216,7 @@ def invoke_operation(
     pool_id: str | None = None,
     label: str | None = None,
     source: str | None = None,
+    kwargs_src_override: dict[str, str] | None = None,
 ):
     """Invoke a ``@gui_exposed`` function, logging to the pane, script, and stream.
 
@@ -236,6 +237,12 @@ def invoke_operation(
         Human-readable label of the pool entry (folded into result summary).
     source:
         Input file path for load operations (folded into result summary).
+    kwargs_src_override:
+        Explicit Python source expressions for specific kwargs, keyed by kwarg
+        name.  Use when the runtime value is derived from a tracked object (e.g.
+        ``{"target": "motl_1.get_coordinates() * 1.0"}``).  Overrides the
+        auto-resolved expression for the named kwargs; other kwargs are still
+        auto-resolved as usual.
 
     * Success → pane gets ``▶``/``✓``; script gets a runnable line;
       stream gets a ``call`` event with ``status="ok"``.
@@ -334,6 +341,8 @@ def invoke_operation(
     # Pre-compute script rendering (used in both success and error paths).
     fn_name = f"{fn.__module__}.{fn.__qualname__}"
     line, imports_needed, kwargs_src = _render_python_line(fn, kwargs, obj_to_var=obj_to_var)
+    if kwargs_src_override:
+        kwargs_src.update(kwargs_src_override)
     imports_json = [[s, stmt] for s, stmt in imports_needed]
 
     # Warn once per unresolvable argument or receiver.

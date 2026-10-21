@@ -815,6 +815,28 @@ def trace_faces(
     return face
 
 
+def _opposite_distances(order_to_coord: "dict[float, np.ndarray]", n: int) -> "dict[float, float]":
+    """Per-order opposite-subunit Euclidean distance (raw voxels, unscaled).
+
+    Opposite of 1-based order *o*: ``((o-1 + n//2) % n) + 1``.
+    Returns ``NaN`` for every order when *n* is odd, and ``NaN`` for a given
+    order when its opposite is absent from *order_to_coord*.  Each unique
+    pair's distance appears twice in the result (once keyed by each member),
+    so ``np.nanmean`` of all values equals the mean of the unique pairs.
+    """
+    if n % 2 != 0:
+        return {o: float("nan") for o in order_to_coord}
+    result: dict[float, float] = {}
+    for o, pos in order_to_coord.items():
+        opp = float(((int(round(o)) - 1 + n // 2) % n) + 1)
+        result[o] = (
+            float(np.linalg.norm(pos - order_to_coord[opp]))
+            if opp in order_to_coord
+            else float("nan")
+        )
+    return result
+
+
 # =============================================================================
 # SymmetricComplex — generic point-group symmetric multi-subunit complex
 # =============================================================================
@@ -1783,9 +1805,12 @@ class CnComplex(SymmetricComplex):
         Returns
         -------
         pandas.DataFrame
-            Columns: ``ring``, ``radius``, ``occupancy``, ``n_pores``,
-            ``n_subunits``.  One row per ring; single-ring complexes return a
-            one-row frame with ``ring=1``.
+            Columns: ``ring``, ``radius``, ``opposite_distance``, ``occupancy``,
+            ``n_pores``, ``n_subunits``.  One row per ring; single-ring
+            complexes return a one-row frame with ``ring=1``.
+            ``opposite_distance`` is the mean distance between diametrically
+            opposite subunits across pores (``NaN`` when *n* is odd or the
+            order column is absent).
         """
         ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
         coord = self.motl.get_coordinates()
@@ -1807,6 +1832,9 @@ class CnComplex(SymmetricComplex):
 
         occ_df = self.occupancy()
 
+        order_col_rs = self.order_column
+        can_compute_opp = order_col_rs in self.motl.df.columns and self.n % 2 == 0
+
         rows: list[dict] = []
         for ring_id in ring_ids:
             if use_ring_col:
@@ -1821,13 +1849,23 @@ class CnComplex(SymmetricComplex):
                 ring_occ = occ_df
 
             radii: list[float] = []
+            opp_means: list[float] = []
             for _, grp in ring_df.groupby([tomo_col, aff_col]):
                 coords_grp = coord[grp.index.to_numpy()]
                 radii.append(self._circumradius_for_group(coords_grp))
+                if can_compute_opp:
+                    o2c = {float(grp.loc[gi, order_col_rs]): coord[gi] for gi in grp.index}
+                    opp_raw_grp = _opposite_distances(o2c, self.n)
+                    valid = [d for d in opp_raw_grp.values() if not np.isnan(d)]
+                    opp_means.append(float(np.mean(valid)) if valid else float("nan"))
+
+            finite_opps = [v for v in opp_means if not np.isnan(v)]
+            opp_dist_val = float(np.mean(finite_opps)) * ps if finite_opps else float("nan")
 
             rows.append({
                 "ring": float(ring_id),
                 "radius": float(np.mean(radii)) * ps if radii else float("nan"),
+                "opposite_distance": opp_dist_val,
                 "occupancy": float(ring_occ["occupancy"].mean()) if len(ring_occ) > 0 else float("nan"),
                 "n_pores": len(radii),
                 "n_subunits": self.n_subunits,
@@ -2528,25 +2566,12 @@ class CnComplex(SymmetricComplex):
             n_pairs: int
 
             if use_pairs:
-                half = self.n // 2
-                pair_rows: list[list[int]] = []
-                for i in range(1, half + 1):
-                    j = i + half
-                    mask_i = group[self.order_column] == i
-                    mask_j = group[self.order_column] == j
-                    if mask_i.any() and mask_j.any():
-                        pair_rows.append(
-                            [
-                                group.index[mask_i][0],
-                                group.index[mask_j][0],
-                            ]
-                        )
-
-                if pair_rows:
-                    idx = np.asarray(pair_rows)
-                    dists = geom.point_pairwise_dist(coord[idx[:, 0], :], coord[idx[:, 1], :]) * pixel_size
-                    mean_d = float(np.mean(dists))
-                    n_pairs = int(len(dists))
+                o2c = {float(group.loc[gi, self.order_column]): coord[gi] for gi in grp_idx}
+                opp_dists = _opposite_distances(o2c, self.n)
+                valid = [d for d in opp_dists.values() if not np.isnan(d)]
+                if valid:
+                    mean_d = float(np.mean(valid)) * pixel_size
+                    n_pairs = len(valid) // 2
                 else:
                     warnings.warn(
                         f"{type(self).__name__}.diameter: no opposite-pair matches for object "
@@ -4719,7 +4744,7 @@ class NPC(CnComplex):
         self._finalize_subunit_order()
         return self.motl
 
-    def update_ring_motls(self, flag_column: str = "geom5") -> None:
+    def update_ring_motls(self, flag_column: str = "geom5", update_object_id: bool = False) -> None:
         """Propagate corrected subunit order from the merged motl back to _ring_motls.
 
         After manual corrections to the merged motl (e.g. fixing flagged pores
@@ -4734,6 +4759,8 @@ class NPC(CnComplex):
         flag_column : str, default ``'geom5'``
             When present in the merged motl, its values are also propagated back
             so the ring motls record which particles were flagged.
+        update_object_id : bool, default=False
+            If True, also the the object affiliaton is copied to the ring motls.
 
         Raises
         ------
@@ -4753,11 +4780,15 @@ class NPC(CnComplex):
         order_col = self.order_column
         ring_col = self._ring_column
         merged = self.motl.df
+        aff_col = self.affiliation_column
 
         for i, rm in enumerate(self._ring_motls):
             ring_df = merged[merged[ring_col] == float(i + 1)]
             order_map = ring_df.set_index(sid_col)[order_col].to_dict()
             rm.df[order_col] = rm.df["subtomo_id"].map(order_map).fillna(rm.df[order_col])
+            if update_object_id:
+                aff_map = ring_df.set_index(sid_col)[aff_col].to_dict()
+                rm.df[aff_col] = rm.df["subtomo_id"].map(aff_map).fillna(rm.df[aff_col])
 
             if flag_column in merged.columns:
                 if flag_column not in rm.df.columns:
@@ -5244,6 +5275,10 @@ class NPC(CnComplex):
               ``order_column``, ``subtomo_id``
             - ``distance_to_centre`` — distance from particle to ring
               centre (voxels × *pixel_size*)
+            - ``opposite_distance`` — 3-D Euclidean distance between
+              diametrically opposite subunits (same ``object_id``/ring,
+              orders differing by ``n // 2``); ``NaN`` when ``n`` is odd
+              or the opposite subunit is absent
             - ``tilt_angle`` — angle (°) between particle z-normal and
               ring mean normal
             - ``central_angle_prev``, ``central_angle_next`` — unsigned
@@ -5352,10 +5387,18 @@ class NPC(CnComplex):
                         next_local_map[qi] = ni
                         prev_local_map[ni] = qi
 
+            order_to_coord_ring: dict[float, np.ndarray] = {
+                float(ring_grp.loc[glob_i, order_col]): coords_ring[loc_i]
+                for loc_i, glob_i in enumerate(idx)
+            }
+            opp_raw = _opposite_distances(order_to_coord_ring, self.n)
+
             for local_i, global_i in enumerate(idx):
                 row_s = ring_grp.loc[global_i]
                 pos = coords_ring[local_i]
                 dist = float(np.linalg.norm(pos - centre)) * ps
+                raw = opp_raw.get(float(row_s[order_col]), float("nan"))
+                opp_dist = raw * ps if not np.isnan(raw) else float("nan")
 
                 tilt = float(geom.vector_angular_distance(z_vecs[local_i], mean_normal))
                 if not degrees:
@@ -5406,6 +5449,7 @@ class NPC(CnComplex):
                     order_col: float(row_s[order_col]),
                     "subtomo_id": float(row_s["subtomo_id"]),
                     "distance_to_centre": dist,
+                    "opposite_distance": opp_dist,
                     "tilt_angle": tilt,
                     "central_angle_prev": ca_prev,
                     "central_angle_next": ca_next,
@@ -9460,6 +9504,7 @@ class PleomorphicSurface:
         size: int | None = None,
         *,
         scope: Literal["original", "inferred", "all"] = "original",
+        randomize_phi_angle: bool = True,
     ) -> "cryomotl.Motl":
         """Return a :class:`~cryocat.core.cryomotl.Motl` with one row per closed face.
 
@@ -9471,7 +9516,7 @@ class PleomorphicSurface:
         * ``face_id_column`` (``geom4``) — 1-based face id within the assembly
         * ``face_size_column`` (``geom5``) — face size (number of vertices)
         * ``x``, ``y``, ``z`` — face centroid
-        * ``phi``, ``theta``, ``psi`` — Euler angles from face normal
+        * ``phi``, ``theta``, ``psi`` — Euler angles derived from the face normal
 
         Parameters
         ----------
@@ -9484,6 +9529,14 @@ class PleomorphicSurface:
             only faces that exist in ``'all'`` but not in ``'original'``.  Use
             the ``n_added`` column returned by :meth:`get_face_stats` to count
             inferred blocks per face.
+        randomize_phi_angle : bool, default=True
+            When ``True`` the in-plane (phi) rotation is assigned randomly by
+            :func:`~cryocat.geom.normals_to_euler_angles`, as in the original
+            behaviour.  When ``False`` the in-plane orientation is fixed by the
+            geometry of the face: the x-axis is set to the projection of the
+            vector from the face centroid to the reference vertex (the block with
+            the smallest ``subtomo_id``) onto the face plane, giving a
+            deterministic, vertex-grounded orientation for each face.
         """
         _check_column_collisions("get_faces_as_motl", {
             "face_id_column": self.face_id_column,
@@ -9500,6 +9553,28 @@ class PleomorphicSurface:
         normals = face_stats[["normal_x", "normal_y", "normal_z"]].values.astype(float)
         euler_angles = geom.normals_to_euler_angles(normals)
 
+        if not randomize_phi_angle:
+            _block_coords = _blocks.get_coordinates() if _blocks is not None else np.empty((0, 3))
+            _block_sids = (
+                _blocks.df["subtomo_id"].astype(float).values if _blocks is not None else np.empty(0)
+            )
+            _sid_to_idx: dict[float, int] = {float(s): i for i, s in enumerate(_block_sids)}
+            centroids = face_stats[["centroid_x", "centroid_y", "centroid_z"]].values.astype(float)
+            for k, bids in enumerate(face_stats["block_ids"]):
+                ref = min(float(b) for b in bids)
+                idx = _sid_to_idx.get(ref)
+                if idx is None:
+                    continue
+                n_hat = normals[k] / np.linalg.norm(normals[k])
+                r = _block_coords[idx] - centroids[k]
+                x = r - np.dot(r, n_hat) * n_hat
+                x_len = np.linalg.norm(x)
+                if x_len < 1e-15:
+                    continue
+                x /= x_len
+                y = np.cross(n_hat, x)
+                euler_angles[k] = srot.from_matrix(np.column_stack([x, y, n_hat])).as_euler("zxz", degrees=True)
+
         data: dict[str, Any] = {c: np.zeros(n) for c in cryomotl.Motl.motl_columns}
         data["x"] = face_stats["centroid_x"].values
         data["y"] = face_stats["centroid_y"].values
@@ -9511,6 +9586,15 @@ class PleomorphicSurface:
         data[aff_col] = face_stats[aff_col].values
         data[self.face_size_column] = face_stats["size"].values.astype(float)
         data[self.face_id_column] = face_stats["face_id"].values
+        if _blocks is not None and len(_blocks.df) > 0 and "class" in _blocks.df.columns:
+            _bid_cls: dict[float, float] = dict(
+                zip(_blocks.df["subtomo_id"].astype(float), _blocks.df["class"].astype(float))
+            )
+            data["class"] = np.array([
+                next((c for b in bids if (c := _bid_cls.get(float(b), 0.0)) != 0.0), 0.0)
+                if bids else 0.0
+                for bids in face_stats["block_ids"]
+            ])
 
         motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
         motl.renumber_particles()
@@ -9735,6 +9819,11 @@ class PleomorphicSurface:
         block_angles = _blocks.get_angles().astype(float)
 
         _sid_to_idx: dict[float, int] = {float(s): i for i, s in enumerate(block_sids)}
+        _bid_to_class: dict[float, float] = (
+            dict(zip(_blocks.df["subtomo_id"].astype(float), _blocks.df["class"].astype(float)))
+            if "class" in _blocks.df.columns
+            else {}
+        )
 
         _z_hat = np.array([0.0, 0.0, 1.0])
         out_rows: list[dict] = []
@@ -9788,6 +9877,14 @@ class PleomorphicSurface:
                 row[self.block_id_column] = float(bid)
                 row[self.face_id_column] = face_id_val
                 row[self.face_size_column] = face_size_val
+                cls_val = _bid_to_class.get(float(bid), 0.0)
+                if cls_val == 0.0:
+                    cls_val = next(
+                        (c for ob in face_row["block_ids"]
+                         if ob != bid and (c := _bid_to_class.get(float(ob), 0.0)) != 0.0),
+                        0.0,
+                    )
+                row["class"] = cls_val
                 out_rows.append(row)
 
         if not out_rows:
