@@ -1634,11 +1634,14 @@ def register_callbacks(app):
                     f"DEBUG distance_to_points: target.shape={target.shape!r}",
                     source="cryocat",
                 )
+                _motl_var = _prov.var_for(isect_motl_id)
+                _tgt_src = f"{_motl_var}.get_coordinates() * {_px}" if _motl_var else None
                 try:
                     raw = _invoke_op(
                         psurf.distance_to_points,
                         {"target": target, "return_closest_points": True},
                         assign_to="results_surf",
+                        kwargs_src_override={"target": _tgt_src} if _tgt_src else None,
                     )
                 except Exception as exc:
                     _tb_str = _tb.format_exc()
@@ -1650,8 +1653,10 @@ def register_callbacks(app):
                 # Add hit=True for all points — every target has a closest point.
                 # This enables scatter drawing in the surface view and shows results
                 # in the results panel.
+                _raw_orig = raw
                 raw = dict(raw)
                 raw["hit"] = np.ones(n_pts, dtype=bool)
+                _prov.re_register_copy(_raw_orig, raw)
                 store_value = _result_to_store({}, [], raw=raw, raw_label=op_label)
                 store_value["hit_coord_prefix"] = "closest_points"
                 _ts = _dt.now().strftime("%H:%M:%S")
@@ -1716,8 +1721,10 @@ def register_callbacks(app):
                 return (no_update,) * 8 + (
                     f"ray_intersections failed: {exc!r}", no_update, no_update, no_update)
             # Add hit boolean so the surface viewer can draw the scatter layer.
+            _raw_orig = raw
             raw = dict(raw)
             raw["hit"] = np.isfinite(np.asarray(raw.get("t_hit", []))).astype(bool)
+            _prov.re_register_copy(_raw_orig, raw)
             radii = sorted({r for r in (float(isect_inner or 0.0),
                                         float(isect_outer or 0.0)) if r > 0})
             _has_curv = psurf.surface._mean_curvature is not None

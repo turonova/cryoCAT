@@ -742,6 +742,7 @@ register_palette("StarryNightBlues", ["#EAF2FB", "#7D9DD8", "#466AA1", "#0c1f45"
 
 # Klimt: high-contrast categorical palette (blue / neutral / gold / red).
 register_palette("Klimt", ["#466AA1", "#DFE0DF", "#EAAE47", "#C1554D"])
+register_colorscale("Klimt", ["#466AA1", "#DFE0DF", "#EAAE47", "#C1554D"])
 
 # Hokusai: extended blue -> teal accent palette.
 register_palette("Hokusai", ["#0c1f45", "#466AA1", "#7D9DD8", "#E1F5F3", "#75C6C0", "#3D908B"])

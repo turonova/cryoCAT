@@ -308,26 +308,56 @@ html, body {
   position: absolute;
   width: 80px;
   height: 80px;
-  transition: opacity 0.4s ease-in-out;
 }
 
-.frame1 {
-  animation: fade1 1s infinite alternate;
+/* Default spinner: hard alternating frames (no fade) */
+@keyframes switch1 {
+  0%, 49.9% { opacity: 1; }
+  50%, 100%  { opacity: 0; }
 }
 
-.frame2 {
-  animation: fade2 1s infinite alternate;
+@keyframes switch2 {
+  0%, 49.9% { opacity: 0; }
+  50%, 100%  { opacity: 1; }
 }
 
+.frame1 { animation: switch1 1.2s linear infinite; }
+.frame2 { animation: switch2 1.2s linear infinite; }
+
+/* Tango spinner: smooth cross-fade */
 @keyframes fade1 {
-  0% { opacity: 1; }
+  0%   { opacity: 1; }
   100% { opacity: 0; }
 }
 
 @keyframes fade2 {
-  0% { opacity: 0; }
+  0%   { opacity: 0; }
   100% { opacity: 1; }
 }
+
+.tframe1 { animation: fade1 1s infinite alternate; }
+.tframe2 { animation: fade2 1s infinite alternate; }
+
+.app-spinner {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80px;
+  height: 80px;
+  z-index: 3000;
+  /* display is controlled by the clientside callback; no default here so the
+     div is visible on the very first render (before JS hydrates), which gives
+     the spinner during initial page load */
+}
+
+/* Default: show regular frames, hide tango frames */
+.app-spinner .spinner-tango { display: none; }
+.app-spinner .spinner-default { display: block; position: relative; width: 80px; height: 80px; }
+
+/* On the TANGO page: swap to tango frames */
+body[data-tool=tango] .app-spinner .spinner-tango { display: block; position: relative; width: 80px; height: 80px; }
+body[data-tool=tango] .app-spinner .spinner-default { display: none; }
 
 .graph-settings-modal .modal-dialog {
     margin-left: 2rem;
@@ -371,5 +401,17 @@ select.form-select {
    leave the radio circle and text at different vertical positions. */
 .dash-options-list-option {
     align-items: center !important;
+}
+
+/* ── Sub-tab labels (Slot 1, Desc 1, NN 1 …) ── */
+.nav-tabs .nav-link {
+    color: var(--color10);
+}
+.nav-tabs .nav-link:hover,
+.nav-tabs .nav-link:focus {
+    color: var(--color9);
+}
+.nav-tabs .nav-link.active {
+    color: var(--color5);
 }
 

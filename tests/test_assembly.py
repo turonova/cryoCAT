@@ -8905,3 +8905,153 @@ class TestClassifyPores:
         npc = _make_npc_from_angles([_SHEAR_ANGLES, ring2_angles])
         df = npc.classify_pores()
         assert df["argmax_agreement"].iloc[0] < 1.0
+
+
+# =============================================================================
+# opposite_distance in get_subunit_stats
+# =============================================================================
+
+
+class TestOppositeDistance:
+    """get_subunit_stats opposite_distance column."""
+
+    def test_regular_n8_opposite_distance_is_2R(self):
+        """Regular n=8 ring: opposite_distance ≈ 2*R and ≈ 2*distance_to_centre."""
+        R = 50.0
+        npc = _make_npc_from_angles([_REGULAR_ANGLES], radius=R)
+        stats = npc.get_subunit_stats(pixel_size=1.0)
+        assert "opposite_distance" in stats.columns
+        np.testing.assert_allclose(stats["opposite_distance"].values, 2 * R, atol=1e-5)
+        np.testing.assert_allclose(stats["distance_to_centre"].values, R, atol=1e-5)
+        np.testing.assert_allclose(
+            stats["opposite_distance"].values,
+            2 * stats["distance_to_centre"].values,
+            atol=1e-5)
+
+    def test_irregular_n8_displaced_subunit_breaks_regularity(self):
+        """Radially displaced subunit 1 → affected pair violates 2*R; untouched pair holds."""
+        R = 50.0
+        npc = _make_npc_from_angles([_REGULAR_ANGLES], radius=R)
+        # Order 1 sits at angle 0° → (cx+R, cy). Move it to radius 2*R.
+        cx = 50.0
+        npc.motl.df.loc[npc.motl.df["geom1"] == 1.0, "x"] = cx + 2 * R
+        stats = npc.get_subunit_stats(pixel_size=1.0)
+        order_col = npc.order_column
+        # Affected pair: orders 1 and 5 — opposite_distance ≠ 2*distance_to_centre
+        for order in (1.0, 5.0):
+            row = stats[stats[order_col] == order].iloc[0]
+            assert abs(row["opposite_distance"] - 2 * row["distance_to_centre"]) > 1.0, (
+                f"order {order}: expected regularity gap, got "
+                f"opp={row['opposite_distance']:.2f} dtc={row['distance_to_centre']:.2f}"
+            )
+        # Unaffected pair: orders 3 and 7 — physical distance between them unchanged (≈ 2*R)
+        for order in (3.0, 7.0):
+            row = stats[stats[order_col] == order].iloc[0]
+            np.testing.assert_allclose(
+                row["opposite_distance"], 2 * R, atol=1e-5,
+                err_msg=f"order {order}: unaffected pair opposite_distance should be ≈ 2*R")
+
+    def test_incomplete_n8_missing_opposite_is_nan(self):
+        """Remove subunit 5 (opposite of 1): subunit 1's opposite_distance is NaN."""
+        R = 50.0
+        npc = _make_npc_from_angles([_REGULAR_ANGLES], radius=R)
+        npc.motl.df = npc.motl.df[npc.motl.df["geom1"] != 5.0].reset_index(drop=True)
+        stats = npc.get_subunit_stats(pixel_size=1.0)
+        order_col = npc.order_column
+        opp_1 = stats[stats[order_col] == 1.0]["opposite_distance"].iloc[0]
+        assert pd.isna(opp_1), (
+            f"subunit 1 should have NaN opposite_distance when subunit 5 is missing, got {opp_1}"
+        )
+        # Complete pairs are unaffected
+        for order in (3.0, 7.0):
+            row = stats[stats[order_col] == order].iloc[0]
+            np.testing.assert_allclose(
+                row["opposite_distance"], 2 * R, atol=1e-5,
+                err_msg=f"order {order}: complete pair should still be ≈ 2*R")
+
+    def test_odd_n5_all_nan(self):
+        """Patched n=5 (odd): opposite_distance is NaN for every subunit."""
+        angles5 = [float(72 * i) for i in range(5)]
+        npc = _make_npc_from_angles([angles5])
+        npc.n = 5  # patch to odd — even_n is False, formula never runs
+        stats = npc.get_subunit_stats(pixel_size=1.0)
+        assert "opposite_distance" in stats.columns
+        assert stats["opposite_distance"].isna().all(), (
+            f"odd n should yield all-NaN; got {stats['opposite_distance'].tolist()}"
+        )
+
+
+# =============================================================================
+# Phase L2: _opposite_distances consolidation + ring_summary opposite_distance
+# =============================================================================
+
+
+class TestOppositeDistanceConsolidation:
+    """diameter and get_subunit_stats share one computation via _opposite_distances."""
+
+    def test_diameter_and_subunit_stats_agree_on_regular_ring(self):
+        """On a regular C8 ring, diameter.mean_diameter ≈ get_subunit_stats mean ≈ 2R."""
+        R = 50.0
+        npc = _make_npc_from_angles([_REGULAR_ANGLES], radius=R)
+        # diameter returns mean_diameter per object
+        summary, _ = npc.diameter(pixel_size=1.0)
+        diam_val = summary["mean_diameter"].iloc[0]
+        # get_subunit_stats returns per-subunit opposite_distance
+        stats = npc.get_subunit_stats(pixel_size=1.0)
+        stats_mean = stats["opposite_distance"].mean()
+        np.testing.assert_allclose(diam_val, 2 * R, atol=1e-5,
+                                   err_msg="diameter.mean_diameter should be ≈ 2R")
+        np.testing.assert_allclose(stats_mean, 2 * R, atol=1e-5,
+                                   err_msg="get_subunit_stats mean opposite_distance should be ≈ 2R")
+        np.testing.assert_allclose(diam_val, stats_mean, atol=1e-5,
+                                   err_msg="diameter and get_subunit_stats must agree")
+
+
+class TestRingSummaryOppositeDistance:
+    """ring_summary.opposite_distance column."""
+
+    def test_regular_ring_opposite_distance_is_2R(self):
+        """Regular C8 ring: ring_summary.opposite_distance ≈ 2R ≈ 2*radius."""
+        R = 50.0
+        m = _make_ordered_ring(n=8, radius=R)
+        cx = assembly.CnComplex(m, 8, center_method="barycentric")
+        df = cx.ring_summary(pixel_size=1.0)
+        assert "opposite_distance" in df.columns
+        opp = df.iloc[0]["opposite_distance"]
+        rad = df.iloc[0]["radius"]
+        np.testing.assert_allclose(opp, 2 * R, atol=1e-4,
+                                   err_msg="opposite_distance should be ≈ 2R")
+        np.testing.assert_allclose(opp, 2 * rad, atol=1e-3,
+                                   err_msg="opposite_distance should be ≈ 2*radius")
+
+    def test_irregular_ring_opposite_distance_differs_from_2radius(self):
+        """Displacing one subunit breaks the 2*radius equality."""
+        R = 50.0
+        m = _make_ordered_ring(n=8, radius=R)
+        # Displace order-1 subunit (at angle 0° → x = cx+R) to x = cx+2R
+        cx_val = m.df["x"].mean()  # approximate centre x
+        m.df.loc[m.df["geom1"] == 1.0, "x"] = cx_val + 2 * R
+        cx = assembly.CnComplex(m, 8, center_method="barycentric")
+        df = cx.ring_summary(pixel_size=1.0)
+        opp = df.iloc[0]["opposite_distance"]
+        rad = df.iloc[0]["radius"]
+        assert abs(opp - 2 * rad) > 1.0, (
+            f"displaced ring: opposite_distance ({opp:.2f}) should differ from "
+            f"2*radius ({2*rad:.2f}) by more than 1 voxel"
+        )
+
+    def test_incomplete_ring_still_finite(self):
+        """Removing one subunit from a ring still yields a finite opposite_distance."""
+        R = 50.0
+        m = _make_ordered_ring(n=8, radius=R)
+        # Remove order-5 (opposite of order-1); pair (1,5) becomes NaN, others remain
+        m.df = m.df[m.df["geom1"] != 5.0].reset_index(drop=True)
+        cx = assembly.CnComplex(m, 8, center_method="barycentric")
+        df = cx.ring_summary(pixel_size=1.0)
+        opp = df.iloc[0]["opposite_distance"]
+        assert np.isfinite(opp), (
+            f"incomplete ring (7/8 subunits): opposite_distance should be finite, got {opp}"
+        )
+        # Remaining 3 complete pairs all have distance ≈ 2R
+        np.testing.assert_allclose(opp, 2 * R, atol=1e-4,
+                                   err_msg="3 complete pairs should still average to ≈ 2R")

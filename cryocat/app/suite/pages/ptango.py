@@ -774,6 +774,20 @@ def register_callbacks(app) -> None:
                 forms.extend(feat_forms)
         return forms
 
+    # ── Spinner: show while TANGO operations run ──────────────────────────────
+    app.clientside_callback(
+        """
+        function(n1, n2) {
+            if (!dash_clientside.callback_context.triggered.length) return window.dash_clientside.no_update;
+            return true;
+        }
+        """,
+        Output("app-spinner-active", "data", allow_duplicate=True),
+        Input("tango-run-twist-btn", "n_clicks"),
+        Input("tango-run-desc-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+
     # ── Compute twist ─────────────────────────────────────────────────────────
 
     @app.callback(
@@ -784,6 +798,7 @@ def register_callbacks(app) -> None:
         Output("tango-twist-next-id", "data"),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output("app-spinner-active", "data", allow_duplicate=True),
         Input("tango-run-twist-btn", "n_clicks"),
         State("tango-mi-value", "data"),
         State("tango-nn-radius", "value"),
@@ -816,22 +831,22 @@ def register_callbacks(app) -> None:
         dp_next_id,
         prev_handle,
     ):
-        _no7 = (no_update,) * 7
+        _no8 = (no_update,) * 8
         from cryocat.app.instrument import snapshot as _snap, reset as _reset, start_trace as _start_trace, env_tracing as _env_tracing
         if not n_clicks:
             raise PreventUpdate
         if not motl_ids:
-            return *_no7[:3], "Select a motl first.", *_no7[4:]
+            return *_no8[:3], "Select a motl first.", *_no8[4:]
         if not _env_tracing:
             _snap("load+select")   # D1/D4: everything since load_motl reset() — also prints trace
             _start_trace()         # D3: begin twist trace
         motl_id = motl_ids[0]
         if nn_radius is None or nn_radius <= 0:
-            return *_no7[:3], "NN radius is required.", *_no7[4:]
+            return *_no8[:3], "NN radius is required.", *_no8[4:]
         try:
             motl_obj = get_motl(motl_id)
         except PoolPayloadMissing:
-            return *_no7[:3], "Motl payload missing — reload.", *_no7[4:]
+            return *_no8[:3], "Motl payload missing — reload.", *_no8[4:]
         source_label = (registry or {}).get(motl_id, {}).get("label", "Motl")
         new_twist_id = (twist_next_id or 0) + 1
         twist_id = f"twist-{new_twist_id}"
@@ -857,7 +872,7 @@ def register_callbacks(app) -> None:
                 label=f"{source_label} twist",
             )
         except Exception as exc:
-            return *_no7[:3], f"Error: {exc}", *_no7[4:]
+            return *_no8[:3], f"Error: {exc}", *_no8[4:]
         _prov.record(twist_id, _session.last_seq())
 
         obj_key = _twist_objects.add(twist_desc)
@@ -881,7 +896,7 @@ def register_callbacks(app) -> None:
         handle["dp_id"] = _dp_id
         status = f"Twist computed: {n:,} pairs."
         _snap("twist")   # D2: _compute_twist wall time (grid update follows async)
-        return handle, global_ref, "tango-tab-twist", status, new_twist_id, new_dp_reg, new_dp_next
+        return handle, global_ref, "tango-tab-twist", status, new_twist_id, new_dp_reg, new_dp_next, False
 
     # ── Load twist from file (via tablesource) ────────────────────────────────
 
@@ -962,6 +977,7 @@ def register_callbacks(app) -> None:
         Output("tango-desc-status", "children"),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
         Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output("app-spinner-active", "data", allow_duplicate=True),
         Input("tango-run-desc-btn", "n_clicks"),
         State("tango-twist-handle", "data"),
         State("tango-desc-pool-slot-map", "data"),
@@ -991,7 +1007,7 @@ def register_callbacks(app) -> None:
         dp_registry,
         dp_next_id,
     ):
-        _NU = (no_update,) * 5
+        _NU = (no_update,) * 6
         if not n_clicks:
             raise PreventUpdate
         if not twist_handle or not selected_desc:
@@ -1134,7 +1150,7 @@ def register_callbacks(app) -> None:
 
         sm[free] = _dp_id
         status = f"Descriptor computed: {len(desc_df):,} rows. → slot {free + 1}"
-        return sm, f"tango-tab-desc-{free}", status, new_dp_reg, new_dp_next
+        return sm, f"tango-tab-desc-{free}", status, new_dp_reg, new_dp_next, False
 
     # ── Sync filtered descriptor pool registry from global data pool ──────────
 

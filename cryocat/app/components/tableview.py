@@ -39,14 +39,14 @@ def get_table_component(
         )
         if not use_save_dialog:
             button_children.append(
-                dbc.Button("Save", id=f"{prefix}-save-overwrite-btn", color="secondary", className="me-1"),
+                dbc.Button("Save", id=f"{prefix}-save-overwrite-btn", color="primary", className="me-1"),
             )
         if show_create_from_selected:
             button_children.append(
                 dbc.Button(
                     "Create new from selected",
                     id=f"{prefix}-create-from-selected-btn",
-                    color="secondary",
+                    color="primary",
                     className="me-1",
                 )
             )
@@ -54,11 +54,11 @@ def get_table_component(
     button_children += [
         dbc.Button("Save as CSV", id=f"{prefix}-save-csv-btn", color="primary", className="me-1"),
         dbc.Button("Remove Selected Rows", id=f"{prefix}-remove-rows-btn", color="primary", className="me-1"),
-        dbc.Button("Select All Visible", id=f"{prefix}-select-all-btn", color="secondary", className="me-1"),
+        dbc.Button("Select All Visible", id=f"{prefix}-select-all-btn", color="primary", className="me-1"),
         dbc.Button(
             "Create from filtered",
             id=f"{prefix}-pool-from-filtered-btn",
-            color="secondary",
+            color="primary",
             className="me-1",
             disabled=True,
             style={"display": "none"},
@@ -66,12 +66,12 @@ def get_table_component(
         dbc.Button(
             "Create from selected",
             id=f"{prefix}-pool-from-selected-btn",
-            color="secondary",
+            color="primary",
             className="me-1",
             disabled=True,
             style={"display": "none"},
         ),
-        dbc.Button("Select Inverse", id=f"{prefix}-select-inverse-btn", color="secondary", className="me-1"),
+        dbc.Button("Select Inverse", id=f"{prefix}-select-inverse-btn", color="primary", className="me-1"),
         dbc.Button("Plot", id=f"{prefix}-plot-graphs-btn", color="primary", className="me-1", n_clicks=0),
         dbc.Offcanvas(
             [get_table_plot_component(f"{prefix}-table-plot")],
@@ -101,7 +101,7 @@ def get_table_component(
             dbc.Button(
                 "Edit table",
                 id=f"{prefix}-edit-open-btn",
-                color="secondary",
+                color="primary",
                 size="sm",
                 className="me-1",
             ),

@@ -947,6 +947,8 @@ def register_callbacks(app):
                         nn_obj = NearestNeighbors(input_data=None)
                         nn_obj.df = df
                         nn_obj.motls = motl_list
+                        if active_id:
+                            nn_obj._pool_nn_id = active_id
                         active_sides = sides or ["qp", "nn"]
                         run_operation(nn_obj.add_motl_columns, {
                             "column_names": add_cols,
@@ -966,6 +968,8 @@ def register_callbacks(app):
                 rot_type = angular_kwargs.get("rotation_type", "angular_distance")
                 nn_obj = NearestNeighbors(input_data=None)
                 nn_obj.df = df
+                if active_id:
+                    nn_obj._pool_nn_id = active_id
                 ang = run_operation(nn_obj.get_angular_distances, {"rotation_type": rot_type})
                 if rot_type == "all":
                     df["angular_distance"] = ang[0]

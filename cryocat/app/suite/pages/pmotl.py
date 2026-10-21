@@ -142,10 +142,10 @@ def _get_main_content():
             id="me-tabs",
             active_tab="me-tab-0",
             children=tabs,
-            style={"padding": "0.5rem"},
+            style={"marginTop": "0.5rem"},
         ),
         width=9,
-        style={"margin": "0", "padding": "0"},
+        style={"margin": "0", "padding": "0", "paddingLeft": "0.5rem"},
     )
 
 

@@ -12,18 +12,23 @@ Each entry:
 """
 
 TOOLS = [
-    {"id": "editor",    "label": "Motl Editor",       "path": "/motl",      "module": "cryocat.app.suite.pages.pmotl"},
-    {"id": "nn",        "label": "Nearest Neighbor",  "path": "/nn",        "module": "cryocat.app.suite.pages.pnn"},
-    {"id": "sta",       "label": "STA",               "path": "/sta",       "module": "cryocat.app.suite.pages.psta"},
-    {"id": "pana",      "label": "Peak Analysis",     "path": "/pana",      "module": "cryocat.app.suite.pages.ppana"},
-    {"id": "volume",    "label": "Mask generation",   "path": "/volume",    "module": "cryocat.app.suite.pages.pvolume"},
-    {"id": "utilities", "label": "Utilities",         "path": "/utilities", "module": "cryocat.app.suite.pages.putilities"},
-    {"id": "surfaces",  "label": "Surfaces",          "path": "/surfaces",  "module": "cryocat.app.suite.pages.passembly"},
-    {"id": "memthick",  "label": "Membrane thickness", "path": "/memthick",  "module": "cryocat.app.suite.pages.pmemthick"},
-    {"id": "complexes",   "label": "Complexes",           "path": "/complexes",   "module": "cryocat.app.suite.pages.pcomplexes"},
-    {"id": "tango",       "label": "Tango",               "path": "/tango",       "module": "cryocat.app.suite.pages.ptango"},
-    {"id": "datapool",     "label": "Tables",             "path": "/datapool",     "module": "cryocat.app.suite.pages.pdatapool"},
-    {"id": "graphs",       "label": "Graphs",             "path": "/graphs",       "module": "cryocat.app.suite.pages.pgraphs"},
+    {"id": "editor", "label": "Motl Editor", "path": "/motl", "module": "cryocat.app.suite.pages.pmotl"},
+    {"id": "nn", "label": "Nearest Neighbor", "path": "/nn", "module": "cryocat.app.suite.pages.pnn"},
+    {"id": "sta", "label": "STA", "path": "/sta", "module": "cryocat.app.suite.pages.psta"},
+    {"id": "tango", "label": "Tango", "path": "/tango", "module": "cryocat.app.suite.pages.ptango"},
+    {"id": "pana", "label": "Peak Analysis", "path": "/pana", "module": "cryocat.app.suite.pages.ppana"},
+    {"id": "surfaces", "label": "Surfaces", "path": "/surfaces", "module": "cryocat.app.suite.pages.passembly"},
+    {
+        "id": "memthick",
+        "label": "Membrane thickness",
+        "path": "/memthick",
+        "module": "cryocat.app.suite.pages.pmemthick",
+    },
+    {"id": "complexes", "label": "Complexes", "path": "/complexes", "module": "cryocat.app.suite.pages.pcomplexes"},
+    {"id": "volume", "label": "Mask generation", "path": "/volume", "module": "cryocat.app.suite.pages.pvolume"},
+    {"id": "utilities", "label": "Utilities", "path": "/utilities", "module": "cryocat.app.suite.pages.putilities"},
+    {"id": "datapool", "label": "Tables", "path": "/datapool", "module": "cryocat.app.suite.pages.pdatapool"},
+    {"id": "graphs", "label": "Graphs", "path": "/graphs", "module": "cryocat.app.suite.pages.pgraphs"},
 ]
 
 # Route used when the URL is empty / root / unknown.

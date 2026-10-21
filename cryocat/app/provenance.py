@@ -45,6 +45,18 @@ def register_intermediate(obj: object, var_name: str) -> None:
     _intermediate_vars[id(obj)] = var_name
 
 
+def re_register_copy(original: object, copy: object) -> None:
+    """Register *copy* under the same variable name as *original*.
+
+    Use when a tracked intermediate is shallow-copied before being passed to a
+    second logged call — the copy gets a new ``id()`` and would otherwise lose
+    its provenance link.  No-op when *original* was never registered.
+    """
+    name = _intermediate_vars.get(id(original))
+    if name:
+        _intermediate_vars[id(copy)] = name
+
+
 def var_for_obj(obj: object) -> str | None:
     """Return the script variable name registered for *obj*, or ``None``."""
     return _intermediate_vars.get(id(obj))

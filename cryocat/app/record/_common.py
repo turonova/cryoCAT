@@ -43,7 +43,10 @@ def _kwargs_str(ev: dict) -> str:
     ks = ev.get("kwargs_src") or {}
     parts = []
     for k, v in ks.items():
-        parts.append(f"{k}=None" if v is None else f"{k}={v}")
+        if k == "<self>":
+            continue  # receiver sentinel — not a real kwarg
+        use_none = v is None or (isinstance(v, str) and v.startswith("..."))
+        parts.append(f"{k}=None" if use_none else f"{k}={v}")
     return ", ".join(parts)
 
 
