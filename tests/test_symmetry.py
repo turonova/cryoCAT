@@ -32,17 +32,14 @@ from cryocat.utils.geom import (
     Dodecahedron,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _is_so3(R: np.ndarray, atol: float = 1e-9) -> bool:
     """True if R is a proper rotation (det=+1, R^T R = I)."""
-    return (
-        np.allclose(R.T @ R, np.eye(3), atol=atol)
-        and abs(det(R) - 1.0) < atol
-    )
+    return np.allclose(R.T @ R, np.eye(3), atol=atol) and abs(det(R) - 1.0) < atol
 
 
 def _group_is_closed(matrices: np.ndarray, atol: float = 1e-9) -> bool:
@@ -68,6 +65,7 @@ def _check_symmetry(matrices: np.ndarray, reference_points: np.ndarray, atol: fl
 # ---------------------------------------------------------------------------
 # _normalize_axis
 # ---------------------------------------------------------------------------
+
 
 class TestNormalizeAxis:
     def test_string_x(self):
@@ -108,6 +106,7 @@ class TestNormalizeAxis:
 # compute_conjugation_matrix
 # ---------------------------------------------------------------------------
 
+
 class TestConjugationMatrix:
     def test_same_axis_is_identity(self):
         C = compute_conjugation_matrix("z", "z")
@@ -133,6 +132,7 @@ class TestConjugationMatrix:
 # ---------------------------------------------------------------------------
 # Group order and SO(3) membership
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "cls, kwargs, expected_order",
@@ -186,6 +186,7 @@ def test_group_contains_identity(cls, kwargs):
 # Closure (only tested for small groups to keep runtime bounded)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "cls, kwargs",
     [
@@ -202,6 +203,7 @@ def test_group_closure(cls, kwargs):
 # ---------------------------------------------------------------------------
 # Symmetry correctness: group acts on the corresponding polyhedron vertices
 # ---------------------------------------------------------------------------
+
 
 def test_tetrahedral_acts_on_tetrahedron():
     group = TetrahedralGroup()
@@ -263,6 +265,7 @@ def test_cyclic_c4_acts_on_square():
 # get_symmetry_rotations
 # ---------------------------------------------------------------------------
 
+
 class TestGetSymmetryRotations:
     def test_c5_returns_5_matrices(self):
         mats = get_symmetry_rotations("C5")
@@ -319,6 +322,7 @@ class TestGetSymmetryRotations:
 # ---------------------------------------------------------------------------
 # get_symmetry_rotations: axis= is ambiguous for D/T/O/I (added 2026-10-07)
 # ---------------------------------------------------------------------------
+
 
 def _same_rotation_set(a, b, atol=1e-8):
     """True if the two (M, 3, 3) stacks hold the same rotations, in any order."""
@@ -398,6 +402,7 @@ class TestAxisAmbiguityWarning:
 # get_symmetry_angles
 # ---------------------------------------------------------------------------
 
+
 class TestGetSymmetryAngles:
     def test_shape(self):
         angles = get_symmetry_angles("C3")
@@ -426,6 +431,7 @@ class TestGetSymmetryAngles:
 # split_in_asymmetric_subunits – T/O/I subunit counts
 # ---------------------------------------------------------------------------
 
+
 class TestSplitPlatonicGroups:
     @pytest.fixture
     def single_particle(self):
@@ -433,12 +439,25 @@ class TestSplitPlatonicGroups:
         from cryocat.core.cryomotl import Motl
 
         data = {
-            "shift_x": [0.0], "shift_y": [0.0], "shift_z": [0.0],
-            "phi": [0.0], "theta": [0.0], "psi": [0.0],
-            "tomo_id": [1], "x": [10.0], "y": [10.0], "z": [10.0],
-            "score": [1.0], "subtomo_id": [1],
-            "geom1": [0], "geom2": [0], "object_id": [1],
-            "subtomo_mean": [0.0], "geom3": [0], "geom4": [0], "geom5": [0],
+            "shift_x": [0.0],
+            "shift_y": [0.0],
+            "shift_z": [0.0],
+            "phi": [0.0],
+            "theta": [0.0],
+            "psi": [0.0],
+            "tomo_id": [1],
+            "x": [10.0],
+            "y": [10.0],
+            "z": [10.0],
+            "score": [1.0],
+            "subtomo_id": [1],
+            "geom1": [0],
+            "geom2": [0],
+            "object_id": [1],
+            "subtomo_mean": [0.0],
+            "geom3": [0],
+            "geom4": [0],
+            "geom5": [0],
             "class": [1],
         }
         return Motl(pd.DataFrame(data))
@@ -455,12 +474,13 @@ class TestSplitPlatonicGroups:
     def test_geom2_runs_1_to_n(self, single_particle, sym):
         result = single_particle.split_in_asymmetric_subunits(sym, [5, 0, 0])
         expected_n = {"T": 12, "O": 24, "I": 60}[sym]
-        assert set(result.df["geom2"].astype(int)) == set(range(1, expected_n + 1))
+        assert set(result.df["geom1"].astype(int)) == set(range(1, expected_n + 1))
 
 
 # ---------------------------------------------------------------------------
 # DihedralGroup orbit tests – staggered 2-fold placement
 # ---------------------------------------------------------------------------
+
 
 class TestDihedralOrbit:
     """Verify the staggered DihedralGroup places 2n distinct positions."""
@@ -493,7 +513,6 @@ class TestDihedralOrbit:
         group = DihedralGroup(n)
         assert len(group.matrices) == 2 * n
         assert all(_is_so3(R) for R in group.matrices)
-
 
 
 # ===========================================================================
@@ -670,7 +689,10 @@ class TestToPolyhedron:
         # Design decision 2: defaults are Tetrahedron / Octahedron / Icosahedron.
         assert type(group.to_polyhedron()) is solid_cls
 
-    @pytest.mark.parametrize("group, kind, solid_cls", [(OctahedralGroup(), "cube", Cube), (IcosahedralGroup(), "Dodecahedron", Dodecahedron)])
+    @pytest.mark.parametrize(
+        "group, kind, solid_cls",
+        [(OctahedralGroup(), "cube", Cube), (IcosahedralGroup(), "Dodecahedron", Dodecahedron)],
+    )
     def test_explicit_kind(self, group, kind, solid_cls):
         assert type(group.to_polyhedron(kind=kind)) is solid_cls
 
@@ -755,6 +777,7 @@ class TestFromPolyhedron:
 # ---------------------------------------------------------------------------
 # Group order vs. solid counts (plan point 3: "document the mismatch")
 # ---------------------------------------------------------------------------
+
 
 class TestOrderVersusSolidCounts:
     """Pin the relationship documented in the ``symmetry`` module Notes.

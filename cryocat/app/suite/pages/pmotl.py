@@ -18,8 +18,6 @@ import dash_bootstrap_components as dbc
 
 from cryocat.app import ids
 from cryocat.app.pool import (
-    PoolState,
-    insert_motl,
     get_rows,
     get_extra,
     PoolPayloadMissing,
@@ -38,15 +36,12 @@ from cryocat.app.components.tableplot import register_table_plot_callbacks
 from cryocat.app.components.tablecluster import register_table_cluster_callbacks
 from cryocat.app.apputils import _format_relion_params
 
-DYNAMIC_IDS: list[tuple[str, str]] = [(f"me-{i}-tabv-grid-container", f"me-{i}-tabv-grid") for i in range(N_SLOTS)] + [
-    ("me-res-tabv-grid-container", "me-res-tabv-grid")
-]
+DYNAMIC_IDS: list[tuple[str, str]] = [(f"me-{i}-tabv-grid-container", f"me-{i}-tabv-grid") for i in range(N_SLOTS)]
 
 
 # ── Stores ──────────────────────────────────────────────────────────────────────
 # Pool stores (pool-*) live in suite/app.py. Declared here: the editor's load
-# staging stores, the Results-tab stores, the per-view-slot stores, and the
-# slot<->motl_id map.
+# staging stores, the per-view-slot stores, and the slot<->motl_id map.
 
 
 def _make_stores():
@@ -54,8 +49,6 @@ def _make_stores():
         dcc.Store(id="me-slot-map", data=[None] * N_SLOTS),
         dcc.Store(id="me-group-expand", data={}),  # { group_id: bool } — collapsed by default
         dcc.Store(id="me-active-target", data=None),  # { type: "motl"|"group", id: str } | None
-        dcc.Store(id="me-results-store"),
-        dcc.Store(id="me-results-label-store"),
         dcc.Store(id="me-col-merge-draft", data={}),
         dcc.Store(id="me-col-merge-config", data={}),
         dcc.Store(id="me-col-merge-motls", data=[]),
@@ -64,14 +57,6 @@ def _make_stores():
         dcc.Store(id="me-load-motl-data-type"),
         dcc.Store(id="me-load-relion-optics-store"),
         dcc.Store(id="me-load-relion-params-store"),
-        dcc.Store(id="me-res-tv-data"),
-        dcc.Store(id="me-res-tv-index", data=0),
-        dcc.Store(id="me-res-tabv-global-data-store"),
-        dcc.Store(id="me-res-motl-data-type"),
-        dcc.Store(id="me-res-motl-extra-data-store"),
-        dcc.Store(id="me-res-relion-optics-store"),
-        dcc.Store(id="me-res-rln-tomos-store"),
-        dcc.Store(id="me-res-rln-tomos-filename"),
     ]
     for i in range(N_SLOTS):
         stores += [
@@ -104,7 +89,6 @@ def _slot_tab_content(i):
                 get_table_component(
                     f"me-{i}-tabv",
                     connected_motl_prefix=f"me-{i}",
-                    show_create_from_selected=True,
                     save_dialog_prefix=f"me-{i}-save",
                     show_editor=True,
                     motl_table=True,
@@ -117,26 +101,8 @@ def _slot_tab_content(i):
     )
 
 
-def _results_tab_content():
-    return dbc.Tab(
-        id="me-tab-results",
-        tab_id="me-tab-results",
-        label="Results",
-        disabled=True,
-        children=html.Div(
-            [
-                get_table_component("me-res-tabv", connected_motl_prefix="me-res", show_create_from_selected=False),
-                html.Hr(style={"margin": "0.5rem 0"}),
-                get_viewer_component("me-res-tv"),
-            ],
-            style={"padding": "0.5rem"},
-        ),
-    )
-
-
 def _get_main_content():
     tabs = [_slot_tab_content(i) for i in range(N_SLOTS)]
-    tabs.append(_results_tab_content())
     return dbc.Col(
         dbc.Tabs(
             id="me-tabs",
@@ -210,24 +176,7 @@ def register_callbacks(app):
             resolve_df=pool_resolve_df,
         )
 
-    # Results tab
-    register_viewer_callbacks(app, "me-res-tv", tabs_id=None)
-    register_table_callbacks(
-        app,
-        "me-res-tabv",
-        resolve_df=pool_resolve_df,
-        resolve_n_rows=pool_resolve_n_rows,
-    )
-    register_table_save_callbacks(app, "me-res-tabv", connected_motl_prefix="me-res")
-    register_table_plot_callbacks(
-        app, "me-res-tabv-table-plot", "me-res-tabv-global-data-store", resolve_df=pool_resolve_df
-    )
-    register_table_cluster_callbacks(
-        app, "me-res-tabv-table-cluster", "me-res-tabv-global-data-store", pool_aware=True, resolve_df=pool_resolve_df
-    )
-
     _register_pool_sync(app)
-    _register_create_from_selected(app)
     _register_slot_connectors_all(app)
     _register_relion_params_connectors_all(app)
     _register_save_connectors(app)
@@ -254,24 +203,6 @@ def register_callbacks(app):
                 labels.append(f"Slot {i + 1}")
                 disabled.append(True)
         return (*labels, *disabled)
-
-    # Results tab connection.
-    @app.callback(
-        Output("me-tab-results", "disabled"),
-        Output("me-res-tv-data", "data", allow_duplicate=True),
-        Output("me-res-tabv-global-data-store", "data", allow_duplicate=True),
-        Output("me-tab-results", "label"),
-        Output("me-tabs", "active_tab", allow_duplicate=True),
-        Input("me-results-store", "data"),
-        State("me-results-label-store", "data"),
-        prevent_initial_call=True,
-    )
-    def connect_results(data, label):
-        if not data:
-            return True, None, None, "Results", no_update
-        display_label = label or "Results"
-        return False, data, data, display_label, "me-tab-results"
-
 
 # ── Pool <-> slot synchronisation ────────────────────────────────────────────────
 
@@ -375,78 +306,6 @@ def _register_pool_sync(app):
 
 
 # ── "Create new from selected" → new pool motl ───────────────────────────────────
-
-
-def _register_create_from_selected(app):
-    """Each slot table's "Create new from selected" button spawns a new pool motl
-    from that grid's selected rows, and surfaces it in the first free slot."""
-
-    @app.callback(
-        Output(ids.POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.POOL_META, "data", allow_duplicate=True),
-        Output(ids.POOL_NEXT_ID, "data", allow_duplicate=True),
-        Output("me-slot-map", "data", allow_duplicate=True),
-        Output("me-tabs", "active_tab", allow_duplicate=True),
-        *[Input(f"me-{i}-tabv-create-from-selected-btn", "n_clicks") for i in range(N_SLOTS)],
-        *[State(f"me-{i}-tabv-grid", "selectedRows") for i in range(N_SLOTS)],
-        State("me-slot-map", "data"),
-        State(ids.POOL_REGISTRY, "data"),
-        State(ids.POOL_META, "data"),
-        State(ids.POOL_NEXT_ID, "data"),
-        prevent_initial_call=True,
-    )
-    def create_from_selected(*args):
-        n_clicks = args[:N_SLOTS]
-        selected_all = args[N_SLOTS : 2 * N_SLOTS]
-        slot_map, registry, pool_meta, next_id = args[2 * N_SLOTS :]
-
-        if not any(n_clicks):
-            raise dash.exceptions.PreventUpdate
-        triggered = ctx.triggered_id
-        if not (isinstance(triggered, str) and triggered.endswith("-tabv-create-from-selected-btn")):
-            raise dash.exceptions.PreventUpdate
-        try:
-            src = int(triggered[len("me-") : triggered.index("-tabv-")])
-        except (ValueError, IndexError):
-            raise dash.exceptions.PreventUpdate
-
-        selected_rows = selected_all[src]
-        if not selected_rows:
-            raise dash.exceptions.PreventUpdate
-
-        state = PoolState.from_stores(registry, pool_meta, next_id)
-        slot_map = list(slot_map or [None] * N_SLOTS)
-        while len(slot_map) < N_SLOTS:
-            slot_map.append(None)
-
-        src_mid = slot_map[src] if src < len(slot_map) else None
-        src_meta = state.registry.get(src_mid, {}) if src_mid else {}
-        src_label = src_meta.get("label", f"Slot {src + 1}")
-        src_type = src_meta.get("type", "emmotl")
-        short = src_label[:15] + "…" if len(src_label) > 15 else src_label
-
-        # TODO(P9): route through run_operation_to_pool once selection is tracked.
-        state, mid = insert_motl(
-            state,
-            selected_rows,
-            label=f"Sel from {short} ({len(selected_rows)})",
-            motl_type=src_type,
-            meta={
-                "data_type": src_type,
-                "relion_optics": None,
-                "relion5_tomos": None,
-                "relion5_tomos_filename": None,
-                "relion_params": None,
-            },
-        )
-
-        free = next((i for i in range(N_SLOTS) if not slot_map[i]), None)
-        active_tab = no_update
-        if free is not None:
-            slot_map[free] = mid
-            active_tab = f"me-tab-{free}"
-
-        return (*state.to_stores(), slot_map, active_tab)
 
 
 # ── Save dialog connectors — keep save dialog motl-id and prefill in sync ────────

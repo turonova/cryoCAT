@@ -1,4 +1,5 @@
 """Table component — composition of grid, filter, edit, and save submodules."""
+
 from __future__ import annotations
 
 from dash import html, dcc, Input, Output, State, no_update
@@ -21,7 +22,6 @@ from cryocat.app.components.tablesave import (
 def get_table_component(
     prefix: str,
     connected_motl_prefix=None,
-    show_create_from_selected=True,
     save_dialog_prefix: str | None = None,
     show_editor: bool = False,
     motl_table: bool = False,
@@ -29,39 +29,28 @@ def get_table_component(
     motl_mode = connected_motl_prefix is not None
     use_save_dialog = motl_mode and save_dialog_prefix is not None
 
+    # ── Filter group ──────────────────────────────────────────────────────
     button_children = [
-        dbc.Button("Apply Changes", id=f"{prefix}-apply-btn", color="primary", className="me-1"),
-    ]
-
-    if motl_mode:
-        button_children.append(
-            dbc.Button("Save As", id=f"{prefix}-save-btn", color="primary", className="me-1"),
-        )
-        if not use_save_dialog:
-            button_children.append(
-                dbc.Button("Save", id=f"{prefix}-save-overwrite-btn", color="primary", className="me-1"),
-            )
-        if show_create_from_selected:
-            button_children.append(
-                dbc.Button(
-                    "Create new from selected",
-                    id=f"{prefix}-create-from-selected-btn",
-                    color="primary",
-                    className="me-1",
-                )
-            )
-
-    button_children += [
-        dbc.Button("Save as CSV", id=f"{prefix}-save-csv-btn", color="primary", className="me-1"),
-        dbc.Button("Remove Selected Rows", id=f"{prefix}-remove-rows-btn", color="primary", className="me-1"),
-        dbc.Button("Select All Visible", id=f"{prefix}-select-all-btn", color="primary", className="me-1"),
+        dbc.Button("Apply filters", id=f"{prefix}-apply-btn", color="primary", className="me-1", disabled=True),
         dbc.Button(
             "Create from filtered",
             id=f"{prefix}-pool-from-filtered-btn",
             color="primary",
             className="me-1",
             disabled=True,
-            style={"display": "none"},
+        ),
+        dbc.Button("Clear filters", id=f"{prefix}-clear-filters-btn", color="primary", className="me-1", disabled=True),
+    ]
+
+    # ── Selection group ───────────────────────────────────────────────────
+    button_children += [
+        dbc.Button("Select all visible", id=f"{prefix}-select-all-btn", color="primary", className="me-1"),
+        dbc.Button("Select inverse", id=f"{prefix}-select-inverse-btn", color="primary", className="me-1"),
+        dbc.Button(
+            "Remove selected rows", id=f"{prefix}-remove-rows-btn", color="primary", className="me-1", disabled=True
+        ),
+        dbc.Button(
+            "Clear selection", id=f"{prefix}-clear-selection-btn", color="primary", className="me-1", disabled=True
         ),
         dbc.Button(
             "Create from selected",
@@ -69,9 +58,24 @@ def get_table_component(
             color="primary",
             className="me-1",
             disabled=True,
-            style={"display": "none"},
         ),
-        dbc.Button("Select Inverse", id=f"{prefix}-select-inverse-btn", color="primary", className="me-1"),
+    ]
+
+    # ── Save group ────────────────────────────────────────────────────────
+    button_children += [
+        dbc.Button("Save as CSV", id=f"{prefix}-save-csv-btn", color="primary", className="me-1"),
+    ]
+
+    if motl_mode:
+        button_children.append(
+            dbc.Button("Save as", id=f"{prefix}-save-btn", color="primary", className="me-1"),
+        )
+        if not use_save_dialog:
+            button_children.append(
+                dbc.Button("Save", id=f"{prefix}-save-overwrite-btn", color="primary", className="me-1"),
+            )
+
+    button_children += [
         dbc.Button("Plot", id=f"{prefix}-plot-graphs-btn", color="primary", className="me-1", n_clicks=0),
         dbc.Offcanvas(
             [get_table_plot_component(f"{prefix}-table-plot")],
@@ -96,8 +100,8 @@ def get_table_component(
 
     if show_editor:
         from cryocat.app.components import tableeditor
-        button_children.insert(
-            0,
+
+        button_children.append(
             dbc.Button(
                 "Edit table",
                 id=f"{prefix}-edit-open-btn",
@@ -111,6 +115,7 @@ def get_table_component(
 
     if show_editor:
         from cryocat.app.components import tableeditor
+
         extra_children.append(
             dbc.Offcanvas(
                 [tableeditor.get_table_editor(f"{prefix}-edit")],
@@ -125,6 +130,7 @@ def get_table_component(
 
     if use_save_dialog:
         from cryocat.app.components.savedialog import get_save_dialog
+
         extra_children.append(
             dbc.Offcanvas(
                 [get_save_dialog(save_dialog_prefix, mode="single")],
@@ -155,19 +161,7 @@ def get_table_component(
                 className="d-flex align-items-center",
             )
         )
-    button_row_children.append(
-        dbc.Col(
-            html.Div(
-                id=f"{prefix}-selection-count",
-                style={"color": "var(--color9)", "whiteSpace": "nowrap"},
-            ),
-            width="auto",
-            className="d-flex align-items-center",
-        )
-    )
-    button_row_children.append(
-        dbc.Col(button_children, className="d-flex justify-content-end flex-wrap gap-1")
-    )
+    button_row_children.append(dbc.Col(button_children, className="d-flex justify-content-end flex-wrap gap-1"))
 
     return html.Div(
         id=f"{prefix}-table-container",
@@ -177,6 +171,10 @@ def get_table_component(
             html.Div(
                 id=f"{prefix}-active-filter-count",
                 style={"color": "var(--color9)", "marginTop": "4px", "marginBottom": "4px"},
+            ),
+            html.Div(
+                id=f"{prefix}-selection-count",
+                style={"color": "var(--color9)", "whiteSpace": "nowrap"},
             ),
             html.H5("Filters", style={"marginBottom": "1rem", "marginTop": "1rem"}),
             html.Div(id=f"{prefix}-filters-container", style={"marginBottom": "2rem"}),
@@ -210,16 +208,20 @@ def register_table_callbacks(
     When show_editor=True, also registers the table editor and its modal toggle.
     """
     register_tablegrid_callbacks(
-        app, prefix,
-        resolve_df=resolve_df, resolve_n_rows=resolve_n_rows,
-        tabs_id=tabs_id, tab_value=tab_value,
+        app,
+        prefix,
+        resolve_df=resolve_df,
+        resolve_n_rows=resolve_n_rows,
+        tabs_id=tabs_id,
+        tab_value=tab_value,
         data_pool=data_pool,
         motl_table=motl_table,
     )
     register_tablefilter_callbacks(app, prefix, resolve_df=resolve_df)
     register_tableedit_callbacks(app, prefix)
     register_tablesave_csv_callbacks(
-        app, prefix,
+        app,
+        prefix,
         extra_csv_states=extra_csv_states,
         custom_csv_save_fn=custom_csv_save_fn,
     )
@@ -271,4 +273,3 @@ def register_table_callbacks(
             return no_update
 
         tableeditor.register_table_editor_callbacks(app, f"{prefix}-edit")
-

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from dash import Input, Output, State, ctx, exceptions, html, dcc, no_update
+from dash import ALL, Input, Output, State, ctx, exceptions, html, dcc, no_update
 import dash_ag_grid as dag
 
 from cryocat.app import ids, pool as _pool
@@ -204,9 +204,7 @@ def resolve_filtered_ids(
     caller must check before inserting a subset into the pool.
     """
     if "subtomo_id" not in df.columns:
-        raise ValueError(
-            "resolve_filtered_ids: DataFrame has no 'subtomo_id' column."
-        )
+        raise ValueError("resolve_filtered_ids: DataFrame has no 'subtomo_id' column.")
     filtered = apply_filter_model(df, filter_model, slider_filters)
     return filtered["subtomo_id"].tolist()
 
@@ -265,6 +263,7 @@ _MOTL_TABLE_MAX_ROWS = 200_000
 
 def _build_motl_col_defs() -> list[dict]:
     from cryocat.core.cryomotl import Motl
+
     return [
         {
             "field": col,
@@ -403,7 +402,10 @@ def get_grid(prefix: str, *, motl_table: bool = False) -> dag.AgGrid:
             id=f"{prefix}-grid",
             columnDefs=MOTL_COL_DEFS,
             rowData=[],
-            dashGridOptions={"rowSelection": {"mode": "multiRow"}},
+            dashGridOptions={
+                "rowSelection": {"mode": "multiRow"},
+                "getRowId": "params.data.subtomo_id.toString()",
+            },
             defaultColDef=_DEFAULT_COL_DEF,
             style=_GRID_STYLE,
             className="ag-theme-balham",
@@ -547,10 +549,12 @@ def register_tablegrid_callbacks(
         _col_inputs = [Input(f"{prefix}-global-data-store", "data")]
         if data_pool:
             _col_inputs.append(Input(ids.DATA_POOL_REVS, "data"))
+
         @app.callback(
             Output(f"{prefix}-grid", "columnDefs"),
             Output(f"{prefix}-grid", "dashGridOptions"),
             Output(f"{prefix}-col-ref-store", "data"),
+            Output(f"{prefix}-rows-request-store", "data", allow_duplicate=True),
             *_col_inputs,
             State(f"{prefix}-col-ref-store", "data"),
             prevent_initial_call=True,
@@ -588,23 +592,28 @@ def register_tablegrid_callbacks(
             if df is None:
                 if ref is not None:
                     new_stored = {"ref": ref, "fields": [], "rev": _live_rev(ref)}
-                    return [], {
-                        **_BASE_GRID_OPTIONS,
-                        "overlayNoRowsTemplate": (
-                            "<span style='padding:8px;color:var(--bs-warning,orange)'>"
-                            "Table reference is stale — this can happen after a server "
-                            "restart or an interrupted save. Please reload the data."
-                            "</span>"
-                        ),
-                    }, new_stored
-                return no_update, no_update, {"ref": None, "fields": [], "rev": -1}
+                    return (
+                        [],
+                        {
+                            **_BASE_GRID_OPTIONS,
+                            "overlayNoRowsTemplate": (
+                                "<span style='padding:8px;color:var(--bs-warning,orange)'>"
+                                "Table reference is stale — this can happen after a server "
+                                "restart or an interrupted save. Please reload the data."
+                                "</span>"
+                            ),
+                        },
+                        new_stored,
+                        None,
+                    )
+                return no_update, no_update, {"ref": None, "fields": [], "rev": -1}, None
             new_cols = col_defs_from_df(df)
             new_fields = [c["field"] for c in new_cols]
             new_stored = {"ref": ref, "fields": new_fields, "rev": _live_rev(ref)}
             new_options = {**_BASE_GRID_OPTIONS, "infiniteInitialRowCount": len(df)}
             if new_fields == prev_fields:
-                return no_update, no_update, new_stored
-            return new_cols, new_options, new_stored
+                return no_update, no_update, new_stored, None
+            return new_cols, new_options, new_stored, None
 
         app.clientside_callback(
             "function(c){if(c===undefined||c===null)return window.dash_clientside.no_update;"
@@ -627,6 +636,9 @@ def register_tablegrid_callbacks(
 
         # Gate: passes getRowsRequest to rows-request-store only when ref is set.
         # When ref is absent, responds with empty data in-browser — no server call.
+        # rows-request-store is also written by _cols (clears to None on each data change),
+        # so any subsequent request — even one with the same dict as the last run — always
+        # differs from None and reliably triggers _rows.
         app.clientside_callback(
             """
             function(req, ref) {
@@ -635,7 +647,7 @@ def register_tablegrid_callbacks(
                 return [req, window.dash_clientside.no_update];
             }
             """,
-            Output(f"{prefix}-rows-request-store", "data"),
+            Output(f"{prefix}-rows-request-store", "data", allow_duplicate=True),
             Output(f"{prefix}-grid", "getRowsResponse", allow_duplicate=True),
             Input(f"{prefix}-grid", "getRowsRequest"),
             State(f"{prefix}-global-data-store", "data"),
@@ -696,7 +708,83 @@ def register_tablegrid_callbacks(
         prevent_initial_call=True,
     )
 
+    app.clientside_callback(
+        f"""
+        function(n) {{
+            if (!n) return window.dash_clientside.no_update;
+            dash_ag_grid.getApiAsync("{prefix}-grid").then(function(api) {{
+                if (api) api.deselectAll();
+            }});
+            return window.dash_clientside.no_update;
+        }}
+        """,
+        Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),
+        Input(f"{prefix}-clear-selection-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+
+    app.clientside_callback(
+        f"""
+        function(n) {{
+            if (!n) return window.dash_clientside.no_update;
+            dash_ag_grid.getApiAsync("{prefix}-grid").then(function(api) {{
+                if (!api) return;
+                api.forEachNodeAfterFilter(function(node) {{
+                    node.setSelected(!node.isSelected());
+                }});
+            }});
+            return window.dash_clientside.no_update;
+        }}
+        """,
+        Output(f"{prefix}-selection-ids-store", "data", allow_duplicate=True),
+        Input(f"{prefix}-select-inverse-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+
+    @app.callback(
+        Output(f"{prefix}-grid", "filterModel", allow_duplicate=True),
+        Output(f"{prefix}-slider-filters-store", "data", allow_duplicate=True),
+        Output({"type": f"{prefix}-filter-slider", "column": ALL}, "value", allow_duplicate=True),
+        Input(f"{prefix}-clear-filters-btn", "n_clicks"),
+        State({"type": f"{prefix}-filter-slider", "column": ALL}, "min"),
+        State({"type": f"{prefix}-filter-slider", "column": ALL}, "max"),
+        prevent_initial_call=True,
+    )
+    def _clear_filters(n_clicks, mins, maxs):
+        if not n_clicks:
+            raise exceptions.PreventUpdate
+        return {}, {}, [[lo, hi] for lo, hi in zip(mins, maxs)]
+
+    app.clientside_callback(
+        """
+        function(ids) {
+            var empty = !ids || ids.length === 0;
+            return [empty, empty];
+        }
+        """,
+        Output(f"{prefix}-remove-rows-btn", "disabled"),
+        Output(f"{prefix}-clear-selection-btn", "disabled"),
+        Input(f"{prefix}-selection-ids-store", "data"),
+    )
+
     _motl_js = "true" if motl_table else "false"
+    app.clientside_callback(
+        f"""
+        function(filterModel, sliderFilters) {{
+            var fm = filterModel || {{}};
+            var sf = {_motl_js} ? {{}} : (sliderFilters || {{}});
+            var hasFilter = Object.values(fm).filter(function(v) {{ return v; }}).length > 0
+                          || Object.keys(sf).length > 0;
+            return [!hasFilter, !hasFilter];
+        }}
+        """,
+        Output(f"{prefix}-apply-btn", "disabled"),
+        Output(f"{prefix}-clear-filters-btn", "disabled"),
+        Input(f"{prefix}-grid", "filterModel"),
+        Input(f"{prefix}-slider-filters-store", "data"),
+    )
+
+
     app.clientside_callback(
         f"""
         function(filterModel, sliderFilters, rowCounts, ref) {{
@@ -713,7 +801,7 @@ def register_tablegrid_callbacks(
             if (active === 0) return total.toLocaleString() + " rows";
             var filtered = rc.filtered;
             if (filtered !== undefined && filtered !== null) {{
-                return filtered.toLocaleString() + " of " + total.toLocaleString() + " rows";
+                return filtered.toLocaleString() + " rows filtered (of " + total.toLocaleString() + ")";
             }}
             return active + " active filter" + (active !== 1 ? "s" : "");
         }}
@@ -729,9 +817,9 @@ def register_tablegrid_callbacks(
     app.clientside_callback(
         f"""
         function(filterModel, sliderFilters, rowCounts, ref) {{
-            if (!ref) return ["Create from filtered", true, {{"display": "none"}}];
+            if (!ref) return ["Create from filtered", true, {{}}];
             var rc = rowCounts || {{}};
-            if (!rc.has_id_col) return ["Create from filtered", true, {{"display": "none"}}];
+            if (!rc.has_id_col) return ["Create from filtered", true, {{}}];
             var sf = {_motl_js} ? {{}} : (sliderFilters || {{}});
             var active = Object.values(filterModel || {{}}).filter(function(v) {{ return v; }}).length
                         + Object.keys(sf).length;
@@ -762,10 +850,10 @@ def register_tablegrid_callbacks(
     def _update_selected_btn(selected_ids, ref):
         df = resolve_df(ref)
         if df is None:
-            return "Create from selected", True, {"display": "none"}
+            return "Create from selected", True, {}
         id_col = _pool.get_id_column(ref)
         if not id_col or id_col not in df.columns:
-            return "Create from selected", True, {"display": "none"}
+            return "Create from selected", True, {}
         n = len(selected_ids or [])
         return f"Create from selected ({n:,})", n == 0, {}
 

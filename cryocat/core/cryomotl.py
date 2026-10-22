@@ -2081,24 +2081,23 @@ class Motl:
         Returns
         -------
         list
-            List of :class:`Motl` split by given column_name.
+            List of :class:`Motl` (or a preserved subclass) split by given column_name.
 
         Warnings
         --------
-        This method does not preserve a child class - it always returns :class:`Motl`. Correspondingly, the individual
-        motls - if written out - will be in "emmotl" format.
-
-        Notes
-        -----
-        TODO: Make this function to be class specific.
+        Preserves the concrete subclass when possible (via :meth:`_same_class_motl`);
+        falls back to :class:`Motl` when the subclass constructor rejects the data.
+        When *write_out* is ``True``, the file format follows the preserved class:
+        an :class:`EmMotl` writes a ``.em`` file via :meth:`EmMotl.write_out`;
+        a plain :class:`Motl` calls :meth:`Motl.write_out` which defaults to
+        ``motl_type='emmotl'``.
 
         """
         uniq_values = self.get_unique_values(column_name)
         motls = list()
 
         for value in uniq_values:
-            # submotl = self.__class__(self.df.loc[self.df[column_name] == value])
-            submotl = Motl(self.df.loc[self.df[column_name] == value])
+            submotl = self._same_class_motl(self.df.loc[self.df[column_name] == value])
             motls.append(submotl)
 
             if write_out:
@@ -2651,6 +2650,13 @@ class Motl:
 
         return None if inplace else target
 
+    def _same_class_motl(self, df: "pd.DataFrame") -> "Motl":
+        """Return a Motl-like object of the same concrete type when possible."""
+        try:
+            return type(self)(df)
+        except (TypeError, ValueError):
+            return Motl(df)
+
     @gui_exposed(
         category="Geometry",
         output="motl",
@@ -2736,8 +2742,9 @@ class Motl:
 
         Warnings
         --------
-        This method does not preserve a child class – it always returns
-        :class:`Motl`.
+        Preserves the concrete subclass when possible (via
+        :meth:`_same_class_motl`); falls back to :class:`Motl` when the
+        subclass constructor rejects the Motl-format DataFrame.
         """
         from cryocat.utils.symmetry import get_symmetry_rotations
 
@@ -2786,7 +2793,7 @@ class Motl:
         new_motl_df.loc[:, ["phi", "theta", "psi"]] = new_rotations.as_euler(seq="zxz", degrees=True)
 
         new_motl_df["subtomo_id"] = np.arange(1, len(new_motl_df) + 1)
-        new_motl = Motl(new_motl_df)
+        new_motl = self._same_class_motl(new_motl_df)
         new_motl.update_coordinates()
         new_motl.df.reset_index(inplace=True, drop=True)
         return new_motl

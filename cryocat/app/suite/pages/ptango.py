@@ -11,6 +11,7 @@ DYNAMIC_IDS declares all AG Grid containers so test_app_ids.py accepts them.
 body[data-tool="tango"] is set by the suite router (suite/app.py W1) and scoped
 in assets/styles.css so tango palette tokens apply to portals too.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -78,6 +79,7 @@ _hint = {"color": "var(--color9)"}
 
 # ── Diagnostics helper ────────────────────────────────────────────────────────
 
+
 def _build_diagnostics(data, settings=None, slot: int = 0):
     """Return diagnostics children for a descriptor DataFrame or raw records."""
     if data is None or (not isinstance(data, pd.DataFrame) and not data):
@@ -104,8 +106,10 @@ def _build_diagnostics(data, settings=None, slot: int = 0):
         fig_scree.add_bar(x=x_sorted, y=evr_sorted.tolist(), name="per-component")
         fig_scree.add_scatter(x=x_sorted, y=cum_sorted.tolist(), name="cumulative", mode="lines+markers")
         fig_scree.update_layout(
-            xaxis_title="Feature", yaxis_title="Variance explained",
-            height=220, margin=dict(l=30, r=10, t=10, b=30),
+            xaxis_title="Feature",
+            yaxis_title="Variance explained",
+            height=220,
+            margin=dict(l=30, r=10, t=10, b=30),
             legend=dict(x=1, y=1, xanchor="right", yanchor="top", bgcolor="rgba(0,0,0,0)"),
             uirevision="scree",
         )
@@ -114,23 +118,46 @@ def _build_diagnostics(data, settings=None, slot: int = 0):
         except Exception:
             _scree_fig = fig_scree
         _owner = f"tango-desc-{slot}"
-        children.append(customel_graph(_owner, "scree", dcc.Graph(id={"type": "styled-graph", "owner": _owner, "name": "scree"}, figure=_scree_fig, style={"marginBottom": "0.25rem"})))
+        children.append(
+            customel_graph(
+                _owner,
+                "scree",
+                dcc.Graph(
+                    id={"type": "styled-graph", "owner": _owner, "name": "scree"},
+                    figure=_scree_fig,
+                    style={"marginBottom": "0.25rem"},
+                ),
+            )
+        )
     except Exception as exc:
         children.append(html.Div(f"Scree plot failed: {exc}", style={"color": styles.COLOR_MUTED}))
     try:
         corr = df_feat.corr().round(2)
         z = corr.values.tolist()
         labels = corr.columns.tolist()
-        fig_corr = ff.create_annotated_heatmap(z=z, x=labels, y=labels, colorscale="RdBu", zmin=-1, zmax=1, showscale=True)
+        fig_corr = ff.create_annotated_heatmap(
+            z=z, x=labels, y=labels, colorscale="RdBu", zmin=-1, zmax=1, showscale=True
+        )
         fig_corr.update_layout(
             height=max(220, 60 + 30 * len(labels)),
-            margin=dict(l=60, r=10, t=10, b=60), uirevision="corr",
+            margin=dict(l=60, r=10, t=10, b=60),
+            uirevision="corr",
         )
         try:
             _corr_fig = _styled_figure(fig_corr, settings or {}, uirevision="corr")
         except Exception:
             _corr_fig = fig_corr
-        children.append(customel_graph(_owner, "corr", dcc.Graph(id={"type": "styled-graph", "owner": _owner, "name": "corr"}, figure=_corr_fig, style={"marginBottom": "0.25rem"})))
+        children.append(
+            customel_graph(
+                _owner,
+                "corr",
+                dcc.Graph(
+                    id={"type": "styled-graph", "owner": _owner, "name": "corr"},
+                    figure=_corr_fig,
+                    style={"marginBottom": "0.25rem"},
+                ),
+            )
+        )
     except Exception as exc:
         children.append(html.Div(f"Heatmap failed: {exc}", style={"color": styles.COLOR_MUTED}))
     try:
@@ -138,19 +165,39 @@ def _build_diagnostics(data, settings=None, slot: int = 0):
         summary["distinct"] = df_feat.nunique()
         summary["constant"] = summary["std"] == 0
         summary = summary.round(4).reset_index().rename(columns={"index": "feature"})
-        children.append(html.Details([
-            html.Summary("Per-feature summary", style={"fontSize": styles.FONT_SM, "cursor": "pointer"}),
-            html.Table([
-                html.Thead(html.Tr([html.Th(c, style={"padding": "2px 6px"}) for c in summary.columns])),
-                html.Tbody([
-                    html.Tr([
-                        html.Td(str(v), style={"padding": "2px 6px", "color": styles.COLOR_MUTED if col == "constant" and v else "inherit"})
-                        for col, v in zip(summary.columns, row)
-                    ])
-                    for row in summary.itertuples(index=False)
-                ]),
-            ], style={"fontSize": styles.FONT_SM, "borderCollapse": "collapse", "width": "100%"}),
-        ], style={"marginTop": "0.5rem"}))
+        children.append(
+            html.Details(
+                [
+                    html.Summary("Per-feature summary", style={"fontSize": styles.FONT_SM, "cursor": "pointer"}),
+                    html.Table(
+                        [
+                            html.Thead(html.Tr([html.Th(c, style={"padding": "2px 6px"}) for c in summary.columns])),
+                            html.Tbody(
+                                [
+                                    html.Tr(
+                                        [
+                                            html.Td(
+                                                str(v),
+                                                style={
+                                                    "padding": "2px 6px",
+                                                    "color": (
+                                                        styles.COLOR_MUTED if col == "constant" and v else "inherit"
+                                                    ),
+                                                },
+                                            )
+                                            for col, v in zip(summary.columns, row)
+                                        ]
+                                    )
+                                    for row in summary.itertuples(index=False)
+                                ]
+                            ),
+                        ],
+                        style={"fontSize": styles.FONT_SM, "borderCollapse": "collapse", "width": "100%"},
+                    ),
+                ],
+                style={"marginTop": "0.5rem"},
+            )
+        )
     except Exception as exc:
         children.append(html.Div(f"Summary failed: {exc}", style={"color": styles.COLOR_MUTED}))
     return children
@@ -158,15 +205,20 @@ def _build_diagnostics(data, settings=None, slot: int = 0):
 
 # ── Tile helpers (one per tab) ─────────────────────────────────────────────────
 
+
 def _twist_load_fn(path, nn_radius=None, source_motl_selection=None):
     """Load a TwistDescriptor table from a file; returns dict with df and nn_radius."""
     df = TwistDescriptor.read_in(path)
-    first = (source_motl_selection[0] if isinstance(source_motl_selection, list)
-             else source_motl_selection) if source_motl_selection else None
+    first = (
+        (source_motl_selection[0] if isinstance(source_motl_selection, list) else source_motl_selection)
+        if source_motl_selection
+        else None
+    )
     motl_links = {"source": [first]} if first else None
     result = {"df": df, "nn_radius": nn_radius, "motl_links": motl_links}
     if first:
         from cryocat.app.suite.pages._motl_link import check_motl_overlap
+
         _, _, msg = check_motl_overlap(df, "qp_id", first)
         result["status_extra"] = msg
     return result
@@ -303,7 +355,7 @@ def _twist_tile() -> list:
             dbc.Button(
                 "✕ Close twist",
                 id="tango-reset-twist-btn",
-                color="link",
+                color="secondary",
                 size="sm",
                 n_clicks=0,
                 style={"padding": 0, "marginTop": "0.4rem"},
@@ -386,10 +438,12 @@ def _make_stores() -> list:
 
 def _desc_slot_content(i: int) -> html.Div:
     """Per-slot tab content: table + diagnostics."""
-    return html.Div([
-        get_table_component(f"tango-desc-{i}"),
-        html.Div(id=f"tango-desc-{i}-diagnostics", style={"marginTop": "0.5rem"}),
-    ])
+    return html.Div(
+        [
+            get_table_component(f"tango-desc-{i}"),
+            html.Div(id=f"tango-desc-{i}-diagnostics", style={"marginTop": "0.5rem"}),
+        ]
+    )
 
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
@@ -484,12 +538,15 @@ def _main() -> list:
         dbc.Tabs(
             id="tango-tabs",
             active_tab="tango-tab-twist",
+            style={"marginBottom": "0.5rem"},
             children=[
                 dbc.Tab(
-                    html.Div([
-                        get_table_component("tango-twist-tabv"),
-                        get_viewer_component("tango-twist-tv"),
-                    ]),
+                    html.Div(
+                        [
+                            get_table_component("tango-twist-tabv"),
+                            get_viewer_component("tango-twist-tv"),
+                        ]
+                    ),
                     label="Twist vector",
                     tab_id="tango-tab-twist",
                 ),
@@ -520,64 +577,95 @@ layout = html.Div(
 
 # ── Callbacks ──────────────────────────────────────────────────────────────────
 
+
 def register_callbacks(app) -> None:
     # cls_name is in every tango form id (id_extra={"cls_name": ...} in build_form);
     # writeback patterns must include it or they target a 4-key id that never exists.
     formgen.register_form_callbacks(app, "tango-support-params", id_extra={"cls_name": ALL})
-    formgen.register_form_callbacks(app, "tango-desc-params",    id_extra={"cls_name": ALL})
-    formgen.register_form_callbacks(app, "tango-feat-params",    id_extra={"cls_name": ALL})
+    formgen.register_form_callbacks(app, "tango-desc-params", id_extra={"cls_name": ALL})
+    formgen.register_form_callbacks(app, "tango-feat-params", id_extra={"cls_name": ALL})
     register_motl_input_callbacks(app, "tango-mi")
     register_table_source_callbacks(
-        app, "tango-twist-src",
+        app,
+        "tango-twist-src",
         check_fn=TwistDescriptor.check_twist_columns,
         load_fn=_twist_load_fn,
     )
     register_pool_slot_list_callbacks(
-        app, "tango-desc-pool", "tango-desc-pool-registry", "tango-desc-pool-slot-map", _DESC_SLOTS,
+        app,
+        "tango-desc-pool",
+        "tango-desc-pool-registry",
+        "tango-desc-pool-slot-map",
+        _DESC_SLOTS,
         row_extra_fn=_desc_pool_row_extra,
         active_id_store_id="tango-desc-pool-active-id",
     )
     register_slot_focus_callback(
-        app, "tango-desc-pool-slot-map", "tango-tabs", "tango-tab-desc-", _DESC_SLOTS,
+        app,
+        "tango-desc-pool-slot-map",
+        "tango-tabs",
+        "tango-tab-desc-",
+        _DESC_SLOTS,
         active_id_store_id="tango-desc-pool-active-id",
         empty_fallback_tab_id="tango-tab-twist",
     )
 
     register_table_callbacks(
-        app, "tango-twist-tabv",
-        resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
-        tabs_id="tango-tabs", tab_value="tango-tab-twist",
+        app,
+        "tango-twist-tabv",
+        resolve_df=_datapool.resolve_df,
+        resolve_n_rows=_datapool.resolve_n_rows,
+        tabs_id="tango-tabs",
+        tab_value="tango-tab-twist",
         data_pool=True,
     )
     register_table_plot_callbacks(
-        app, "tango-twist-tabv-table-plot", "tango-twist-tabv-global-data-store",
-        table_grid_id="tango-twist-tabv-grid", resolve_df=_datapool.resolve_df,
+        app,
+        "tango-twist-tabv-table-plot",
+        "tango-twist-tabv-global-data-store",
+        table_grid_id="tango-twist-tabv-grid",
+        resolve_df=_datapool.resolve_df,
     )
     register_table_cluster_callbacks(
-        app, "tango-twist-tabv-table-cluster", "tango-twist-tabv-global-data-store",
-        table_grid_id="tango-twist-tabv-grid", resolve_df=_datapool.resolve_df,
-        commit_fn=_datapool.replace_df, revs_store_id=ids.DATA_POOL_REVS,
+        app,
+        "tango-twist-tabv-table-cluster",
+        "tango-twist-tabv-global-data-store",
+        table_grid_id="tango-twist-tabv-grid",
+        resolve_df=_datapool.resolve_df,
+        commit_fn=_datapool.replace_df,
+        revs_store_id=ids.DATA_POOL_REVS,
     )
 
     for _i in range(_DESC_SLOTS):
         register_table_callbacks(
-            app, f"tango-desc-{_i}",
-            resolve_df=_datapool.resolve_df, resolve_n_rows=_datapool.resolve_n_rows,
-            tabs_id="tango-tabs", tab_value=f"tango-tab-desc-{_i}",
+            app,
+            f"tango-desc-{_i}",
+            resolve_df=_datapool.resolve_df,
+            resolve_n_rows=_datapool.resolve_n_rows,
+            tabs_id="tango-tabs",
+            tab_value=f"tango-tab-desc-{_i}",
             data_pool=True,
         )
         register_table_plot_callbacks(
-            app, f"tango-desc-{_i}-table-plot", f"tango-desc-{_i}-global-data-store",
-            table_grid_id=f"tango-desc-{_i}-grid", resolve_df=_datapool.resolve_df,
+            app,
+            f"tango-desc-{_i}-table-plot",
+            f"tango-desc-{_i}-global-data-store",
+            table_grid_id=f"tango-desc-{_i}-grid",
+            resolve_df=_datapool.resolve_df,
         )
         register_table_cluster_callbacks(
-            app, f"tango-desc-{_i}-table-cluster", f"tango-desc-{_i}-global-data-store",
-            table_grid_id=f"tango-desc-{_i}-grid", resolve_df=_datapool.resolve_df,
-            commit_fn=_datapool.replace_df, revs_store_id=ids.DATA_POOL_REVS,
+            app,
+            f"tango-desc-{_i}-table-cluster",
+            f"tango-desc-{_i}-global-data-store",
+            table_grid_id=f"tango-desc-{_i}-grid",
+            resolve_df=_datapool.resolve_df,
+            commit_fn=_datapool.replace_df,
+            revs_store_id=ids.DATA_POOL_REVS,
         )
 
     register_table_to_motl_callbacks(
-        app, "tango-ttm",
+        app,
+        "tango-ttm",
         source_table_id="tango-twist-tabv-grid",
         id_column="qp_id",
         source_store_id="tango-ttm-src-ref",
@@ -626,6 +714,7 @@ def register_callbacks(app) -> None:
             raise PreventUpdate
         from cryocat.core.cryomotl import Motl as _Motl
         from cryocat.app.pool import get_rows as _get_rows
+
         try:
             rows = _get_rows(motl_id)
         except Exception as exc:
@@ -642,11 +731,9 @@ def register_callbacks(app) -> None:
         label = (registry or {}).get(motl_id, {}).get("label", motl_id)
         var_name = "alpha_" + "".join(c if c.isalnum() else "_" for c in label).strip("_")
         from cryocat.app.console.vars import register_console_var
+
         register_console_var(var_name, (lo, hi))
-        return (
-            f"Suggested range: [{lo:.4g}, {hi:.4g}]. "
-            f"Registered as @{var_name} in the console."
-        )
+        return f"Suggested range: [{lo:.4g}, {hi:.4g}]. " f"Registered as @{var_name} in the console."
 
     # ── Show/hide C-symmetry value input ─────────────────────────────────────
 
@@ -734,8 +821,17 @@ def register_callbacks(app) -> None:
                 cls,
                 id_type="tango-desc-params",
                 id_extra={"cls_name": class_name},
-                exclude=["input_twist", "input_motl", "nn_radius", "column_name",
-                         "symm", "kind", "remove_qp", "remove_duplicates", "build_unique_desc"],
+                exclude=[
+                    "input_twist",
+                    "input_motl",
+                    "nn_radius",
+                    "column_name",
+                    "symm",
+                    "kind",
+                    "remove_qp",
+                    "remove_duplicates",
+                    "build_unique_desc",
+                ],
             )
             avail_features = []
         else:
@@ -797,7 +893,7 @@ def register_callbacks(app) -> None:
         Output("tango-twist-status", "children"),
         Output("tango-twist-next-id", "data"),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("app-spinner-active", "data", allow_duplicate=True),
         Input("tango-run-twist-btn", "n_clicks"),
         State("tango-mi-value", "data"),
@@ -811,7 +907,7 @@ def register_callbacks(app) -> None:
         State(ids.POOL_REGISTRY, "data"),
         State("tango-twist-next-id", "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
-        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State(ids.DATA_POOL_NEXT_ID, "data"),
         State("tango-twist-handle", "data"),
         prevent_initial_call=True,
     )
@@ -832,14 +928,20 @@ def register_callbacks(app) -> None:
         prev_handle,
     ):
         _no8 = (no_update,) * 8
-        from cryocat.app.instrument import snapshot as _snap, reset as _reset, start_trace as _start_trace, env_tracing as _env_tracing
+        from cryocat.app.instrument import (
+            snapshot as _snap,
+            reset as _reset,
+            start_trace as _start_trace,
+            env_tracing as _env_tracing,
+        )
+
         if not n_clicks:
             raise PreventUpdate
         if not motl_ids:
             return *_no8[:3], "Select a motl first.", *_no8[4:]
         if not _env_tracing:
-            _snap("load+select")   # D1/D4: everything since load_motl reset() — also prints trace
-            _start_trace()         # D3: begin twist trace
+            _snap("load+select")  # D1/D4: everything since load_motl reset() — also prints trace
+            _start_trace()  # D3: begin twist trace
         motl_id = motl_ids[0]
         if nn_radius is None or nn_radius <= 0:
             return *_no8[:3], "NN radius is required.", *_no8[4:]
@@ -854,6 +956,7 @@ def register_callbacks(app) -> None:
         from cryocat.app import provenance as _prov
         from cryocat.app import session as _session
         from cryocat.app.logger import invoke_operation as _invoke_op
+
         var = _prov.bind(twist_id)
         try:
             twist_desc = _invoke_op(
@@ -888,14 +991,17 @@ def register_callbacks(app) -> None:
         }
         global_ref = _datapool.insert(_df, label=f"{source_label} twist", id_column="qp_id", motl_links=twist_links)
         from cryocat.app.datapool import DataPoolState as _DPState
+
         _ds = _DPState.from_stores(dp_registry, dp_next_id)
         if prev_handle and prev_handle.get("dp_id"):
             _ds = _datapool.remove_entry(_ds, prev_handle["dp_id"])
-        _ds, _dp_id = _datapool.insert_entry(_ds, _df, label=f"{source_label} twist", reader="tango", source_path="", motl_links=twist_links)
+        _ds, _dp_id = _datapool.insert_entry(
+            _ds, _df, label=f"{source_label} twist", reader="tango", source_path="", motl_links=twist_links
+        )
         new_dp_reg, new_dp_next = _ds.to_stores()
         handle["dp_id"] = _dp_id
         status = f"Twist computed: {n:,} pairs."
-        _snap("twist")   # D2: _compute_twist wall time (grid update follows async)
+        _snap("twist")  # D2: _compute_twist wall time (grid update follows async)
         return handle, global_ref, "tango-tab-twist", status, new_twist_id, new_dp_reg, new_dp_next, False
 
     # ── Load twist from file (via tablesource) ────────────────────────────────
@@ -907,11 +1013,11 @@ def register_callbacks(app) -> None:
         Output("tango-twist-status", "children", allow_duplicate=True),
         Output("tango-twist-next-id", "data", allow_duplicate=True),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("tango-twist-src-ts-loaded", "data"),
         State("tango-twist-next-id", "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
-        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State(ids.DATA_POOL_NEXT_ID, "data"),
         State("tango-twist-handle", "data"),
         prevent_initial_call=True,
     )
@@ -920,6 +1026,7 @@ def register_callbacks(app) -> None:
             raise PreventUpdate
 
         from io import StringIO
+
         df = pd.read_json(StringIO(loaded["df"]), orient="split")
         nn_radius = loaded.get("nn_radius")
 
@@ -929,6 +1036,7 @@ def register_callbacks(app) -> None:
         from cryocat.app import provenance as _prov
         from cryocat.app import session as _session
         from cryocat.app.logger import invoke_operation as _invoke_op
+
         var = _prov.bind(twist_id)
         try:
             twist_desc = _invoke_op(
@@ -960,10 +1068,13 @@ def register_callbacks(app) -> None:
         }
         global_ref = _datapool.insert(_df, label="Loaded twist", id_column="qp_id", motl_links=loaded_links)
         from cryocat.app.datapool import DataPoolState as _DPState
+
         _ds = _DPState.from_stores(dp_registry, dp_next_id)
         if prev_handle and prev_handle.get("dp_id"):
             _ds = _datapool.remove_entry(_ds, prev_handle["dp_id"])
-        _ds, _dp_id = _datapool.insert_entry(_ds, _df, label="Loaded twist", reader="tango", source_path="", motl_links=loaded_links)
+        _ds, _dp_id = _datapool.insert_entry(
+            _ds, _df, label="Loaded twist", reader="tango", source_path="", motl_links=loaded_links
+        )
         new_dp_reg, new_dp_next = _ds.to_stores()
         handle["dp_id"] = _dp_id
         status = f"Twist loaded: {n:,} pairs. Radius: {radius_note}."
@@ -976,7 +1087,7 @@ def register_callbacks(app) -> None:
         Output("tango-tabs", "active_tab", allow_duplicate=True),
         Output("tango-desc-status", "children"),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
         Output("app-spinner-active", "data", allow_duplicate=True),
         Input("tango-run-desc-btn", "n_clicks"),
         State("tango-twist-handle", "data"),
@@ -991,7 +1102,7 @@ def register_callbacks(app) -> None:
         State({"type": "tango-feat-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "value"),
         State({"type": "tango-feat-params", "owner": ALL, "cls_name": ALL, "param": ALL, "tag": ALL}, "id"),
         State(ids.DATA_POOL_REGISTRY, "data"),
-        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State(ids.DATA_POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def _compute_desc(
@@ -1001,9 +1112,12 @@ def register_callbacks(app) -> None:
         selected_desc,
         selected_support,
         selected_features,
-        supp_values, supp_ids,
-        desc_values, desc_ids,
-        feat_values, feat_ids,
+        supp_values,
+        supp_ids,
+        desc_values,
+        desc_ids,
+        feat_values,
+        feat_ids,
         dp_registry,
         dp_next_id,
     ):
@@ -1058,9 +1172,11 @@ def register_callbacks(app) -> None:
             feat_kwargs = []
             for feat_name in all_features:
                 kw = next(
-                    (generate_kwargs([d], [all_values[i]])
-                     for i, d in enumerate(all_ids)
-                     if d.get("cls_name") == feat_name),
+                    (
+                        generate_kwargs([d], [all_values[i]])
+                        for i, d in enumerate(all_ids)
+                        if d.get("cls_name") == feat_name
+                    ),
                     {},
                 )
                 feat_kwargs.append(kw)
@@ -1091,11 +1207,7 @@ def register_callbacks(app) -> None:
 
         twist_id = (twist_handle or {}).get("twist_id")
         twist_var = _prov.var_for(twist_id) if twist_id else None
-        data_src = (
-            f"{twist_var}.df"
-            if twist_var
-            else f"None  # <DataFrame shape {support.shape}>"
-        )
+        data_src = f"{twist_var}.df" if twist_var else f"None  # <DataFrame shape {support.shape}>"
 
         kwargs_src: dict = {_data_param: data_src}
         for k, v in desc_call_kwargs.items():
@@ -1103,10 +1215,7 @@ def register_callbacks(app) -> None:
                 kwargs_src[k] = repr(v)
 
         fn_name = f"{desc_cls_call.__module__}.{desc_cls_call.__qualname__}"
-        pane_call = (
-            f"{desc_cls_call.__name__}"
-            f"({', '.join(f'{k}={v}' for k, v in kwargs_src.items())})"
-        )
+        pane_call = f"{desc_cls_call.__name__}" f"({', '.join(f'{k}={v}' for k, v in kwargs_src.items())})"
         _dash_logger.write(f"▶ {pane_call}", source="cryocat")
 
         t0 = _time.monotonic()
@@ -1115,33 +1224,43 @@ def register_callbacks(app) -> None:
         except Exception as exc:
             duration = _time.monotonic() - t0
             _dash_logger.write(f"✗ {pane_call} — {type(exc).__name__}: {exc}", source="error")
-            _session.emit(_call_event(
-                fn_name, kwargs_src,
-                status="error",
-                assign_to=var,
-                duration_s=duration,
-                error={"type": type(exc).__name__, "msg": str(exc)},
-            ))
+            _session.emit(
+                _call_event(
+                    fn_name,
+                    kwargs_src,
+                    status="error",
+                    assign_to=var,
+                    duration_s=duration,
+                    error={"type": type(exc).__name__, "msg": str(exc)},
+                )
+            )
             return *_NU[:2], f"Error: {exc}", *_NU[3:]
 
         duration = _time.monotonic() - t0
         _dash_logger.write(f"✓ {pane_call} ({duration:.3f} s)", source="cryocat")
-        _session.emit(_call_event(
-            fn_name, kwargs_src,
-            status="ok",
-            assign_to=var,
-            duration_s=duration,
-            result={"type": type(desc_obj).__name__},
-        ))
+        _session.emit(
+            _call_event(
+                fn_name,
+                kwargs_src,
+                status="ok",
+                assign_to=var,
+                duration_s=duration,
+                result={"type": type(desc_obj).__name__},
+            )
+        )
         _prov.record(desc_id, _session.last_seq())
 
         desc_df = desc_obj.desc
         twist_motl_links = twist_handle.get("motl_links")  # BL4: copy links from twist
-        global_ref = _datapool.insert(desc_df, label=desc_id, id_column="qp_id",
-                                      motl_links=twist_motl_links)
+        global_ref = _datapool.insert(desc_df, label=desc_id, id_column="qp_id", motl_links=twist_motl_links)
         _ds, _dp_id = _datapool.insert_entry(
-            _ds, desc_df, label=desc_id, reader="tango-desc", source_path="",
-            motl_links=twist_motl_links, entry_kind="desc",
+            _ds,
+            desc_df,
+            label=desc_id,
+            reader="tango-desc",
+            source_path="",
+            motl_links=twist_motl_links,
+            entry_kind="desc",
         )
         global_ref = {**global_ref, "data_id": _dp_id}
         _desc_table_refs[_dp_id] = global_ref
@@ -1161,10 +1280,7 @@ def register_callbacks(app) -> None:
         prevent_initial_call=True,
     )
     def _sync_desc_pool_registry(dp_registry, current):
-        filtered = {
-            k: v for k, v in (dp_registry or {}).items()
-            if v.get("reader") == "tango-desc"
-        }
+        filtered = {k: v for k, v in (dp_registry or {}).items() if v.get("reader") == "tango-desc"}
         return no_update if filtered == current else filtered
 
     # ── Sync per-slot global-data-stores from slot map ────────────────────────
@@ -1209,6 +1325,7 @@ def register_callbacks(app) -> None:
     # ── Per-slot diagnostics ──────────────────────────────────────────────────
 
     for _i in range(_DESC_SLOTS):
+
         def _make_diag_cb(_slot=_i):
             @app.callback(
                 Output(f"tango-desc-{_slot}-diagnostics", "children"),
@@ -1219,6 +1336,7 @@ def register_callbacks(app) -> None:
             def _update_diagnostics(ref, settings):
                 df = _datapool.resolve_df(ref)
                 return _build_diagnostics(df, settings, _slot)
+
         _make_diag_cb()
 
     # ── Twist particle viewer ─────────────────────────────────────────────────
@@ -1232,13 +1350,15 @@ def register_callbacks(app) -> None:
         if not handle:
             raise PreventUpdate
         from cryocat.app.suite.pages._motl_link import get_motl_role_id
+
         motl_id = get_motl_role_id(handle.get("motl_links"), "source")
         if not motl_id:
             raise PreventUpdate
         return {"motl_id": motl_id, "rev": 0}
 
     register_viewer_callbacks(
-        app, "tango-twist-tv",
+        app,
+        "tango-twist-tv",
         show_dual_graph=True,
         detailed_table="tango-twist-tabv-global-data-store",
         tabs_id=None,
@@ -1308,6 +1428,7 @@ def register_callbacks(app) -> None:
         data_id = ctx.triggered_id["data_id"]
         _desc_table_refs.pop(data_id, None)
         from cryocat.app.datapool import DataPoolState as _DPState
+
         _ds = _DPState.from_stores(dp_registry, dp_next_id)
         _ds = _datapool.remove_entry(_ds, data_id)
         dp_reg_new, dp_next_new = _ds.to_stores()
@@ -1334,11 +1455,11 @@ def register_callbacks(app) -> None:
         Output("tango-twist-tv-data", "data", allow_duplicate=True),
         Output("tango-twist-status", "children", allow_duplicate=True),
         Output(ids.DATA_POOL_REGISTRY, "data", allow_duplicate=True),
-        Output(ids.DATA_POOL_NEXT_ID,  "data", allow_duplicate=True),
+        Output(ids.DATA_POOL_NEXT_ID, "data", allow_duplicate=True),
         Input("tango-reset-twist-btn", "n_clicks"),
         State("tango-twist-handle", "data"),
         State(ids.DATA_POOL_REGISTRY, "data"),
-        State(ids.DATA_POOL_NEXT_ID,  "data"),
+        State(ids.DATA_POOL_NEXT_ID, "data"),
         prevent_initial_call=True,
     )
     def _reset_twist(n_clicks, handle, dp_registry, dp_next_id):
@@ -1348,9 +1469,9 @@ def register_callbacks(app) -> None:
         # filters, tomoview data, status line.  Grid rows are cleared by the
         # _rows callback reacting to the data-store write above.
         from cryocat.app.datapool import DataPoolState as _DPState
+
         _ds = _DPState.from_stores(dp_registry, dp_next_id)
         if handle and handle.get("dp_id"):
             _ds = _datapool.remove_entry(_ds, handle["dp_id"])
         dp_reg_new, dp_next_new = _ds.to_stores()
         return None, None, "tango-tab-twist", {}, {}, None, "", dp_reg_new, dp_next_new
-

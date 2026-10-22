@@ -6065,12 +6065,12 @@ class TestSixSitesSplitAsymmetricSubunits:
         sites = ps.get_sites_as_motl()
 
         ref = blocks.split_in_asymmetric_subunits(6, shift)
-        # ref geom2 = 1-based CCW index, ref geom5 = original subtomo_id
+        # ref geom1 = 1-based CCW index, ref geom5 = original subtomo_id
         # sites geom3 = block subtomo_id (block_id_column default), sites geom1 = site index
 
         for _, ref_row in ref.df.iterrows():
             block_id = ref_row["geom5"]
-            site_idx = ref_row["geom2"]
+            site_idx = ref_row["geom1"]
             mask = (sites.df["geom3"] == block_id) & (sites.df["geom1"] == site_idx)
             matched = sites.df[mask]
             assert len(matched) == 1, f"block {block_id} site {site_idx}: {len(matched)} rows"
@@ -6090,7 +6090,7 @@ class TestSixSitesSplitAsymmetricSubunits:
         ref = blocks.split_in_asymmetric_subunits(5, shift)
         for _, ref_row in ref.df.iterrows():
             block_id = ref_row["geom5"]
-            site_idx = ref_row["geom2"]
+            site_idx = ref_row["geom1"]
             mask = (sites.df["geom3"] == block_id) & (sites.df["geom1"] == site_idx)
             matched = sites.df[mask]
             assert len(matched) == 1
@@ -7757,7 +7757,7 @@ class TestGetBondElevations:
 # =============================================================================
 
 class TestEnvelopeFromFacesDict:
-    """envelope_from_faces returns a dict keyed by (tomo_id, assembly_id)."""
+    """envelope_from_faces returns a dict keyed by (tomo_id, affiliation)."""
 
     @pytest.fixture(scope="class")
     def connected_ps(self):
@@ -7790,10 +7790,9 @@ class TestEnvelopeFromFacesDict:
         envelopes = connected_ps.envelope_from_faces()
         assert len(envelopes) == 1
 
-    def test_assembly_filter(self, connected_ps):
-        face_stats = connected_ps.get_face_stats()
-        asm_id = int(face_stats["assembly_id"].iloc[0])
-        envelopes_filt = connected_ps.envelope_from_faces(assembly_id=asm_id)
+    def test_affiliation_filter(self, connected_ps):
+        aff_val = float(connected_ps.blocks.df[connected_ps.affiliation_column].iloc[0])
+        envelopes_filt = connected_ps.envelope_from_faces(affiliation=aff_val)
         assert len(envelopes_filt) == 1
 
 
@@ -9055,3 +9054,473 @@ class TestRingSummaryOppositeDistance:
         # Remaining 3 complete pairs all have distance ≈ 2R
         np.testing.assert_allclose(opp, 2 * R, atol=1e-4,
                                    err_msg="3 complete pairs should still average to ≈ 2R")
+
+
+# =============================================================================
+# CnComplex state machinery
+# =============================================================================
+
+
+def _make_state_parent(n_particles: int = 3) -> cryomotl.Motl:
+    """Flat parent motl: one particle per row, all in object_id=1, tomo_id=1."""
+    rows = [
+        {
+            "score": 0.0, "geom1": 0.0, "geom2": 0.0,
+            "subtomo_id": float(i),
+            "tomo_id": 1.0, "object_id": 1.0,
+            "subtomo_mean": 0.0,
+            "x": float(i * 50), "y": 0.0, "z": 0.0,
+            "shift_x": 0.0, "shift_y": 0.0, "shift_z": 0.0,
+            "geom3": 0.0, "geom4": 0.0, "geom5": 0.0,
+            "phi": 0.0, "psi": 0.0, "theta": 0.0, "class": 1.0,
+        }
+        for i in range(1, n_particles + 1)
+    ]
+    m = cryomotl.Motl()
+    m.df = pd.DataFrame(rows)
+    return m
+
+
+_STATE_SHIFT = np.array([5.0, 0.0, 0.0])
+_STATE_N = 4   # C4 symmetry used for most state-machinery tests
+_STATE_N3 = 3  # C3 symmetry used for centre-comparison coincidence test
+
+
+class TestCnComplexStateMachinery:
+
+    # -- construction paths (phase 1 tests, updated for D1/D2) --
+
+    def test_both_paths_same_affiliation(self):
+        """path (b) and path (a) built from the same data yield equal affiliation sets."""
+        parent = _make_state_parent(n_particles=3)
+        b = assembly.CnComplex.from_parent(parent, _STATE_N, _STATE_SHIFT)
+        a = assembly.CnComplex.from_subunit_motl(b.motl, _STATE_N)
+        assert set(a.motl.df["object_id"]) == set(b.motl.df["object_id"])
+
+    def test_add_parent_on_path_a_instance(self):
+        """add_parent links the parent motl and builds a complete subunit→parent map."""
+        parent = _make_state_parent(n_particles=2)
+        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+        )
+        a = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N)
+        assert a._parent_motl is None
+
+        a.add_parent(parent, "geom5")
+
+        assert a._parent_motl is not None
+        assert len(a._parent_subunit_map) == len(subunit.df)
+
+    def test_insert_shift_keeps_labels_stable(self):
+        """Inserting at an occupied position shifts positions but never changes labels."""
+        parent = _make_state_parent(n_particles=2)
+        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+        )
+        a = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N)
+
+        a.add_subunit_state(subunit, label="alpha")   # position 0
+        a.add_subunit_state(subunit, label="beta")    # position 1
+
+        assert a._states[0].label == "alpha" and a._states[0].position == 0
+        assert a._states[1].label == "beta"  and a._states[1].position == 1
+
+        a.add_subunit_state(subunit, position=0, label="gamma")
+
+        by_label = {s.label: s for s in a._states}
+        assert by_label["gamma"].position == 0
+        assert by_label["alpha"].label == "alpha" and by_label["alpha"].position == 1
+        assert by_label["beta"].label == "beta"   and by_label["beta"].position == 2
+
+    def test_add_state_subset_reports_counts(self, capsys):
+        """Adding a subset motl prints matched, missing, and extra counts."""
+        parent = _make_state_parent(n_particles=3)
+        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+        )
+        a = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N)
+        subset = cryomotl.Motl()
+        subset.df = subunit.df.iloc[: len(subunit.df) // 2].copy().reset_index(drop=True)
+        a.add_subunit_state(subset)
+        out = capsys.readouterr().out
+        assert "matched" in out
+        assert "in instance not in new motl" in out
+
+    # -- D7: n required, pixel-size rules --
+
+    def test_n_required_from_subunit_motl(self):
+        """from_subunit_motl raises TypeError when n is omitted."""
+        parent = _make_state_parent()
+        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+        )
+        with pytest.raises(TypeError):
+            assembly.CnComplex.from_subunit_motl(subunit)
+
+    def test_n_required_from_parent(self):
+        """from_parent raises TypeError when n is omitted."""
+        parent = _make_state_parent()
+        with pytest.raises(TypeError):
+            assembly.CnComplex.from_parent(parent, _STATE_SHIFT)
+
+    def test_pixel_size_mismatch_raises(self):
+        """A pixel-size mismatch between instance (1.0) and state motl (2.0) raises."""
+        parent = _make_state_parent()
+        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+        )
+        a = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N, pixel_size=1.0)
+        with pytest.raises(ValueError, match="[Pp]ixel"):
+            a.add_subunit_state(subunit, pixel_size=2.0)
+
+    def test_pixel_size_absence_does_not_raise(self):
+        """Omitting pixel_size on add_subunit_state (default None) does not raise."""
+        parent = _make_state_parent()
+        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+        )
+        a = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N, pixel_size=3.92)
+        a.add_subunit_state(subunit)  # None default — must not raise regardless of instance pixel_size
+
+    # -- D7: derived state at position 0 --
+
+    def test_derive_initial_state_lands_at_position_0(self):
+        """derive_initial_state inserts at position 0 and leaves other labels intact."""
+        parent = _make_state_parent(n_particles=2)
+        cx = assembly.CnComplex.from_parent(parent, _STATE_N, _STATE_SHIFT)
+        cx.add_subunit_state(cx.motl, label="alpha")  # position 0
+        cx.add_subunit_state(cx.motl, label="beta")   # position 1
+
+        cx.derive_initial_state()
+
+        by_label = {s.label: s for s in cx._states}
+        assert by_label["derived"].position == 0
+        assert by_label["alpha"].label == "alpha" and by_label["alpha"].position == 1
+        assert by_label["beta"].label == "beta"   and by_label["beta"].position == 2
+
+    # -- D7: centre comparison at n=3 --
+
+    def test_centre_comparison_n3_reports_coincidence(self, capsys):
+        """get_centre_comparison prints the n=3 coincidence note."""
+        parent = _make_state_parent(n_particles=2)
+        cx = assembly.CnComplex.from_parent(parent, _STATE_N3, _STATE_SHIFT)
+        cx.add_subunit_state(cx.motl)
+        cx.get_centre_comparison()
+        out = capsys.readouterr().out
+        assert "coincide" in out or "n=3" in out
+
+    # -- D7: restoration writes only three columns --
+
+    def test_restore_affiliation_writes_only_three_columns(self):
+        """restore_affiliation writes order_column, orig_subtomo, orig_object — no others."""
+        parent = _make_state_parent(n_particles=2)
+        cx = assembly.CnComplex.from_parent(parent, _STATE_N, _STATE_SHIFT)
+
+        # Create a state motl that has the same subtomo_ids but zeroed affiliation columns
+        state_motl = cryomotl.Motl()
+        state_df = cx.motl.df.copy()
+        for col in [cx.order_column, cx._original_subtomo_id_column, cx._original_object_id_column]:
+            if col in state_df.columns:
+                state_df[col] = 0.0
+        state_motl.df = state_df
+        cx.add_subunit_state(state_motl, label="blank")
+
+        # Record which columns exist before restoration
+        cols_before = set(cx._states[0].motl.df.columns)
+        cx.restore_affiliation("blank")
+        cols_after = set(cx._states[0].motl.df.columns)
+
+        # No new columns added
+        assert cols_after == cols_before
+
+        # The three affiliation columns now carry the base motl's values
+        base_ref = cx.motl.df.set_index("subtomo_id")
+        restored_df = cx._states[0].motl.df
+        for col in [cx.order_column, cx._original_subtomo_id_column, cx._original_object_id_column]:
+            if col in base_ref.columns:
+                for _, row in restored_df.iterrows():
+                    sid = row["subtomo_id"]
+                    if sid in base_ref.index:
+                        assert row[col] == base_ref.loc[sid, col], (
+                            f"Column {col!r}: expected {base_ref.loc[sid, col]}, got {row[col]}"
+                        )
+
+
+# =============================================================================
+# S5: per_element, measure_elements, shape-stats affiliation column
+# =============================================================================
+
+
+def _make_two_state_cx():
+    """CnComplex with two states, same motl, C4 symmetry, one parent particle."""
+    parent = _make_state_parent(n_particles=2)
+    subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+        f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+    )
+    cx = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N)
+    # Register two states with distinct labels
+    cx.add_subunit_state(subunit, label=0)
+    cx.add_subunit_state(subunit, label=1)
+    return cx
+
+
+def _make_shifted_two_state_cx(dz: float = 10.0):
+    """CnComplex where state 0 is the reference ring and state 1 is shifted by dz along z.
+
+    Use this to get non-zero angle_out_of_plane values for sign-stability tests.
+    """
+    parent = _make_state_parent(n_particles=2)
+    subunit_a = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+        f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+    )
+    cx = assembly.CnComplex.from_subunit_motl(subunit_a, _STATE_N)
+    cx.add_subunit_state(subunit_a, label=0)
+    df_b = subunit_a.df.copy()
+    df_b["z"] = df_b["z"] + dz
+    cx.add_subunit_state(cryomotl.Motl(df_b), label=1)
+    return cx
+
+
+class TestPerElementTagging:
+    """per_element stamps each result with element_label."""
+
+    def test_element_label_column_present(self):
+        cx = _make_two_state_cx()
+        result = cx.per_element("occupancy")
+        assert isinstance(result, pd.DataFrame)
+        assert "element_label" in result.columns
+
+    def test_both_labels_appear(self):
+        cx = _make_two_state_cx()
+        result = cx.per_element("occupancy")
+        labels = set(result["element_label"].unique())
+        assert 0 in labels and 1 in labels
+
+    def test_empty_states_falls_back_to_direct_call(self):
+        parent = _make_state_parent(n_particles=2)
+        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+        )
+        cx = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N)
+        # No states added — per_element should delegate directly and return
+        # element_label=None (X3: column is always present).
+        result = cx.per_element("occupancy")
+        assert "element_label" in result.columns
+        assert result["element_label"].isna().all()
+
+
+class TestStateSelection:
+    """State-selection mechanism: _resolve_state, label= parameter, element_label column."""
+
+    def test_no_states_unlabelled_returns_element_label_none(self):
+        cx = _make_two_state_cx()
+        # Strip states to simulate a fresh CnComplex.
+        cx._states.clear()
+        result = cx.occupancy()
+        assert "element_label" in result.columns
+        assert result["element_label"].isna().all()
+
+    def test_highest_position_wins_when_label_is_none(self):
+        cx = _make_two_state_cx()
+        # States were added with labels 0 (position 0) and 1 (position 1).
+        # Unlabelled call must select position 1.
+        result = cx.occupancy()
+        assert "element_label" in result.columns
+        assert (result["element_label"] == 1).all()
+
+    def test_explicit_label_selects_that_state(self):
+        cx = _make_two_state_cx()
+        result_0 = cx.occupancy(label=0)
+        result_1 = cx.occupancy(label=1)
+        assert (result_0["element_label"] == 0).all()
+        assert (result_1["element_label"] == 1).all()
+
+    def test_unknown_label_raises_key_error_listing_existing(self):
+        cx = _make_two_state_cx()
+        with pytest.raises(KeyError, match="0") as exc:
+            cx.occupancy(label=999)
+        # The error message must list the existing labels.
+        msg = str(exc.value)
+        assert "0" in msg and "1" in msg
+
+    def test_element_label_column_carries_resolved_label(self):
+        parent = _make_state_parent(n_particles=2)
+        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
+            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
+        )
+        cx = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N)
+        cx.add_subunit_state(subunit, label="alpha")
+        cx.add_subunit_state(subunit, label="beta")
+        result = cx.occupancy(label="alpha")
+        assert "element_label" in result.columns
+        assert (result["element_label"] == "alpha").all()
+
+
+class TestMeasureElements:
+    """measure_elements returns one row per matched particle with required columns."""
+
+    _REQUIRED_COLS = {
+        "subtomo_id", "len_a", "len_b",
+        "angle_ab", "angle_in_plane", "angle_out_of_plane",
+        "axis_component", "plane_component", "reference", "frame_element",
+    }
+
+    def test_returns_dataframe(self):
+        cx = _make_two_state_cx()
+        result = cx.measure_elements(0, 1, reference="fit")
+        assert isinstance(result, pd.DataFrame)
+
+    def test_required_columns_present(self):
+        cx = _make_two_state_cx()
+        result = cx.measure_elements(0, 1, reference="fit")
+        for col in self._REQUIRED_COLS:
+            assert col in result.columns, f"Missing column: {col!r}"
+
+    def test_matched_rows_positive(self, capsys):
+        cx = _make_two_state_cx()
+        result = cx.measure_elements(0, 1, reference="fit")
+        out = capsys.readouterr().out
+        assert "matched" in out
+        assert len(result) > 0
+
+    def test_unknown_label_raises(self):
+        cx = _make_two_state_cx()
+        with pytest.raises(KeyError):
+            cx.measure_elements(0, 99, reference="fit")
+
+    def test_reference_fit_works_without_parent(self):
+        cx = _make_two_state_cx()
+        result = cx.measure_elements(0, 1, reference="fit")
+        assert len(result) > 0
+
+    def test_reference_parent_raises_without_parent(self):
+        cx = _make_two_state_cx()
+        with pytest.raises(RuntimeError):
+            cx.measure_elements(0, 1, reference="parent")
+
+    def test_reference_column_carries_value(self):
+        cx = _make_two_state_cx()
+        result = cx.measure_elements(0, 1, reference="fit")
+        assert "reference" in result.columns
+        assert (result["reference"] == "fit").all()
+
+    def test_row_permutation_leaves_angle_out_of_plane_sign_unchanged(self):
+        """Permuting label_a rows must not flip the sign of angle_out_of_plane."""
+        rng = np.random.default_rng(seed=0)
+        cx = _make_shifted_two_state_cx(dz=10.0)
+        result_orig = cx.measure_elements(0, 1, reference="fit")
+        assert not result_orig.empty, "fixture produced no matched rows"
+        # Permute state 0 rows
+        state_a = next(s for s in cx._states if s.label == 0)
+        orig_df = state_a.motl.df.copy()
+        perm = rng.permutation(len(orig_df))
+        state_a.motl.df = orig_df.iloc[perm].reset_index(drop=True)
+        result_perm = cx.measure_elements(0, 1, reference="fit")
+        state_a.motl.df = orig_df
+        merged = result_orig[["subtomo_id", "angle_out_of_plane"]].merge(
+            result_perm[["subtomo_id", "angle_out_of_plane"]],
+            on="subtomo_id", suffixes=("_orig", "_perm"),
+        )
+        orig_signs = np.sign(merged["angle_out_of_plane_orig"].to_numpy())
+        perm_signs = np.sign(merged["angle_out_of_plane_perm"].to_numpy())
+        assert np.array_equal(orig_signs, perm_signs), (
+            "Row permutation changed angle_out_of_plane signs — axis sign is not stable."
+        )
+
+    def test_fit_axis_dot_mean_z_nonneg(self):
+        """The stabilised fit axis satisfies dot(axis, mean_z) >= 0 for every group."""
+        from scipy.spatial.transform import Rotation
+        from cryocat.utils import geom
+        cx = _make_two_state_cx()
+        state_a = next(s for s in cx._states if s.label == 0)
+        df_a = state_a.motl.df
+        aff_col = cx.affiliation_column
+        for _, gdf in df_a.groupby(aff_col):
+            coords = np.column_stack([
+                gdf["x"].to_numpy(float) + gdf["shift_x"].to_numpy(float),
+                gdf["y"].to_numpy(float) + gdf["shift_y"].to_numpy(float),
+                gdf["z"].to_numpy(float) + gdf["shift_z"].to_numpy(float),
+            ])
+            eulers = gdf[["phi", "theta", "psi"]].to_numpy(float)
+            z_axes = Rotation.from_euler("zxz", eulers, degrees=True).apply(
+                np.array([0.0, 0.0, 1.0])
+            )
+            mean_z = z_axes.mean(axis=0)
+            _, _, normal = geom.project_3d_points_on_2d_plane_normal_aligned(coords)
+            normal = normal / np.linalg.norm(normal)
+            if np.dot(normal, mean_z) < 0:
+                normal = -normal
+            assert np.dot(normal, mean_z) >= 0
+
+    def test_len_a_and_len_b_measured_from_same_centre(self):
+        """When state 1 is shifted in z, len_b > len_a because both use state-0 centre."""
+        cx = _make_shifted_two_state_cx(dz=10.0)
+        result = cx.measure_elements(0, 1, reference="fit")
+        assert not result.empty
+        assert (result["len_b"] > result["len_a"]).all(), (
+            "Expected len_b > len_a (state 1 shifted away from state 0 centre), "
+            "got equal or smaller values."
+        )
+
+    def test_len_a_constant_equals_shift_for_derived_state(self):
+        """reference='parent': len_a == |shift| for every particle when state is from from_parent.
+
+        Parent particles carry non-zero shifts so that raw x,y,z ≠ get_coordinates().
+        Under the pre-fix code (raw x,y,z), the distance would be |shift + parent_shift|
+        rather than |shift|, causing this assertion to fail.
+        """
+        parent = _make_state_parent(n_particles=2)
+        # Non-zero shift_x means raw x,y,z ≠ actual parent position (x + shift_x).
+        # This makes the test a true guard against using raw coordinates for the parent centre.
+        parent.df["shift_x"] = 3.0
+        cx = assembly.CnComplex.from_parent(parent, _STATE_N, _STATE_SHIFT)
+        # Use the derived subunit motl as both states so every particle has a parent link.
+        cx.add_subunit_state(cx.motl, label=0)
+        cx.add_subunit_state(cx.motl, label=1)
+        result = cx.measure_elements(0, 1, reference="parent")
+        expected = float(np.linalg.norm(_STATE_SHIFT))  # 5.0
+        assert not result.empty
+        assert np.allclose(result["len_a"].to_numpy(), expected, atol=1e-6), (
+            f"Expected len_a ≈ {expected} for all particles, got {result['len_a'].tolist()}"
+        )
+
+
+class TestGetShapeStatsAffiliationColumn:
+    """get_shape_stats writes the column named by affiliation_column, not 'assembly_id'."""
+
+    @pytest.fixture(scope="class")
+    def ps_custom_aff(self):
+        """PleomorphicSurface with affiliation_column='geom4' (standard Motl column)."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        # Populate geom4 with the same affiliation values as object_id
+        motl.df["geom4"] = motl.df["object_id"]
+        bd = assembly.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        bl = assembly.BlockLayer(motl, bd, affiliation_column="geom4")
+        ps = assembly.PleomorphicSurface(block_layer=bl)
+        ps.connect(max_distance=4.0)
+        ps.envelope_from_faces()
+        return ps
+
+    def test_affiliation_column_in_output(self, ps_custom_aff):
+        ss = ps_custom_aff.get_shape_stats()
+        assert "geom4" in ss.columns
+
+    def test_assembly_id_not_in_output(self, ps_custom_aff):
+        ss = ps_custom_aff.get_shape_stats()
+        assert "assembly_id" not in ss.columns
+
+    def test_default_affiliation_column_is_object_id(self):
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        bd = assembly.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        ps = assembly.PleomorphicSurface(block_layer=assembly.BlockLayer(motl, bd))
+        ps.connect(max_distance=4.0)
+        ps.envelope_from_faces()
+        ss = ps.get_shape_stats()
+        assert "object_id" in ss.columns
+        assert "assembly_id" not in ss.columns

@@ -173,6 +173,19 @@ def assign_column(
     raise ValueError(f"Unknown match mode {match_mode!r} (expected 'positional' or 'key').")
 
 
+def sort_rows(df: pd.DataFrame, column: str, ascending: bool = True) -> pd.DataFrame:
+    """Return *df* sorted by *column* with index reset.
+
+    Raises
+    ------
+    ValueError
+        When *column* is absent from *df*.
+    """
+    if column not in df.columns:
+        raise ValueError(f"Column {column!r} is not in the DataFrame.")
+    return df.sort_values(by=column, ascending=ascending).reset_index(drop=True)
+
+
 def concat_tables(
     frames: list[pd.DataFrame],
     labels: list[str],
@@ -275,7 +288,7 @@ def suggested_label(source_label: str, operation: str) -> str:
     """Derive a default result label from the source label and operation name."""
     suffix = {
         "derive": "derived", "rename": "renamed", "drop": "dropped",
-        "reorder": "reordered", "cast": "cast",
+        "reorder": "reordered", "cast": "cast", "sort": "sorted",
         "merge": "merged", "concat": "concat",
     }.get(operation, operation)
     return f"{source_label}_{suffix}"

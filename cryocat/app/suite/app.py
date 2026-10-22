@@ -174,15 +174,15 @@ app.layout = dbc.Container(
                     ],
                     className="spinner-tango",
                 ),
+                html.Div(
+                    "Loading cryoCAT…",
+                    id="suite-startup-indicator",
+                    style={"color": "#888", "fontStyle": "italic"},
+                ),
             ],
         ),
         html.Div(
             [
-                html.Div(
-                    "Loading cryoCAT…",
-                    id="suite-startup-indicator",
-                    style={"padding": "2rem", "color": "#888", "fontStyle": "italic"},
-                ),
                 *_page_wrappers(),
             ],
             id=ids.SUITE_PAGE_CONTENT,
