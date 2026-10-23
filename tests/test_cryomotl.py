@@ -2349,7 +2349,7 @@ class TestMotl:
 
         assert len(result.df) == 2
         assert np.array_equal(result.df["subtomo_id"].values, [1, 2])
-        assert np.array_equal(result.df["geom2"].values, [1, 2])
+        assert np.array_equal(result.df["geom1"].values, [1, 2])
         np.testing.assert_allclose(result.df["x"].values, expected_x, atol=1e-5)
         np.testing.assert_allclose(result.df["y"].values, expected_y, atol=1e-5)
         np.testing.assert_allclose(result.df["z"].values, expected_z, atol=1e-5)
@@ -2375,7 +2375,7 @@ class TestMotl:
 
         assert len(result.df) == 4
         assert np.array_equal(result.df["subtomo_id"].values, [1, 2, 3, 4])
-        assert np.array_equal(result.df["geom2"].values, [1, 2, 3, 4])
+        assert np.array_equal(result.df["geom1"].values, [1, 2, 3, 4])
         np.testing.assert_allclose(result.df["x"].values, expected_x, atol=1e-5)
         np.testing.assert_allclose(result.df["y"].values, expected_y, atol=1e-5)
         np.testing.assert_allclose(result.df["z"].values, expected_z, atol=1e-5)
@@ -2403,7 +2403,7 @@ class TestMotl:
 
         assert len(result.df) == 3
         assert np.array_equal(result.df["subtomo_id"].values, [1, 2, 3])
-        assert np.array_equal(result.df["geom2"].values, [1, 2, 3])
+        assert np.array_equal(result.df["geom1"].values, [1, 2, 3])
         np.testing.assert_allclose(result.df["x"].values, expected_x, atol=1e-5)
         np.testing.assert_allclose(result.df["y"].values, expected_y, atol=1e-5)
         np.testing.assert_allclose(result.df["z"].values, expected_z, atol=1e-5)
@@ -2431,7 +2431,7 @@ class TestMotl:
 
         assert len(result.df) == 2
         assert np.array_equal(result.df["subtomo_id"].values, [1, 2])
-        assert np.array_equal(result.df["geom2"].values, [1, 2])
+        assert np.array_equal(result.df["geom1"].values, [1, 2])
         np.testing.assert_allclose(result.df["x"].values, expected_x, atol=1e-5)
         np.testing.assert_allclose(result.df["y"].values, expected_y, atol=1e-5)
         np.testing.assert_allclose(result.df["z"].values, expected_z, atol=1e-5)
@@ -2711,6 +2711,29 @@ class TestEmMotl:
         # Check if the correct data was written.
         loaded_motl = EmMotl(output_path)
         pd.testing.assert_frame_equal(loaded_motl.df, mmotl.df, check_dtype=False)
+
+    def test_split_in_asymmetric_subunits_preserves_emmotl(self, sample_em_data):
+        """split_in_asymmetric_subunits on EmMotl returns an EmMotl, not a plain Motl."""
+        em = EmMotl(sample_em_data)
+        result = em.split_in_asymmetric_subunits("C2", np.array([5.0, 0.0, 0.0]))
+        assert isinstance(result, EmMotl), (
+            f"Expected EmMotl but got {type(result).__name__}"
+        )
+
+    def test_split_by_feature_preserves_emmotl(self, sample_em_data):
+        """split_by_feature on EmMotl returns EmMotl items, not plain Motl."""
+        row = sample_em_data.iloc[0].to_dict()
+        row2 = dict(row)
+        row2["tomo_id"] = 2.0
+        row2["subtomo_id"] = 2
+        two_rows = pd.DataFrame([row, row2])
+        em = EmMotl(two_rows)
+        parts = em.split_by_feature("tomo_id")
+        assert len(parts) == 2
+        for part in parts:
+            assert isinstance(part, EmMotl), (
+                f"Expected EmMotl but got {type(part).__name__}"
+            )
 
 
 class TestRelionMotl:

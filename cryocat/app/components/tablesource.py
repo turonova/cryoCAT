@@ -20,6 +20,7 @@ Children in *extra_file_children* whose id is a dict with
 ``{"type": f"{prefix}-ts-extra", "param": "<name>"}`` will have their value
 collected by the Load callback and forwarded as keyword arguments to load_fn.
 """
+
 from __future__ import annotations
 
 from typing import Callable
@@ -96,15 +97,30 @@ def get_table_source(
         inline=True,
         inputStyle=styles.RADIO_INLINE_INPUT,
         labelStyle=styles.RADIO_INLINE_LABEL,
-        style={"display": "flex", "gap": "1.5rem", "fontSize": styles.FONT_SM},
+        style={"display": "flex", "gap": "1.5rem"},
     )
 
-    from cryocat.app.formgen import form_row
-
-    radio_row = form_row(
-        label, radio,
-        "Choose how to supply the data table.",
-        label_id=f"{prefix}-ts-source-lbl",
+    radio_row = html.Div(
+        [
+            html.Label(
+                label,
+                id=f"{prefix}-ts-source-lbl",
+                style={
+                    "width": "72px",
+                    "minWidth": "72px",
+                    "flexShrink": "0",
+                    "color": "var(--color11)",
+                },
+            ),
+            radio,
+        ],
+        style={
+            "display": "flex",
+            "flexDirection": "row",
+            "alignItems": "center",
+            "width": "100%",
+            "marginBottom": "0.5rem",
+        },
     )
 
     file_panel = html.Div(

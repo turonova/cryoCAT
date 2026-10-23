@@ -1487,8 +1487,6 @@ def register_motl_editor_sidebar_callbacks(app):
         Output("me-slot-map", "data", allow_duplicate=True),
         Output("me-tabs", "active_tab", allow_duplicate=True),
         Output(ids.POOL_GROUPS, "data", allow_duplicate=True),
-        Output("me-results-store", "data", allow_duplicate=True),
-        Output("me-results-label-store", "data", allow_duplicate=True),
         Input("me-op-apply-btn", "n_clicks"),
         State("me-op-func-select", "value"),
         State("me-tabs", "active_tab"),
@@ -1526,8 +1524,8 @@ def register_motl_editor_sidebar_callbacks(app):
         pool_noup = (no_update,) * 5
         nochange = [no_update] * N_SLOTS
 
-        def _ret(data_out, undo_out, status, pool=pool_noup, groups=no_update, results=no_update, results_label=no_update):
-            return (*data_out, *undo_out, status, *pool, groups, results, results_label)
+        def _ret(data_out, undo_out, status, pool=pool_noup, groups=no_update):
+            return (*data_out, *undo_out, status, *pool, groups)
 
         if not n_clicks or not method_name or not active_tab:
             raise dash.exceptions.PreventUpdate
@@ -1662,8 +1660,6 @@ def register_motl_editor_sidebar_callbacks(app):
                 nochange,
                 status,
                 pool=(*pool_state.to_stores(), slot_map, active),
-                results={"motl_id": mid},
-                results_label=f"{gui.get('label', method_name)} of {src_label}",
             )
 
         # In-place operation — group target: apply to every slot that holds a group member.

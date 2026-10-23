@@ -489,21 +489,34 @@ def get_table_plot_component(prefix: str):
                             ),
                             html.Div(id=f"{prefix}-register-status", style=styles.HINT_SM),
                             dbc.Row(
-                                dbc.Col(
-                                    dbc.RadioItems(
-                                        id=f"{prefix}-selection-mode",
-                                        options=[
-                                            {"label": "Replace", "value": "replace"},
-                                            {"label": "Add", "value": "add"},
-                                            {"label": "Subtract", "value": "subtract"},
-                                        ],
-                                        value="replace",
-                                        inline=True,
-                                        labelStyle={"color": "var(--color9)", "marginRight": "1rem"},
+                                [
+                                    dbc.Col(
+                                        dbc.RadioItems(
+                                            id=f"{prefix}-selection-mode",
+                                            options=[
+                                                {"label": "Replace", "value": "replace"},
+                                                {"label": "Add", "value": "add"},
+                                                {"label": "Subtract", "value": "subtract"},
+                                            ],
+                                            value="replace",
+                                            inline=True,
+                                            labelStyle={"color": "var(--color9)", "marginRight": "1rem"},
+                                        ),
+                                        width="auto",
+                                        className="d-flex align-items-center",
                                     ),
-                                    width=12,
-                                ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            "Clear selection",
+                                            id=f"{prefix}-clear-selection-btn",
+                                            color="secondary",
+                                            size="sm",
+                                        ),
+                                        width="auto",
+                                    ),
+                                ],
                                 style={"marginTop": "0.5rem"},
+                                align="center",
                             ),
                             dbc.Row(
                                 [
@@ -1171,6 +1184,15 @@ def register_table_plot_callbacks(app, prefix: str, connected_store_id, special_
         return dcc.send_bytes(img_bytes, f"graph.{fmt}")
 
     if table_grid_id is not None:
+
+        @app.callback(
+            Output(table_grid_id, "selectedRows", allow_duplicate=True),
+            Output(f"{prefix}-selection-count", "children", allow_duplicate=True),
+            Input(f"{prefix}-clear-selection-btn", "n_clicks"),
+            prevent_initial_call=True,
+        )
+        def _clear_plot_selection(_):
+            return [], ""
 
         @app.callback(
             Output(table_grid_id, "selectedRows"),

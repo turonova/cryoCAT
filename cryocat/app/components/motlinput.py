@@ -19,7 +19,7 @@ Source modes
 from dash import html, dcc, Input, Output, State
 import dash_bootstrap_components as dbc
 
-from cryocat.app import ids
+from cryocat.app import ids, styles
 from cryocat.app.formgen import make_dropdown
 
 
@@ -40,20 +40,35 @@ def get_motl_input(prefix: str, *, label: str = "Motl source") -> html.Div:
     return html.Div(
         [
             dcc.Store(id=f"{prefix}-value", data=[]),
-
-            html.Label(label, style={"marginBottom": "2px", "color": "var(--color11)"}),
-
-            dbc.RadioItems(
-                id=f"{prefix}-source-mode",
-                options=[
-                    {"label": "Individual motls", "value": "pool"},
-                    {"label": "Grouped motls", "value": "group"},
+            html.Div(
+                [
+                    html.Label(
+                        label,
+                        style={
+                            "width": "72px",
+                            "minWidth": "72px",
+                            "flexShrink": "0",
+                            "color": "var(--color11)",
+                        },
+                    ),
+                    dbc.RadioItems(
+                        id=f"{prefix}-source-mode",
+                        options=[
+                            {"label": "Individual motls", "value": "pool"},
+                            {"label": "Grouped motls", "value": "group"},
+                        ],
+                        value="pool",
+                        inline=True,
+                        style={"display": "flex", "gap": "1.5rem", "marginBottom": "0.5rem"},
+                    ),
                 ],
-                value="pool",
-                inline=True,
-                style={"display": "flex", "gap": "1.5rem", "marginBottom": "0.5rem"},
+                style={
+                    "display": "flex",
+                    "flexDirection": "row",
+                    "alignItems": "center",
+                    "width": "100%",
+                },
             ),
-
             # ── From pool ────────────────────────────────────────────────────
             html.Div(
                 id=f"{prefix}-pool-section",
@@ -75,7 +90,6 @@ def get_motl_input(prefix: str, *, label: str = "Motl source") -> html.Div:
                     ),
                 ],
             ),
-
             # ── From group ───────────────────────────────────────────────────
             html.Div(
                 id=f"{prefix}-group-section",
@@ -142,10 +156,7 @@ def get_motl_input(prefix: str, *, label: str = "Motl source") -> html.Div:
 def _group_member_opts(members: list, registry: dict) -> list[dict]:
     """Build checklist options for group members."""
     reg = registry or {}
-    return [
-        {"label": f"→ {reg.get(mid, {}).get('label', mid)}", "value": mid}
-        for mid in members
-    ]
+    return [{"label": f"→ {reg.get(mid, {}).get('label', mid)}", "value": mid} for mid in members]
 
 
 def _pool_picker_options(registry: dict, current: list | None) -> tuple[list, list, str]:
@@ -223,6 +234,7 @@ def register_motl_input_callbacks(app, prefix: str) -> None:
         if not gid:
             return {"display": "none"}, "", [], []
         from cryocat.app.pool import GroupState
+
         groups = GroupState.from_store(groups_data).groups
         g = groups.get(gid, {})
         members = g.get("members", [])

@@ -48,6 +48,7 @@ _OPS_SINGLE: list[dict] = [
     {"label": "Drop columns",    "value": "drop"},
     {"label": "Reorder columns", "value": "reorder"},
     {"label": "Cast column",     "value": "cast"},
+    {"label": "Sort rows",       "value": "sort"},
 ]
 
 _OPS_MULTI: list[dict] = _OPS_SINGLE + [
@@ -58,7 +59,7 @@ _OPS_MULTI: list[dict] = _OPS_SINGLE + [
 ]
 
 _ALL_SECTIONS: list[str] = [
-    "derive", "rename", "drop", "reorder", "cast",
+    "derive", "rename", "drop", "reorder", "cast", "sort",
     "merge", "concat", "positional_merge", "assign_column",
 ]
 
@@ -211,6 +212,33 @@ def get_table_editor(
                 "Target dtype. Use str for text, bool to convert 0/1 integer flags.",
                 label_id=f"{prefix}-cast-dtype-lbl",
                 label_text="Dtype",
+            ),
+        ],
+    )
+
+    # ── Sort ─────────────────────────────────────────────────────────────
+    sort_section = html.Div(
+        id=f"{prefix}-sort-section",
+        style={"display": "none"},
+        children=[
+            formgen.form_row(
+                "sort_column",
+                formgen.make_dropdown(f"{prefix}-sort-col-dd", col_opts, None),
+                "Column to sort by.",
+                label_id=f"{prefix}-sort-col-lbl",
+                label_text="Column",
+            ),
+            formgen.form_row(
+                "sort_direction",
+                formgen.make_dropdown(
+                    f"{prefix}-sort-dir-dd",
+                    [{"label": "Ascending", "value": "ascending"},
+                     {"label": "Descending", "value": "descending"}],
+                    "ascending",
+                ),
+                "Sort direction.",
+                label_id=f"{prefix}-sort-dir-lbl",
+                label_text="Direction",
             ),
         ],
     )
@@ -405,6 +433,7 @@ def get_table_editor(
         drop_section,
         reorder_section,
         cast_section,
+        sort_section,
         merge_section,
         concat_section,
         positional_merge_section,
@@ -482,6 +511,8 @@ def _execute_operation(
     assign_right_val: "str | None" = None,
     assign_src_col: "str | None" = None,
     assign_dst_col: "str | None" = None,
+    sort_col: "str | None" = None,
+    sort_dir: "str | None" = None,
 ) -> "tuple[pd.DataFrame | None, str | None, str]":
     """Apply a table operation; return (result_df, extra_msg, error).
 
@@ -580,6 +611,13 @@ def _execute_operation(
                 f"{len(right_df.columns)} cols → {len(result_df.columns)} cols total."
             )
             return result_df, extra_msg, ""
+        elif op == "sort":
+            if not sort_col:
+                return None, None, "Select a column to sort by."
+            result_df = _run(
+                ops.sort_rows,
+                {"df": src_df, "column": sort_col, "ascending": sort_dir != "descending"},
+            )
         elif op == "assign_column":
             return None, None, "assign_column is handled by the apply callback directly."
         else:
@@ -665,6 +703,7 @@ def _apply_wc_op(
     concat_extra_vals, concat_label_col,
     pos_merge_right_val,
     assign_right_val, assign_src_col, assign_dst_col,
+    sort_col, sort_dir,
     src_ref, pool_reg, dp_reg,
 ):
     """Working-copy apply logic — extracted for thin-callback compliance."""
@@ -697,6 +736,7 @@ def _apply_wc_op(
         pos_merge_right_val=pos_merge_right_val,
         assign_right_val=assign_right_val, assign_src_col=assign_src_col,
         assign_dst_col=assign_dst_col,
+        sort_col=sort_col, sort_dir=sort_dir,
     )
     if err:
         return _no, err
@@ -760,14 +800,15 @@ def register_table_editor_callbacks(
 
     # ── 2. Update column dropdowns when source ref changes ────────────────
     @app.callback(
-        Output(f"{prefix}-drop-dd",         "options", allow_duplicate=True),
-        Output(f"{prefix}-reorder-dd",      "options", allow_duplicate=True),
-        Output(f"{prefix}-cast-col-dd",     "options", allow_duplicate=True),
-        Output(f"{prefix}-merge-keys-dd",   "options", allow_duplicate=True),
+        Output(f"{prefix}-drop-dd",          "options", allow_duplicate=True),
+        Output(f"{prefix}-reorder-dd",       "options", allow_duplicate=True),
+        Output(f"{prefix}-cast-col-dd",      "options", allow_duplicate=True),
+        Output(f"{prefix}-merge-keys-dd",    "options", allow_duplicate=True),
         Output(f"{prefix}-assign-src-col-dd","options", allow_duplicate=True),
-        Input(f"{prefix}-src-ref",           "data"),
-        State(ids.POOL_REGISTRY,             "data"),
-        State(ids.DATA_POOL_REGISTRY,        "data"),
+        Output(f"{prefix}-sort-col-dd",      "options", allow_duplicate=True),
+        Input(f"{prefix}-src-ref",            "data"),
+        State(ids.POOL_REGISTRY,              "data"),
+        State(ids.DATA_POOL_REGISTRY,         "data"),
         prevent_initial_call=True,
     )
     def _on_source_change(ref, pool_reg, dp_reg):
@@ -779,7 +820,7 @@ def register_table_editor_callbacks(
             except Exception:
                 pass
         opts = [{"label": c, "value": c} for c in cols]
-        return opts, opts, opts, opts, opts
+        return opts, opts, opts, opts, opts, opts
 
     # ── 3. Populate merge / concat secondary pickers (multi_source) ───────
     if multi_source:
@@ -936,6 +977,8 @@ def register_table_editor_callbacks(
             State(f"{prefix}-assign-right-dd",    "value"),
             State(f"{prefix}-assign-src-col-dd",  "value"),
             State(f"{prefix}-assign-dst-col-dd",  "value"),
+            State(f"{prefix}-sort-col-dd",         "value"),
+            State(f"{prefix}-sort-dir-dd",         "value"),
             State(f"{prefix}-src-ref",            "data"),
             State(ids.POOL_REGISTRY,              "data"),
             State(ids.DATA_POOL_REGISTRY,         "data"),
@@ -950,6 +993,7 @@ def register_table_editor_callbacks(
             concat_extra_vals, concat_label_col,
             pos_merge_right_val,
             assign_right_val, assign_src_col, assign_dst_col,
+            sort_col, sort_dir,
             src_ref, pool_reg, dp_reg,
         ):
             _no = no_update
@@ -964,6 +1008,7 @@ def register_table_editor_callbacks(
                 concat_extra_vals, concat_label_col,
                 pos_merge_right_val,
                 assign_right_val, assign_src_col, assign_dst_col,
+                sort_col, sort_dir,
                 src_ref, pool_reg, dp_reg,
             )
 
@@ -1060,6 +1105,8 @@ def register_table_editor_callbacks(
         State(f"{prefix}-assign-right-dd",   "value"),
         State(f"{prefix}-assign-src-col-dd", "value"),
         State(f"{prefix}-assign-dst-col-dd", "value"),
+        State(f"{prefix}-sort-col-dd",       "value"),
+        State(f"{prefix}-sort-dir-dd",       "value"),
         # ── pool states ──
         State(f"{prefix}-create-new",     "value"),
         State(f"{prefix}-add-as-motl",    "value"),
@@ -1083,6 +1130,7 @@ def register_table_editor_callbacks(
         concat_extra_vals, concat_label_col,
         pos_merge_right_val,
         assign_right_val, assign_src_col, assign_dst_col,
+        sort_col, sort_dir,
         create_new_val,
         add_as_motl_val,
         src_ref,
@@ -1130,6 +1178,7 @@ def register_table_editor_callbacks(
             assign_right_val=assign_right_val, assign_src_col=assign_src_col,
             assign_dst_col=assign_dst_col,
             concat_label_col=concat_label_col,
+            sort_col=sort_col, sort_dir=sort_dir,
         )
         if err:
             return *_fail, err

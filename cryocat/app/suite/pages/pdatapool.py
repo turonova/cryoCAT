@@ -278,7 +278,7 @@ def _tab_to_idx(active_tab: str | None) -> int | None:
 def _slot_tab(i: int) -> dbc.Tab:
     return dbc.Tab(
         html.Div(
-            get_table_component(f"dp-view-{i}-tabv", show_create_from_selected=True),
+            get_table_component(f"dp-view-{i}-tabv"),
             style={"padding": "0.5rem"},
         ),
         id=f"dp-tab-{i}",
