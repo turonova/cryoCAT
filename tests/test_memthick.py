@@ -249,6 +249,61 @@ def test_measure_thickness_cpu_direction_2to1(flat_bilayer):
     np.testing.assert_allclose(results[valid], 2.5, atol=0.01)
 
 
+# The CUDA simulator must be enabled before numba is first imported, so this
+# test only runs when the whole pytest process is started with
+# NUMBA_ENABLE_CUDASIM=1.
+@pytest.mark.skipif(
+    os.environ.get("NUMBA_ENABLE_CUDASIM") != "1",
+    reason="set NUMBA_ENABLE_CUDASIM=1 to run the GPU matcher on the CUDA simulator",
+)
+@pytest.mark.parametrize("direction", ["1to2", "2to1"])
+def test_measure_thickness_gpu_matches_cpu(flat_bilayer, direction):
+    from cryocat.analysis.memthick import measure_thickness_gpu
+
+    points, normals, s1, s2, n = flat_bilayer
+    kwargs = dict(pixel_size=0.5, max_distance_nm=4.0, max_angle_degrees=5.0, direction=direction)
+
+    gpu = measure_thickness_gpu(points, normals, s1, s2, **kwargs)
+    cpu = measure_thickness_cpu(points, normals, s1, s2, **kwargs)
+
+    assert gpu[1].sum() == n
+    np.testing.assert_array_equal(gpu[1], cpu[1])  # valid mask
+    np.testing.assert_allclose(gpu[0], cpu[0], atol=1e-5)  # distances (nm)
+    np.testing.assert_array_equal(gpu[2][gpu[1]], cpu[2][cpu[1]])  # pairs
+
+
+def test_match_points_falls_back_to_cpu_when_gpu_fails(tmp_path, flat_bilayer, monkeypatch):
+    """A failing GPU path must not lose the membrane: CPU runs and the stats file says so."""
+    import numba.cuda
+    import cryocat.analysis.memthick as memthick
+
+    points, normals, s1, s2, n = flat_bilayer
+    seg_path = str(tmp_path / "seg.mrc")
+    cryomap.write(np.zeros((8, 8, 8), dtype=np.float32), seg_path, transpose=False, pixel_size=5.0)
+    csv_path = tmp_path / "flat_vertices_normals.csv"
+    pd.DataFrame({
+        "x_voxel": points[:, 0], "y_voxel": points[:, 1], "z_voxel": points[:, 2],
+        "normal_x": normals[:, 0], "normal_y": normals[:, 1], "normal_z": normals[:, 2],
+        "surface1": s1, "surface2": s2,
+    }).to_csv(csv_path, index=False)
+
+    def broken_gpu(*args, **kwargs):
+        raise TypeError("'function' object is not subscriptable")
+
+    monkeypatch.setattr(numba.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(memthick, "measure_thickness_gpu", broken_gpu)
+
+    out_csv, stats_file = memthick.match_points(
+        seg_path, str(csv_path), output_path=str(tmp_path),
+        max_distance_nm=4.0, max_angle=5.0, use_gpu=True, pixel_size_nm=0.5,
+    )
+
+    assert out_csv is not None and os.path.exists(out_csv)
+    assert len(pd.read_csv(out_csv)) == n
+    stats = Path(stats_file).read_text()
+    assert "matching_backend_used: cpu" in stats
+
+
 def test_process_matches_cpu2cpu_one_to_one():
     # Points 0 and 1 (surface-1) both want surface-2 target 100; point 0 is closer.
     flat_matches = [(1.0, 0, 100), (2.0, 1, 100), (3.0, 2, 200)]

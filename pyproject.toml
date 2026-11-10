@@ -43,6 +43,10 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 license = {text = "GPLv3+"}
+[project.optional-dependencies]
+# NVIDIA-maintained CUDA target for Numba (the built-in numba.cuda is deprecated).
+# Used by memthick GPU matching; install with: pip install "cryocat[gpu]"
+gpu = ["numba-cuda"]
 [tool.setuptools]
 packages = ["cryocat"]
 # include-package-data = true

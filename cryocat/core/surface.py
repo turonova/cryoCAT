@@ -365,11 +365,11 @@ class DiscreteSurface(Surface):
 
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Separate planar surface", group="Mesh", order=45, returns="surface_pair")
     def separate_planar_surface(self) -> tuple[np.ndarray, np.ndarray]:
-        """Separate the two halves of a surface with flat or low-curvature geometry via PCA on normals.
+        """Separate the two halves of a surface with flat or low-curvature geometry via PCA on vertices.
 
-        The PCA finds the axis along which the two opposing normal populations are most
-        separated (the least-variance direction of the normal cloud). Points whose
-        projection onto that axis is non-negative form ``surface1``; the rest form
+        PCA on the vertex coordinates gives the least-variance axis, taken as the
+        membrane-normal (thickness) direction. Vertices whose *normal* has a
+        non-negative projection onto that axis form ``surface1``; the rest form
         ``surface2``.
 
         Use :meth:`separate_closed_surface` instead for enclosed volumes (vesicles,
@@ -3812,7 +3812,7 @@ class Mesh(DiscreteSurface):
             Minimum triangle area threshold for numerical stability
         lstsq_rcond : float, default=1e-12
             Condition number cutoff for least squares
-        smoothing_iterations : int, default=0
+        smoothing_iterations : int, default=1
             Number of smoothing iterations to apply to curvature tensors.
             0 = no smoothing, 1+ = number of smoothing passes.
         smoothing_kernel_rings : int, default=1
