@@ -1,6 +1,9 @@
 """Tests for Ellipsoid, Mesh, and OrientedPointCloud in cryocat.core.surface."""
 from __future__ import annotations
 
+import contextlib
+import io
+
 import numpy as np
 import pytest
 import open3d as o3d
@@ -1307,6 +1310,145 @@ class TestGetCurvatureTable:
         np.testing.assert_allclose(
             df["area"].sum(), m.get_surface_area(), rtol=1e-6
         )
+
+
+# =============================================================================
+# Curvature accuracy (Rusinkiewicz 2004) against analytic surfaces
+# =============================================================================
+#
+# Tolerances are ~2x the errors observed in the Task 2 audit (commit 7e99006,
+# numpy 2.4.4, open3d 0.20). Sign convention: curvature is positive on convex
+# surfaces with outward normals; Mesh.from_mrc gives inward normals.
+
+def _mesh_from_o3d(o3m):
+    o3m.compute_vertex_normals()
+    m = Mesh()
+    m.vertices = np.asarray(o3m.vertices)
+    m.faces = np.asarray(o3m.triangles)
+    m.normals = np.asarray(o3m.vertex_normals)
+    m.units = "nm"
+    return m
+
+
+def _quiet_curvatures(m, **kwargs):
+    """compute_curvatures prints progress; keep test output clean."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        m.compute_curvatures(**kwargs)
+    return m
+
+
+def _shape_index(k1, k2):
+    return (2 / np.pi) * np.arctan2(k1 + k2, k1 - k2)
+
+
+def _voxel_sphere_mesh(r):
+    """Solid voxelized sphere of radius r, meshed by marching cubes (sigma=1)."""
+    n = 2 * r + 20
+    g = np.indices((n, n, n)) - n / 2
+    vol = (np.sqrt((g ** 2).sum(axis=0)) <= r).astype(float)
+    with contextlib.redirect_stdout(io.StringIO()):
+        m = Mesh.from_mrc(vol, pixel_size=1.0, smooth_sigma=1.0)
+    m.units = "nm"
+    return m
+
+
+TORUS_R, TORUS_r = 20.0, 5.0
+
+
+@pytest.fixture(scope="module")
+def torus_curvatures():
+    """Torus (axis z) with estimated and analytic per-vertex curvatures."""
+    o3m = o3d.geometry.TriangleMesh.create_torus(
+        torus_radius=TORUS_R, tube_radius=TORUS_r,
+        radial_resolution=120, tubular_resolution=60,
+    )
+    m = _quiet_curvatures(_mesh_from_o3d(o3m), smoothing_iterations=0)
+    v = m.vertices
+    c = (np.hypot(v[:, 0], v[:, 1]) - TORUS_R) / TORUS_r  # cos of tube angle
+    k1 = np.full_like(c, 1.0 / TORUS_r)
+    k2 = c / (TORUS_R + TORUS_r * c)
+    return {
+        "mesh": m, "c": c, "k1": k1, "k2": k2,
+        "H": (k1 + k2) / 2,
+        "K": c / (TORUS_r * (TORUS_R + TORUS_r * c)),
+    }
+
+
+@pytest.fixture(scope="module", params=[10, 20])
+def voxel_sphere(request):
+    r = request.param
+    m = _quiet_curvatures(_voxel_sphere_mesh(r), smoothing_iterations=3, smoothing_kernel_rings=2)
+    return r, m
+
+
+class TestCurvatureAccuracy:
+
+    @pytest.mark.parametrize("r", [5.0, 20.0])
+    def test_sphere(self, r):
+        o3m = o3d.geometry.TriangleMesh.create_sphere(radius=r, resolution=60)
+        m = _quiet_curvatures(_mesh_from_o3d(o3m), smoothing_iterations=0)
+        assert np.median(m.get_mean_curvature()) == pytest.approx(1 / r, rel=0.01)
+        assert np.median(m.get_gaussian_curvature()) == pytest.approx(1 / r**2, rel=0.02)
+        assert np.median(m.get_curvedness()) == pytest.approx(1 / r, rel=0.01)
+        assert np.median(m.get_shape_index()) == pytest.approx(1.0, abs=0.01)
+
+    def test_cylinder(self):
+        r, h = 10.0, 200.0
+        o3m = o3d.geometry.TriangleMesh.create_cylinder(radius=r, height=h, resolution=120, split=60)
+        m = _quiet_curvatures(_mesh_from_o3d(o3m), smoothing_iterations=0)
+        side = np.abs(m.vertices[:, 2]) < h / 2 - 10  # away from caps and rims
+        assert side.sum() > 0
+        assert np.median(m.get_mean_curvature()[side]) == pytest.approx(1 / (2 * r), rel=0.01)
+        assert np.max(np.abs(m.get_gaussian_curvature()[side])) < 1e-6
+        assert np.median(np.abs(m.get_shape_index()[side])) == pytest.approx(0.5, abs=0.01)
+
+    def test_torus_mean_curvature(self, torus_curvatures):
+        t = torus_curvatures
+        rel_err = np.abs(t["mesh"].get_mean_curvature() - t["H"]) / np.abs(t["H"])
+        assert np.median(rel_err) < 0.005
+
+    def test_torus_gaussian_curvature(self, torus_curvatures):
+        t = torus_curvatures
+        abs_err = np.abs(t["mesh"].get_gaussian_curvature() - t["K"])
+        assert np.percentile(abs_err, 95) < 1e-4
+
+    def test_torus_gaussian_curvature_sign(self, torus_curvatures):
+        """Outer half is elliptic (K > 0), inner half is a saddle (K < 0)."""
+        t = torus_curvatures
+        K = t["mesh"].get_gaussian_curvature()
+        # skip the parabolic top/bottom circles where K -> 0
+        assert np.all(K[t["c"] > 0.1] > 0)
+        assert np.all(K[t["c"] < -0.1] < 0)
+
+    @pytest.mark.parametrize("equator, c_target", [("outer", 1.0), ("inner", -1.0)])
+    def test_torus_shape_index_on_equator(self, torus_curvatures, equator, c_target):
+        t = torus_curvatures
+        sel = np.abs(t["c"] - c_target) < 1e-3
+        assert sel.sum() > 0
+        S = t["mesh"].get_shape_index()[sel]
+        S_true = _shape_index(t["k1"][sel], t["k2"][sel])
+        assert np.max(np.abs(S - S_true)) < 0.02
+        if equator == "inner":
+            assert np.all((S > -0.5) & (S < 0.5))
+
+    def test_voxelized_sphere_mean_curvature(self, voxel_sphere):
+        r, m = voxel_sphere
+        tol = {10: 0.08, 20: 0.05}[r]
+        assert abs(np.median(m.get_mean_curvature())) == pytest.approx(1 / r, rel=tol)
+
+    def test_voxelized_sphere_sign_convention(self, voxel_sphere):
+        """from_mrc gives inward normals, so a solid sphere reads as concave."""
+        _, m = voxel_sphere
+        assert np.median(m.get_mean_curvature()) < 0
+        assert np.median(m.get_shape_index()) == pytest.approx(-1.0, abs=0.1)
+
+    def test_voxelized_sphere_flipped_normals(self, voxel_sphere):
+        _, m = voxel_sphere
+        flipped = m.flip_normals(inplace=False)
+        _quiet_curvatures(flipped, force_recompute=True,
+                          smoothing_iterations=3, smoothing_kernel_rings=2)
+        assert np.median(flipped.get_mean_curvature()) > 0
+        assert np.median(flipped.get_shape_index()) == pytest.approx(1.0, abs=0.1)
 
 
 # =============================================================================
