@@ -6828,7 +6828,7 @@ class OrientedPointCloud(DiscreteSurface):
         return midplane_pcd
 
 class AnalyticSurface(Surface):
-    """Abstract base for analytic/parametric surface representations (ellipsoids, cylinders, etc.)."""
+    """Abstract base for analytic/parametric surface representations (ellipsoids, tubes, etc.)."""
 
     def __init__(self):
         super().__init__()
@@ -6860,27 +6860,27 @@ class AnalyticSurface(Surface):
         """Rotate the surface in-place."""
 
 
-class Cylinder(AnalyticSurface):
+class Tube(AnalyticSurface):
+    """Tube representation for filament and microtubule fitting.
+
+    Stores parameters for both straight (PCA axis) and curved (spline
+    centerline) tubes and provides methods for fitting, sampling, and
+    serialization.
     """
-    Cylinder representation for filament fitting.
-    
-    Stores cylinder parameters (center point on axis, axis direction, radius)
-    and provides methods for fitting and sampling.
-    """
-    
-    def __init__(self, center=None, axis_direction=None, radius=None, 
+
+    def __init__(self, center=None, axis_direction=None, radius=None,
                  centerline_length=None):
         """
-        Initialize cylinder.
+        Initialize tube.
         
         Parameters
         ----------
         center : np.ndarray (3,), optional
-            Point on the cylinder axis (typically centroid of fitted points)
+            Point on the tube axis (typically centroid of fitted points).
         axis_direction : np.ndarray (3,), optional
-            Normalized direction vector along cylinder axis
+            Normalized direction vector along tube axis.
         radius : float, optional
-            Cylinder radius
+            Tube radius.
         centerline_length : float, optional
             Length of centerline extent
         """
@@ -6889,34 +6889,34 @@ class Cylinder(AnalyticSurface):
         self.axis_direction = axis_direction
         self.radius = radius
         self.centerline_length = centerline_length
-    
+        self.singular = False
+
     @classmethod
-    def fit_to_points(cls, points: np.ndarray) -> "Cylinder":
-        """
-        Fit cylinder to a set of points using PCA.
-        
+    def fit_to_points(cls, points: np.ndarray) -> "Tube":
+        """Fit tube to a set of points using PCA (straight centerline).
+
         Parameters
         ----------
         points : np.ndarray (N, 3)
             Point coordinates
-            
+
         Returns
         -------
-        Cylinder
-            Fitted cylinder instance
+        Tube
+            Fitted tube instance.
         """        
         if len(points) < 3:
-            raise ValueError(f"Need at least 3 points to fit cylinder, got {len(points)}")
-        
+            raise ValueError(f"Need at least 3 points to fit tube, got {len(points)}")
+
         # Center the points
         centroid = np.mean(points, axis=0)
         points_centered = points - centroid
         
-        # PCA: first principal component is the cylinder axis
+        # PCA: first principal component is the tube axis
         pca = PCA(n_components=3)
         pca.fit(points_centered)
         
-        # Cylinder axis is the first principal component (largest variance)
+        # Tube axis is the first principal component (largest variance)
         axis_direction = pca.components_[0]
         
         # Ensure consistent orientation
@@ -6943,21 +6943,20 @@ class Cylinder(AnalyticSurface):
         )
     
     def sample_along_axis(self, spacing: float) -> np.ndarray:
-        """
-        Sample points along cylinder centerline at regular intervals.
-        
+        """Sample points along tube centerline at regular intervals.
+
         Parameters
         ----------
         spacing : float
-            Spacing between sampled points
-            
+            Spacing between sampled points.
+
         Returns
         -------
         np.ndarray (M, 3)
-            Sampled points along centerline
+            Sampled points along centerline.
         """
         if self.center is None or self.axis_direction is None:
-            raise ValueError("Cylinder must be fitted before sampling")
+            raise ValueError("Tube must be fitted before sampling")
         
         half_length = self.centerline_length / 2.0
         n_samples = max(2, int(np.ceil(self.centerline_length / spacing)) + 1)
@@ -6966,22 +6965,85 @@ class Cylinder(AnalyticSurface):
         sampled_points = self.center + np.outer(sampled_positions, self.axis_direction)
         return sampled_points
     
-    def distance_point_surface(self, point: np.ndarray) -> float:
+    def get_props_as_df(self) -> "pd.DataFrame":
+        """Return tube centerline as a multi-row DataFrame (one row per centerline point).
+
+        Spline-fitted tubes write the extracted centerline (one row per
+        populated bin). Straight-fitted tubes write the two axis endpoints.
+        Neither ``tomo_id`` nor the feature-id column is included —
+        :meth:`AnalyticSurfacesM.write_out` appends those.
+
+        Columns
+        -------
+        surface_type, point_id, x, y, z, radius
         """
-        Compute distance from point to cylinder surface.
-        
+        if getattr(self, "_spline_type", None) == "bspline":
+            pts = self._centerline
+        else:
+            half = self.centerline_length / 2.0
+            pts = np.array([
+                self.center - half * self.axis_direction,
+                self.center + half * self.axis_direction,
+            ])
+        return pd.DataFrame({
+            "surface_type": "tube",
+            "point_id": np.arange(len(pts), dtype=int),
+            "x": pts[:, 0],
+            "y": pts[:, 1],
+            "z": pts[:, 2],
+            "radius": float(self.radius),
+        })
+
+    @classmethod
+    def from_df(cls, df: "pd.DataFrame") -> "Tube":
+        """Reconstruct a tube from a group DataFrame produced by :meth:`get_props_as_df`.
+
+        Two rows restore a straight-fitted tube exactly from its axis endpoints.
+        More than two rows refit a spline through the stored centerline points
+        and restore the original radius.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Rows for one ``(tomo_id, feature_id)`` group, with columns
+            ``surface_type``, ``point_id``, ``x``, ``y``, ``z``, ``radius``.
+
+        Returns
+        -------
+        Tube
+        """
+        df = df.sort_values("point_id")
+        pts = df[["x", "y", "z"]].to_numpy(dtype=float)
+        radius_stored = float(df["radius"].iloc[0])
+        if len(pts) == 2:
+            diff = pts[1] - pts[0]
+            centerline_length = float(np.linalg.norm(diff))
+            axis_direction = diff / (centerline_length + 1e-12)
+            return cls(
+                center=(pts[0] + pts[1]) / 2.0,
+                axis_direction=axis_direction,
+                radius=radius_stored,
+                centerline_length=centerline_length,
+            )
+        tube = cls.fit_to_points_spline(pts)
+        tube.radius = radius_stored
+        return tube
+
+    def distance_point_surface(self, point: np.ndarray) -> float:
+        """Compute distance from point to tube surface.
+
         Parameters
         ----------
         point : np.ndarray (3,)
-            Query point
-            
+            Query point.
+
         Returns
         -------
         float
-            Distance to cylinder surface
+            Distance to tube surface.
         """
         if self.center is None or self.axis_direction is None or self.radius is None:
-            raise ValueError("Cylinder must be fitted before computing distances")
+            raise ValueError("Tube must be fitted before computing distances")
         
         # Vector from center to point
         vec_to_point = point - self.center
@@ -6998,9 +7060,9 @@ class Cylinder(AnalyticSurface):
         return np.abs(radial_distance - self.radius)
     
     def distance_point_center(self, point: np.ndarray) -> float:
-        """Compute distance from point to cylinder center."""
+        """Compute distance from point to tube center."""
         if self.center is None:
-            raise ValueError("Cylinder must have center defined")
+            raise ValueError("Tube must have center defined")
         return np.linalg.norm(point - self.center)
 
     @staticmethod
@@ -7058,28 +7120,27 @@ class Cylinder(AnalyticSurface):
         return np.array(centerline_points) if len(centerline_points) > 0 else points
     
     @classmethod
-    def fit_to_points_spline(cls, points: np.ndarray, n_bins: int = 50, smoothing: float = 0) -> "Cylinder":
-        """
-        Fit cylinder using B-spline centerline (handles curves well).
-        
+    def fit_to_points_spline(cls, points: np.ndarray, n_bins: int = 50, smoothing: float = 0) -> "Tube":
+        """Fit tube using B-spline centerline (handles curved filaments).
+
         Parameters
         ----------
         points : np.ndarray (N, 3)
-            Point coordinates
+            Point coordinates.
         n_bins : int, default=50
-            Number of bins for centerline extraction
+            Number of bins for centerline extraction.
         smoothing : float, default=0
-            Smoothing factor for spline (0 = no smoothing, exact fit)
-            
+            Smoothing factor for spline (0 = no smoothing, exact fit).
+
         Returns
         -------
-        Cylinder
-            Fitted cylinder instance with spline-based centerline
+        Tube
+            Fitted tube instance with spline-based centerline.
         """
         from scipy.interpolate import splprep, splev
-        
+
         if len(points) < 3:
-            raise ValueError(f"Need at least 3 points to fit cylinder, got {len(points)}")
+            raise ValueError(f"Need at least 3 points to fit tube, got {len(points)}")
         
         # Extract centerline
         centerline = cls._extract_centerline(points, n_bins=n_bins)
@@ -7110,17 +7171,17 @@ class Cylinder(AnalyticSurface):
         centerline_diff = np.diff(centerline_dense, axis=0)
         centerline_length = np.sum(np.linalg.norm(centerline_diff, axis=1))
         
-        # Create cylinder instance with spline info
-        cylinder = cls(
-            center=centerline[0],  # Use first centerline point
-            axis_direction=None,  # Will be computed on-the-fly from spline
+        tube = cls(
+            center=centerline[0],
+            axis_direction=None,
             radius=radius,
-            centerline_length=centerline_length
+            centerline_length=centerline_length,
         )
-        cylinder._spline_tck = tck  # Store spline parameters
-        cylinder._spline_type = 'bspline'
-        
-        return cylinder
+        tube._spline_tck = tck
+        tube._spline_type = "bspline"
+        tube._centerline = centerline
+
+        return tube
     
     
     def sample_along_axis_spline(self, spacing: float) -> tuple[np.ndarray, np.ndarray]:
@@ -7140,7 +7201,7 @@ class Cylinder(AnalyticSurface):
             Tangent vectors (orientations) at sampled points
         """
         if not hasattr(self, '_spline_type') or self._spline_type != 'bspline':
-            raise ValueError("Spline sampling only available for B-spline fitted cylinders")
+            raise ValueError("Spline sampling only available for B-spline fitted tubes")
         
         from scipy.interpolate import splev
         
@@ -7161,7 +7222,7 @@ class Cylinder(AnalyticSurface):
 
     def oversample(self, sampling_distance: float | None = None, point_spacing: float | None = None) -> "OrientedPointCloud":
         """
-        Sample the cylinder centerline as an :class:`OrientedPointCloud`.
+        Sample the tube centerline as an :class:`OrientedPointCloud`.
 
         Parameters
         ----------
@@ -7173,7 +7234,7 @@ class Cylinder(AnalyticSurface):
         Returns
         -------
         OrientedPointCloud
-            Points sampled along the cylinder axis or spline centerline, with tangent
+            Points sampled along the tube axis or spline centerline, with tangent
             vectors stored as normals.
         """
         spacing = sampling_distance if sampling_distance is not None else point_spacing
@@ -7185,7 +7246,7 @@ class Cylinder(AnalyticSurface):
         else:
             sampled_points = self.sample_along_axis(spacing)
             if self.axis_direction is None:
-                raise ValueError("Cylinder must have axis_direction to oversample")
+                raise ValueError("Tube must have axis_direction to oversample")
             tangent = np.asarray(self.axis_direction, dtype=float)
             tangent = tangent / (np.linalg.norm(tangent) + 1e-12)
             tangents = np.tile(tangent, (len(sampled_points), 1))
@@ -7206,7 +7267,7 @@ class Cylinder(AnalyticSurface):
             self.axis_direction /= np.linalg.norm(self.axis_direction)
 
     def rotate(self, rotation_matrix: np.ndarray):
-        """Rotate the cylinder in-place."""
+        """Rotate the tube in-place."""
         R = np.asarray(rotation_matrix, dtype=float)
         self.center = R.dot(self.center)
         if self.axis_direction is not None:
@@ -7484,12 +7545,30 @@ class Ellipsoid(AnalyticSurface):
         return p1, p2, d1, d2, is_inside
 
 
-class QuadricsM:
+_SURFACE_TYPES: dict[str, tuple] = {
+    "ellipsoid": (Ellipsoid.fit_to_points, Ellipsoid.from_df),
+    "tube": (Tube.fit_to_points_spline, Tube.from_df),
+}
+"""Dispatch table for :class:`AnalyticSurfacesM`.
+
+Maps ``surface_type`` string → ``(motl_fit_fn, csv_from_df_fn)``.
+Register a new entry here to add a surface type; no other edits needed.
+"""
+
+
+class AnalyticSurfacesM:
     """Container managing a collection of analytic surfaces keyed by (tomo_id, feature_id)."""
 
-    def __init__(self, input_data, quadric="ellipsoid", feature_id="object_id"):
+    def __init__(self, input_data, surface_type="ellipsoid", feature_id="object_id"):
         self.dict = {}
         self.f_id = feature_id
+
+        if surface_type not in _SURFACE_TYPES:
+            raise ValueError(
+                f"Unsupported surface type: {surface_type!r}. "
+                f"Expected one of: {list(_SURFACE_TYPES)}"
+            )
+        _fit_fn, _from_df_fn = _SURFACE_TYPES[surface_type]
 
         if isinstance(input_data, cryomotl.Motl):
             input_motl = cryomotl.Motl.load(input_data)
@@ -7497,19 +7576,18 @@ class QuadricsM:
                 fm = input_motl.get_motl_subset(column_values=f, column_name=feature_id, reset_index=True)
                 tomo_id = fm.df["tomo_id"].values[0]
                 coords = fm.get_coordinates()
-                if quadric == "ellipsoid":
-                    self.dict[(tomo_id, f)] = Ellipsoid.fit_to_points(coords)
-                else:
-                    raise ValueError(f"Unsupported quadric type: {quadric!r}")
+                self.dict[(tomo_id, f)] = _fit_fn(coords)
         elif isinstance(input_data, str):
             df = pd.read_csv(input_data)
-            for _, row in df.iterrows():
-                f = row[feature_id]
-                tomo_id = row["tomo_id"]
-                if quadric == "ellipsoid":
-                    self.dict[(tomo_id, f)] = Ellipsoid.from_df(row)
-                else:
-                    raise ValueError(f"Unsupported quadric type: {quadric!r}")
+            if "surface_type" in df.columns:
+                file_types = df["surface_type"].dropna().unique()
+                if len(file_types) != 1 or str(file_types[0]) != surface_type:
+                    raise ValueError(
+                        f"File surface_type {list(file_types)!r} does not match "
+                        f"requested {surface_type!r}"
+                    )
+            for (tomo_id_val, f_val), group in df.groupby(["tomo_id", feature_id], sort=False):
+                self.dict[(tomo_id_val, f_val)] = _from_df_fn(group)
         else:
             raise ValueError(f"Unsupported input type: {type(input_data)}")
 
@@ -7533,7 +7611,7 @@ class QuadricsM:
         surf = self.dict[(tomo_id, feature_id)]
         return [surf.distance_point_center(p) for p in points]
 
-    def find_closest_quadric(self, tomo_id, points):
+    def find_closest_surface(self, tomo_id, points):
         """Return feature_id of the closest surface (by center distance) for each point."""
         f_ids = [k[1] for k in self.dict if k[0] == tomo_id]
         n = len(points)

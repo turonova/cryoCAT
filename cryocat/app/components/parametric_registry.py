@@ -1,7 +1,7 @@
 """Server-side **active fit** slot for :class:`ParametricSurface`.
 
 Phase 3 of the Structure page holds at most one fitted parametric surface at
-a time. The fit is live state (a :class:`QuadricsM` with open3d/numpy buffers)
+a time. The fit is live state (a :class:`AnalyticSurfacesM` with open3d/numpy buffers)
 so it lives in this server-side slot, while the page's
 ``dcc.Store(id="parametric-active")`` carries only a lightweight handle dict.
 
@@ -37,7 +37,7 @@ class ParametricHandle:
 
     column_name: str
     surface_type: str
-    n_quadrics: int
+    n_surfaces: int
     source: str
 
 
@@ -51,14 +51,14 @@ def make_handle(psurf: "ParametricSurface", source: str) -> dict:
     ----------
     psurf : ParametricSurface
         The live fit (used to derive ``column_name``, the count of fitted
-        quadrics, and the surface type label).
+        surfaces, and the surface type label).
     source : str
         Provenance string forwarded verbatim onto the handle.
     """
-    qd = getattr(psurf.quadrics, "dict", {}) or {}
+    qd = getattr(psurf.surfaces, "dict", {}) or {}
     return asdict(ParametricHandle(
         column_name=str(getattr(psurf, "column_name", "object_id")),
         surface_type="ellipsoid",
-        n_quadrics=int(len(qd)),
+        n_surfaces=int(len(qd)),
         source=str(source),
     ))

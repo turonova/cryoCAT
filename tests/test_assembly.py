@@ -4266,11 +4266,11 @@ class TestBlockLayerColumnParameters:
         assert (fm.df["geom4"] == 0.0).all()
         assert (fm.df["geom5"] == 0.0).all()
 
-    def test_faces_class_not_written(self):
-        # class is never written by the block layer; motl column defaults to 0.0
+    def test_faces_class_nonzero(self):
+        # When original blocks have class=0, fallback assigns class=1 to faces.
         ps = self._make_ps()
         fm = ps.get_faces_as_motl()
-        assert (fm.df["class"] == 0.0).all()
+        assert (fm.df["class"] != 0.0).all()
 
     # ── face_id is the same column in faces and missing-block motl ────────────
 
@@ -7608,6 +7608,86 @@ class TestScopeParameter:
     def test_scope_added_raises_block_stats(self, missing_ball_ps):
         with pytest.raises(ValueError, match="'added'"):
             missing_ball_ps.get_block_stats(scope="added")
+
+
+# =============================================================================
+# infer_missing_blocks — class column assignment
+# =============================================================================
+
+
+@pytest.fixture(scope="module")
+def missing_ball_class1_inferred():
+    """Missing-ball PS where original blocks have class=1; returns (ps, imb).
+
+    Uses min_support=1, min_real_support=1 because removing one block from this
+    geometry leaves exactly 1 unpaired arm (the other 2 gaps are filled by
+    alternative connections within the same max_distance).
+    """
+    motl, arm_length, arm_elev = _soccer_ball(seed=0)
+    motl.df["class"] = 1.0
+    sub_df = motl.df.iloc[1:].copy().reset_index(drop=True)
+    sub_motl = cryomotl.Motl(sub_df)
+    bd = assembly.BlockDefinition.cyclic(
+        3,
+        [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+    )
+    bl = assembly.BlockLayer(sub_motl, bd)
+    ps = assembly.PleomorphicSurface(block_layer=bl)
+    ps.connect(max_distance=arm_length * 2.5)
+    imb, _ = ps.infer_missing_blocks(min_support=1, min_real_support=1)
+    return ps, imb
+
+
+class TestInferMissingBlocksClass:
+    """Inferred blocks must never carry class=0."""
+
+    def test_inferred_motl_class_matches_original(self, missing_ball_class1_inferred):
+        _, imb = missing_ball_class1_inferred
+        if len(imb.df) == 0:
+            pytest.skip("No inferred blocks found.")
+        assert (imb.df["class"] == 1.0).all(), (
+            f"Inferred blocks must inherit class=1 from original blocks; "
+            f"got {sorted(imb.df['class'].unique())}"
+        )
+
+    def test_inferred_motl_no_class_zero(self, missing_ball_class1_inferred):
+        _, imb = missing_ball_class1_inferred
+        if len(imb.df) == 0:
+            pytest.skip("No inferred blocks found.")
+        assert (imb.df["class"] != 0.0).all(), (
+            f"Inferred blocks must never have class=0; "
+            f"got {sorted(imb.df['class'].unique())}"
+        )
+
+    def test_get_blocks_as_motl_inferred_no_class_zero(self, missing_ball_class1_inferred):
+        ps, imb = missing_ball_class1_inferred
+        if ps._added is None or len(ps._added.df) == 0:
+            pytest.skip("No inferred blocks found.")
+        inf_motl = ps.get_blocks_as_motl(scope="inferred")
+        assert (inf_motl.df["class"] != 0.0).all(), (
+            f"get_blocks_as_motl(scope='inferred') must not contain class=0; "
+            f"got {sorted(inf_motl.df['class'].unique())}"
+        )
+
+    def test_fallback_to_1_when_original_class_zero(self):
+        """Fallback: original blocks all have class=0 → inferred get class=1."""
+        motl, arm_length, arm_elev = _soccer_ball(seed=0)
+        # class column stays 0 (default from _soccer_ball)
+        sub_df = motl.df.iloc[1:].copy().reset_index(drop=True)
+        sub_motl = cryomotl.Motl(sub_df)
+        bd = assembly.BlockDefinition.cyclic(
+            3,
+            [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))],
+        )
+        bl = assembly.BlockLayer(sub_motl, bd)
+        ps = assembly.PleomorphicSurface(block_layer=bl)
+        ps.connect(max_distance=arm_length * 2.5)
+        imb, _ = ps.infer_missing_blocks(min_support=1, min_real_support=1)
+        assert len(imb.df) > 0, "Expected at least one inferred block; geometry may have changed."
+        assert (imb.df["class"] != 0.0).all(), (
+            f"Fallback must assign class!=0 when original class=0; "
+            f"got {sorted(imb.df['class'].unique())}"
+        )
 
 
 # =============================================================================

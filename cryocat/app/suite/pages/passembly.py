@@ -1207,7 +1207,7 @@ def register_callbacks(app):
             pr.registry.add(result)
             handle = pr.make_handle(result, source=source_tag)
             return no_update, no_update, handle, (
-                f"Loaded {handle['n_quadrics']} parametric surface(s) "
+                f"Loaded {handle['n_surfaces']} parametric surface(s) "
                 f"({source_tag})."
             )
 
@@ -1964,7 +1964,7 @@ def register_callbacks(app):
         return (
             f"Active parametric fit: {handle.get('surface_type', '?')} on "
             f"'{handle.get('column_name', '?')}'; "
-            f"{int(handle.get('n_quadrics', 0))} surface(s); "
+            f"{int(handle.get('n_surfaces', 0))} surface(s); "
             f"source={handle.get('source', '?')}."
         )
 

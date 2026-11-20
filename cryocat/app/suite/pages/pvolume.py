@@ -479,6 +479,46 @@ def _sidebar() -> list:
                     ],
                     title="Create mask", item_id="vol-acc-create",
                 ),
+                # ── Apply mask ────────────────────────────────────────────────
+                dbc.AccordionItem(
+                    [
+                        html.Div(
+                            "Multiplies the loaded map (full resolution) by the current mask "
+                            "and saves the result.",
+                            style={"color": "var(--color9)", "fontStyle": "italic",
+                                   "marginBottom": "0.4rem"},
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Output path", style={"width": "40%", "flexShrink": 0,
+                                                                  "paddingRight": "0.4rem"}),
+                                html.Div(get_path_field("vol-apply-output-path-input", mode="save",
+                                                        extensions=(".em",),
+                                                        placeholder="output_volume.em"),
+                                         style={"flex": 1, "minWidth": 0}),
+                            ],
+                            style={**_LP_ROW, "marginBottom": "0.3rem"},
+                        ),
+                        html.Div(
+                            [
+                                html.Label("Pixel size (Å)", style={"width": "40%", "flexShrink": 0,
+                                                                      "paddingRight": "0.4rem"}),
+                                dbc.Input(id="vol-apply-pixel-size-input", type="number",
+                                          value=1.0, min=0.001, step=0.001,
+                                          style={"flex": 1}),
+                            ],
+                            style={**_LP_ROW, "marginBottom": "0.3rem"},
+                        ),
+                        dbc.Button("Apply mask", id="vol-apply-btn",
+                                   size="sm",
+                                   style={"width": "100%", "backgroundColor": "var(--color12)",
+                                          "borderColor": "var(--color12)"}),
+                        html.Div(id="vol-apply-status",
+                                 style={"color": "var(--color9)",
+                                        "marginTop": "0.4rem", "wordBreak": "break-word"}),
+                    ],
+                    title="Apply mask", item_id="vol-acc-apply",
+                ),
             ],
             active_item=["vol-acc-map", "vol-acc-display", "vol-acc-layers",
                          "vol-acc-lparams", "vol-acc-create"],
@@ -900,3 +940,94 @@ def register_callbacks(app):
 
         names = ", ".join(l.get("name", "") for l in visible)
         return f"Mask created: {output_path}  ({len(visible)} layer(s): {names})"
+
+    # ── Apply mask (multiply loaded volume by current mask) ───────────────────
+    @app.callback(
+        Output("vol-apply-status", "children"),
+        Input("vol-apply-btn",     "n_clicks"),
+        State({"type": "path-input", "owner": "vol-apply-output-path-input"}, "value"),
+        State("vol-apply-pixel-size-input", "value"),
+        State("vol-mask-layers",            "data"),
+        State("vol-meta-store",             "data"),
+        State("vol-bool-op",                "value"),
+        State("vol-iso-slider",             "value"),
+        prevent_initial_call=True,
+    )
+    def _apply_mask(n_clicks, output_path, pixel_size, layers, meta, bool_op, iso_level):
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+        if not output_path:
+            return "Provide an output path."
+        if not layers or not meta:
+            return "Load a map and add at least one layer."
+
+        map_path   = meta.get("path")
+        if not map_path:
+            return "No map path recorded — reload the map."
+
+        shape_full = meta.get("shape_full")
+        bin_factor = float(meta.get("bin_factor", 1))
+        visible    = [l for l in layers if l.get("visible", True)]
+        if not visible:
+            return "No visible layers to apply."
+
+        mask_arrays = []
+        for layer in visible:
+            mask_type = layer["type"]
+            scaled    = _scale_params(mask_type, layer.get("params", {}), bin_factor)
+            fn        = MASK_REGISTRY[mask_type]["fn"]
+            kwargs    = {"mask_size": tuple(int(s) for s in shape_full)}
+            try:
+                if mask_type == "tight":
+                    kwargs = {
+                        "input_map":         map_path,
+                        "threshold":         float(iso_level or 0.0),
+                        "dilation_size":     int(scaled.get("dilation_size") or 0),
+                        "n_regions":         int(layer["params"].get("n_regions") or 1),
+                        "gaussian":          float(scaled.get("gaussian") or 0.0),
+                        "gaussian_outwards": bool(layer["params"].get("gaussian_outwards", True)),
+                    }
+                    angles = layer["params"].get("angles", [0, 0, 0])
+                    if angles and any(a for a in angles if a):
+                        kwargs["angles"] = [float(a or 0) for a in angles]
+                else:
+                    if "radius" in scaled and scaled["radius"] is not None:
+                        kwargs["radius"] = int(round(float(scaled["radius"])))
+                    if "radii" in scaled and scaled["radii"] is not None:
+                        kwargs["radii"] = [int(round(float(r or 1))) for r in scaled["radii"]]
+                    if "shell_thickness" in scaled and scaled["shell_thickness"] is not None:
+                        kwargs["shell_thickness"] = int(round(float(scaled["shell_thickness"])))
+                    if "height" in scaled and scaled["height"] is not None:
+                        kwargs["height"] = int(round(float(scaled["height"])))
+                    if "center" in scaled and scaled["center"] is not None:
+                        kwargs["center"] = [int(round(float(c or 0))) for c in scaled["center"]]
+                    kwargs["gaussian"] = float(scaled.get("gaussian") or 0.0)
+                    if mask_type not in ("spherical_shell", "ellipsoid_shell"):
+                        kwargs["gaussian_outwards"] = bool(
+                            layer["params"].get("gaussian_outwards", True))
+                    if mask_type in ("cylinder", "ellipsoid", "ellipsoid_shell"):
+                        angles = layer["params"].get("angles", [0, 0, 0])
+                        if angles and any(a for a in angles if a):
+                            kwargs["angles"] = [float(a or 0) for a in angles]
+                mask_arrays.append(fn(**kwargs))
+            except Exception as exc:
+                return f"Error building layer '{layer.get('name')}': {exc}"
+
+        try:
+            if len(mask_arrays) == 1:
+                mask = mask_arrays[0]
+            else:
+                op_fn = BOOL_OPS.get(bool_op or "union", cryomask.union)
+                mask  = op_fn(mask_arrays)
+
+            vol    = cryomap.read(map_path)
+            result = (vol * mask).astype(np.float32)
+            run_operation(cryomap.write, {
+                "data_to_write": result,
+                "output_path":   output_path,
+                "pixel_size":    float(pixel_size or 1.0),
+            })
+        except Exception as exc:
+            return f"Error applying mask: {exc}"
+
+        return f"Masked volume saved: {output_path}"

@@ -41,9 +41,9 @@ from cryocat.core.surface import (
     Mesh,
     OrientedPointCloud,
     AnalyticSurface,
-    Cylinder,
+    Tube,
     Ellipsoid,
-    QuadricsM,
+    AnalyticSurfacesM,
 )
 from collections import Counter
 from collections.abc import Callable
@@ -5619,7 +5619,10 @@ class NPC(CnComplex):
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
         rot_180 = srot.from_euler("zxz", angles=[0, 180, 0], degrees=True)
-
+        
+        # casting to avoid truncation later on in case of int values
+        target.df[["phi", "theta", "psi"]] = target.df[["phi", "theta", "psi"]].astype(float) 
+        
         for t in target.get_unique_values(tomo_col):
             ref_t_df = reference.df[reference.df[tomo_col] == t]
             if ref_t_df.shape[0] == 0:
@@ -5645,7 +5648,7 @@ class NPC(CnComplex):
                 for global_idx, tgt_z, angles_row in zip(tgt_o_df.index, tgt_z_vecs, tgt_angles):
                     if geom.vector_angular_distance(tgt_z, ref_mean_z) > 90.0:
                         rot = srot.from_euler("zxz", angles_row, degrees=True)
-                        flipped = rot_180 * rot
+                        flipped = rot * rot_180
                         target.df.loc[global_idx, ["phi", "theta", "psi"]] = (
                             flipped.as_euler("zxz", degrees=True)
                         )
@@ -7744,6 +7747,8 @@ class PleomorphicSurface:
         self.clean_distance: float | None = None
         self._envelopes: dict[tuple[float, float], "Mesh"] | None = None
         self._envelope_scope: str | None = None
+        self._block_class: float = 1.0
+        self._block_class_non_unique: bool = False
 
         # --- Envelope ---
         if isinstance(surface, PleomorphicSurface):
@@ -7782,6 +7787,8 @@ class PleomorphicSurface:
                 self.clean_distance = surface.clean_distance
                 self._envelopes = copy.deepcopy(surface._envelopes)
                 self._envelope_scope = surface._envelope_scope
+                self._block_class = surface._block_class
+                self._block_class_non_unique = surface._block_class_non_unique
         elif surface is not None:
             if not isinstance(surface, (Mesh, OrientedPointCloud)):
                 raise TypeError(
@@ -7832,6 +7839,39 @@ class PleomorphicSurface:
                         UserWarning,
                         stacklevel=2,
                     )
+
+        self._compute_block_class()
+
+    def _compute_block_class(self) -> None:
+        """Set ``_block_class`` and ``_block_class_non_unique`` from the blocks motl.
+
+        ``_block_class`` is the single non-zero class value (or 1 as fallback
+        when the motl is absent or all entries have class=0).
+        ``_block_class_non_unique`` is True when two or more distinct non-zero
+        class values are present; functions that build new motls from specific
+        block subsets then look up the class from the participating blocks
+        directly and print a note.
+        """
+        if self.blocks is None or len(self.blocks.df) == 0:
+            self._block_class = 1.0
+            self._block_class_non_unique = False
+            return
+        cls_col = self.blocks.df["class"].astype(float) if "class" in self.blocks.df.columns else None
+        if cls_col is None:
+            self._block_class = 1.0
+            self._block_class_non_unique = False
+            return
+        non_zero = cls_col[cls_col != 0.0].unique()
+        if len(non_zero) == 0:
+            self._block_class = 1.0
+            self._block_class_non_unique = False
+        elif len(non_zero) == 1:
+            self._block_class = float(non_zero[0])
+            self._block_class_non_unique = False
+        else:
+            mode_cls = float(Counter(cls_col[cls_col != 0.0].values.tolist()).most_common(1)[0][0])
+            self._block_class = mode_cls
+            self._block_class_non_unique = True
 
     @property
     def block_pixel_size(self) -> float:
@@ -9547,14 +9587,34 @@ class PleomorphicSurface:
             _b2r_fs = None
         _zu_fs = np.array([0.0, 0.0, 1.0])
 
+        # Precompute numpy arrays to avoid per-cell .at lookups inside the face loop.
+        _st_block_id_np = st["block_id"].to_numpy()
+        _st_cx_np = st["cx"].to_numpy()
+        _st_cy_np = st["cy"].to_numpy()
+        _st_cz_np = st["cz"].to_numpy()
+        _st_idx = st.index
+        _st_simple = (
+            isinstance(_st_idx, pd.RangeIndex)
+            and _st_idx.start == 0
+            and _st_idx.step == 1
+            and _st_idx.stop == len(st)
+        )
+        _st_label_to_pos: dict[int, int] | None = (
+            None if _st_simple else {int(lbl): pos for pos, lbl in enumerate(_st_idx)}
+        )
+
         rows = []
         for rec in _faces:
             hedges = rec["half_edges"]
             size = len(hedges)
-            block_ids_walk = [float(st.at[h, "block_id"]) for h in hedges]
-            cx_vals = np.array([st.at[h, "cx"] for h in hedges])
-            cy_vals = np.array([st.at[h, "cy"] for h in hedges])
-            cz_vals = np.array([st.at[h, "cz"] for h in hedges])
+            if _st_label_to_pos is not None:
+                _hpos = np.array([_st_label_to_pos[h] for h in hedges], dtype=np.intp)
+            else:
+                _hpos = np.asarray(hedges, dtype=np.intp)
+            block_ids_walk = _st_block_id_np[_hpos].astype(float).tolist()
+            cx_vals = _st_cx_np[_hpos]
+            cy_vals = _st_cy_np[_hpos]
+            cz_vals = _st_cz_np[_hpos]
             centres = np.column_stack([cx_vals, cy_vals, cz_vals])
             centroid = centres.mean(axis=0)
 
@@ -9750,7 +9810,7 @@ class PleomorphicSurface:
                         unique_face_sizes.append(sz)
                 else:
                     face_sizes_for_sig.append(0)
-            face_sig = "-".join(str(s) for s in sorted(face_sizes_for_sig))
+            face_sig = "(" + ",".join(str(s) for s in sorted(face_sizes_for_sig)) + ")"
             face_sizes_tup = tuple(sorted(unique_face_sizes))
             n_faces_val = len(face_sizes_tup)
             face_cnt = _Counter(face_sizes_tup)
@@ -10627,11 +10687,18 @@ class PleomorphicSurface:
             _bid_cls: dict[float, float] = dict(
                 zip(_blocks.df["subtomo_id"].astype(float), _blocks.df["class"].astype(float))
             )
+            if self._block_class_non_unique:
+                print(
+                    "get_faces_as_motl: multiple block classes present; "
+                    "face class assigned from one of its constituent blocks."
+                )
             data["class"] = np.array([
-                next((c for b in bids if (c := _bid_cls.get(float(b), 0.0)) != 0.0), 0.0)
-                if bids else 0.0
+                next((c for b in bids if (c := _bid_cls.get(float(b), 0.0)) != 0.0), self._block_class)
+                if bids else self._block_class
                 for bids in face_stats["block_ids"]
             ])
+        else:
+            data["class"] = np.full(n, self._block_class)
 
         motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
         motl.renumber_particles()
@@ -10920,7 +10987,7 @@ class PleomorphicSurface:
                     cls_val = next(
                         (c for ob in face_row["block_ids"]
                          if ob != bid and (c := _bid_to_class.get(float(ob), 0.0)) != 0.0),
-                        0.0,
+                        self._block_class,
                     )
                 row["class"] = cls_val
                 out_rows.append(row)
@@ -11654,6 +11721,7 @@ class PleomorphicSurface:
                                 "phi": phi_c,
                                 "theta": theta_c,
                                 "psi": psi_c,
+                                "class": self._block_class,
                                 "n_support": int(len(near_global)),
                                 "n_real_support": _n_real,
                                 "angular_rms": angular_rms,
@@ -11842,6 +11910,7 @@ class PleomorphicSurface:
             data["phi"][k] = row["phi"]
             data["theta"][k] = row["theta"]
             data["psi"][k] = row["psi"]
+            data["class"][k] = float(row.get("class", self._block_class))
             data[self.block_type_column][k] = float(row.get("block_type", 1.0))
             data[self._origin_column][k] = 2.0
             _diag_rows.append({
@@ -12103,6 +12172,8 @@ class PleomorphicSurface:
                 row_base["y"] = float(C[1])
                 row_base["z"] = float(C[2])
                 row_base[self.source_block_count_column] = float(n_accepted)
+                _cand_cls = float(cand_row["class"]) if "class" in cand_row.index else 0.0
+                row_base["class"] = _cand_cls if _cand_cls != 0.0 else self._block_class
 
                 # Vectors from candidate to accepted neighbour centres: the bond directions.
                 V = ref_tomo_coords[accepted_local] - C
@@ -12660,6 +12731,8 @@ class PleomorphicSurface:
     def annotate_with_envelope(
         self,
         tomo_id: float | None = None,
+        method: Literal["projection", "intersection"] = "projection",
+        max_distance: float | None = None,
     ) -> pd.DataFrame:
         """Annotate blocks with their distance to the envelope surface.
 
@@ -12683,6 +12756,23 @@ class PleomorphicSurface:
         tomo_id : float or None, default=None
             Restrict blocks to this tomogram.  The surface itself is never
             filtered; the full envelope is queried for the selected blocks.
+        method : {"projection", "intersection"}, default="projection"
+            How to measure the distance from each block to the envelope.
+
+            ``"projection"`` (default) — shortest Euclidean distance to
+            anywhere on the surface, via :meth:`Mesh.distance_to_points`.
+            The nearest point can lie off to the side.
+
+            ``"intersection"`` — distance along the **inverted** block normal
+            (the axis pointing away from the block towards the membrane), via
+            :meth:`Mesh.cast_rays`.  Gives the standoff directly beneath the
+            block.  Blocks whose ray misses the surface entirely return NaN for
+            all output columns; the number of misses is printed to stdout.
+        max_distance : float or None, default=None
+            Maximum ray travel length for ``method="intersection"``.
+            When ``None`` the bounding-box diagonal of the envelope is used,
+            which is always large enough to reach any point on the surface.
+            Ignored for ``method="projection"``.
 
         Returns
         -------
@@ -12690,6 +12780,7 @@ class PleomorphicSurface:
             Columns: ``tomo_id``, ``block_id``, ``envelope_distance``,
             ``closest_x``, ``closest_y``, ``closest_z``, ``primitive_id``,
             ``normal_angle``, ``mean_curvature``, ``gaussian_curvature``.
+            For ``method="intersection"`` rows that missed are all-NaN.
 
         Raises
         ------
@@ -12715,34 +12806,104 @@ class PleomorphicSurface:
         z_unit = np.array([0.0, 0.0, 1.0])
         block_normals = np.array([R.apply(z_unit) for R in all_R])
 
-        result = envelope.distance_to_points(
-            q,
-            compute_occupancy=False,
-            compute_signed=False,
-            return_closest_points=True,
-        )
+        def _face_normals_from_vertex_normals(face_indices: np.ndarray) -> np.ndarray:
+            """Average vertex normals for the given triangle indices, normalised."""
+            tri_v = envelope.faces[face_indices]
+            fna = envelope.normals[tri_v].mean(axis=1)
+            fn_n = np.linalg.norm(fna, axis=1, keepdims=True)
+            return fna / np.where(fn_n > 1e-15, fn_n, 1.0)
 
-        distances = np.asarray(result["distances"])
-        closest_pts = np.asarray(result["closest_points"])
-        prim_ids = np.asarray(result["primitive_ids"], dtype=int)
+        if method == "projection":
+            result = envelope.distance_to_points(
+                q,
+                compute_occupancy=False,
+                compute_signed=False,
+                return_closest_points=True,
+            )
 
-        tri_verts = envelope.faces[prim_ids]
-        vert_normals = envelope.normals
-        face_normals_at_blocks = vert_normals[tri_verts].mean(axis=1)
-        fn_norm = np.linalg.norm(face_normals_at_blocks, axis=1, keepdims=True)
-        face_normals_at_blocks = face_normals_at_blocks / np.where(fn_norm > 1e-15, fn_norm, 1.0)
+            distances = np.asarray(result["distances"])
+            closest_pts = np.asarray(result["closest_points"])
+            prim_ids = np.asarray(result["primitive_ids"], dtype=int)
 
-        dots = np.clip(np.sum(block_normals * face_normals_at_blocks, axis=1), -1.0, 1.0)
-        normal_angles = np.degrees(np.arccos(dots))
+            face_normals_at_blocks = _face_normals_from_vertex_normals(prim_ids)
+            dots = np.clip(np.sum(block_normals * face_normals_at_blocks, axis=1), -1.0, 1.0)
+            normal_angles = np.degrees(np.arccos(dots))
 
-        try:
-            env_ps = PleomorphicSurface(envelope)
-            curv_table = env_ps._mesh_triangle_curvature_table()
-            mean_curv = curv_table["mean_curvature"][prim_ids]
-            gauss_curv = curv_table["gaussian_curvature"][prim_ids]
-        except Exception:
-            mean_curv = np.full(len(q), float("nan"))
-            gauss_curv = np.full(len(q), float("nan"))
+            try:
+                env_ps = PleomorphicSurface(envelope)
+                curv_table = env_ps._mesh_triangle_curvature_table()
+                mean_curv = curv_table["mean_curvature"][prim_ids]
+                gauss_curv = curv_table["gaussian_curvature"][prim_ids]
+            except Exception:
+                mean_curv = np.full(len(q), float("nan"))
+                gauss_curv = np.full(len(q), float("nan"))
+
+            return pd.DataFrame(
+                {
+                    tomo_col: blocks_df[tomo_col].values,
+                    "block_id": blocks_df["subtomo_id"].values,
+                    "envelope_distance": distances,
+                    "closest_x": closest_pts[:, 0],
+                    "closest_y": closest_pts[:, 1],
+                    "closest_z": closest_pts[:, 2],
+                    "primitive_id": prim_ids,
+                    "normal_angle": normal_angles,
+                    "mean_curvature": mean_curv,
+                    "gaussian_curvature": gauss_curv,
+                }
+            )
+
+        # ── intersection branch ───────────────────────────────────────────────
+        if max_distance is None:
+            v = np.asarray(envelope.vertices)
+            max_distance = float(np.linalg.norm(v.max(axis=0) - v.min(axis=0)))
+
+        directions = -block_normals * max_distance          # inverted normal, scaled
+        rays = np.hstack([q, directions]).astype(np.float32)  # (N, 6)
+        cast = envelope.cast_rays(rays)
+
+        t_hit = np.asarray(cast["t_hit"], dtype=float)
+        hit_points = np.asarray(cast["hit_points"], dtype=float)
+        prim_ids_raw = np.asarray(cast["primitive_ids"])
+
+        miss_mask = ~np.isfinite(t_hit)
+        hit_mask = ~miss_mask
+        n_miss = int(miss_mask.sum())
+        n_total = len(t_hit)
+        if n_miss:
+            print(
+                f"annotate_with_envelope (intersection): {n_miss} of {n_total} "
+                f"blocks missed the surface ({n_miss / n_total:.1%})."
+            )
+
+        # envelope_distance: t_hit already in world units from cast_rays; inf → NaN
+        distances = np.where(hit_mask, t_hit, float("nan"))
+
+        # closest points: hit_points already NaN for misses from cast_rays
+        closest_pts = hit_points
+
+        # primitive_id: float so NaN fits; invalid cast values for misses → NaN
+        prim_id_col = np.where(hit_mask, prim_ids_raw.astype(float), float("nan"))
+
+        # normal_angle: vertex-normal average, same construction as projection branch
+        normal_angles = np.full(n_total, float("nan"))
+        if hit_mask.any():
+            hit_prim_ids = prim_ids_raw[hit_mask].astype(int)
+            face_normals_at_hits = _face_normals_from_vertex_normals(hit_prim_ids)
+            dots = np.clip(np.sum(block_normals[hit_mask] * face_normals_at_hits, axis=1), -1.0, 1.0)
+            normal_angles[hit_mask] = np.degrees(np.arccos(dots))
+
+        # curvatures indexed by hit primitive
+        mean_curv = np.full(n_total, float("nan"))
+        gauss_curv = np.full(n_total, float("nan"))
+        if hit_mask.any():
+            try:
+                env_ps = PleomorphicSurface(envelope)
+                curv_table = env_ps._mesh_triangle_curvature_table()
+                mean_curv[hit_mask] = curv_table["mean_curvature"][prim_ids_raw[hit_mask].astype(int)]
+                gauss_curv[hit_mask] = curv_table["gaussian_curvature"][prim_ids_raw[hit_mask].astype(int)]
+            except Exception:
+                pass
 
         return pd.DataFrame(
             {
@@ -12752,7 +12913,7 @@ class PleomorphicSurface:
                 "closest_x": closest_pts[:, 0],
                 "closest_y": closest_pts[:, 1],
                 "closest_z": closest_pts[:, 2],
-                "primitive_id": prim_ids,
+                "primitive_id": prim_id_col,
                 "normal_angle": normal_angles,
                 "mean_curvature": mean_curv,
                 "gaussian_curvature": gauss_curv,
@@ -14401,14 +14562,14 @@ class PleomorphicSurface:
 
 
 class ParametricSurface:
-    """Wrapper around :class:`QuadricsM` for the ellipsoid particle-assignment workflow.
+    """Wrapper around :class:`AnalyticSurfacesM` for the ellipsoid particle-assignment workflow.
 
     Mirrors the static-method interface of the old ``PleomorphicSurface`` ellipsoid
     methods but as a proper class with instance state.
 
     Parameters
     ----------
-    quadrics : QuadricsM
+    surfaces : AnalyticSurfacesM
         Already-constructed container of analytic surfaces.
     column_name : MotlColumn, default='object_id'
         Column name used as the surface-object identifier (one fitted surface
@@ -14416,8 +14577,8 @@ class ParametricSurface:
         convention this is :data:`cryocat._types.MotlColumn`.
     """
 
-    def __init__(self, quadrics: QuadricsM, column_name: MotlColumn = "object_id") -> None:
-        self.quadrics = quadrics
+    def __init__(self, surfaces: AnalyticSurfacesM, column_name: MotlColumn = "object_id") -> None:
+        self.surfaces = surfaces
         self.column_name = column_name
 
     @classmethod
@@ -14435,7 +14596,7 @@ class ParametricSurface:
             Input particle list. One surface is fitted per unique
             ``(tomo_id, column_name)`` group.
         surface_type : {'ellipsoid'}, default='ellipsoid'
-            Quadric type; currently only ellipsoid is supported.
+            Analytic surface type; currently only ellipsoid is supported.
         column_name : MotlColumn, default='object_id'
             Column used to group particles.
 
@@ -14443,8 +14604,8 @@ class ParametricSurface:
         -------
         ParametricSurface
         """
-        quadrics = QuadricsM(input_motl, quadric=surface_type, feature_id=column_name)
-        return cls(quadrics, column_name=column_name)
+        surfaces = AnalyticSurfacesM(input_motl, surface_type=surface_type, feature_id=column_name)
+        return cls(surfaces, column_name=column_name)
 
     @classmethod
     def from_csv(
@@ -14460,7 +14621,7 @@ class ParametricSurface:
         path : PathOrStr
             Path to a CSV produced by :meth:`write_out`.
         surface_type : {'ellipsoid'}, default='ellipsoid'
-            Quadric type to materialise.
+            Analytic surface type to materialise.
         column_name : MotlColumn, default='object_id'
             Surface-object identifier column the file is keyed on.
 
@@ -14468,8 +14629,8 @@ class ParametricSurface:
         -------
         ParametricSurface
         """
-        quadrics = QuadricsM(path, quadric=surface_type, feature_id=column_name)
-        return cls(quadrics, column_name=column_name)
+        surfaces = AnalyticSurfacesM(path, surface_type=surface_type, feature_id=column_name)
+        return cls(surfaces, column_name=column_name)
 
     def write_out(self, output_path: PathOrStr) -> None:
         """Write the surface parameter table to *output_path* as CSV.
@@ -14479,7 +14640,7 @@ class ParametricSurface:
         output_path : PathOrStr
             Destination CSV file path.
         """
-        self.quadrics.write_out(output_path)
+        self.surfaces.write_out(output_path)
 
     def compute_point_surface_distance(
         self,

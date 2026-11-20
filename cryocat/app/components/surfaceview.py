@@ -103,9 +103,11 @@ def _vertex_field(psurf, color_by: str) -> np.ndarray | None:
     return None
 
 
-# Cache keyed by (surface_id, target_count) → (vertices_array, faces_array).
+# Cache keyed by (surface_id, target_count) →
+#   (decimated_vertices, decimated_faces, orig_vertex_index_map).
 # Survives across redraws so repeated layout changes don't re-decimate.
-_DECIM_CACHE: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
+# Stale 2-tuple entries from an older session are rebuilt on first access.
+_DECIM_CACHE: dict[tuple, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
 _DECIM_DEFAULT_THRESHOLD = 50_000
 
@@ -139,9 +141,11 @@ def _mesh_traces(
         When True, render the mesh slightly more opaque to mark it as selected.
     intensity : numpy.ndarray, optional
         Per-vertex scalar field for color-by. Shape ``(N,)`` matching the
-        mesh's vertex count; renders via ``go.Mesh3d(intensity=...,
+        **original** mesh vertex count; renders via ``go.Mesh3d(intensity=...,
         intensitymode="vertex", colorscale=...)``. Falls back to the flat
-        ``color`` when None or shape-mismatched.
+        ``color`` when None or length-mismatched against the original count.
+        When the mesh is decimated the field is mapped onto the decimated
+        vertices by nearest-original-vertex lookup (see :data:`_DECIM_CACHE`).
     colorscale : str, default="RdBu_r"
         Plotly colorscale name used when ``intensity`` is provided.
     surface_id : str, optional
@@ -159,23 +163,35 @@ def _mesh_traces(
     if v.size == 0 or f.size == 0:
         return [], ""
 
+    # Record original vertex count BEFORE any decimation so the intensity
+    # length check later tests what it is meant to test.
+    n_orig_v = len(v)
     notice = ""
     n_original = len(f)
     threshold = max_triangles if max_triangles and max_triangles > 0 else None
+    # Per-decimated-vertex index of the nearest original vertex; None when the
+    # mesh was not decimated or when decimation is not possible.
+    decim_idx: np.ndarray | None = None
     if threshold is not None and n_original > threshold:
         cache_key = (surface_id, threshold)
-        if cache_key in _DECIM_CACHE:
-            v, f = _DECIM_CACHE[cache_key]
+        cached = _DECIM_CACHE.get(cache_key)
+        if cached is not None and len(cached) == 3:
+            v, f, decim_idx = cached
         else:
+            # Cached entry is absent or a stale 2-tuple — (re)build.
             try:
                 import open3d as _o3d
+                from scipy.spatial import KDTree as _KDTree
+                v_orig = v
                 o3d_mesh = _o3d.geometry.TriangleMesh()
-                o3d_mesh.vertices = _o3d.utility.Vector3dVector(v)
+                o3d_mesh.vertices = _o3d.utility.Vector3dVector(v_orig)
                 o3d_mesh.triangles = _o3d.utility.Vector3iVector(f)
                 o3d_mesh = o3d_mesh.simplify_quadric_decimation(threshold)
-                v = np.asarray(o3d_mesh.vertices)
-                f = np.asarray(o3d_mesh.triangles)
-                _DECIM_CACHE[cache_key] = (v, f)
+                v_new = np.asarray(o3d_mesh.vertices)
+                f_new = np.asarray(o3d_mesh.triangles)
+                _, idx_new = _KDTree(v_orig).query(v_new)
+                v, f, decim_idx = v_new, f_new, idx_new.astype(np.intp)
+                _DECIM_CACHE[cache_key] = (v, f, decim_idx)
             except Exception:
                 pass
         if len(f) < n_original:
@@ -189,7 +205,11 @@ def _mesh_traces(
         hoverinfo="name",
         flatshading=True,
     )
-    if intensity is not None and len(intensity) == v.shape[0]:
+    # Validate against the ORIGINAL vertex count; a mismatch here is a genuine
+    # caller error and should fall back to flat colour.
+    if intensity is not None and len(intensity) == n_orig_v:
+        # Percentiles come from the full original array so the colour range is
+        # independent of the decimation level (G3).
         finite = np.isfinite(intensity)
         if finite.any():
             if cmin is None:
@@ -202,6 +222,9 @@ def _mesh_traces(
                 vmax = float(cmax)
             if vmin == vmax:
                 vmax = vmin + 1.0
+            # Map onto the decimated vertex set before handing off to Plotly.
+            if decim_idx is not None:
+                intensity = intensity[decim_idx]
             kw.update(
                 intensity=intensity.tolist(),
                 intensitymode="vertex",

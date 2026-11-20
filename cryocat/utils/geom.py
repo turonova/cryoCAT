@@ -4012,28 +4012,36 @@ def normalize_vector(vector: ArrayLike) -> np.ndarray:
     return vector / np.linalg.norm(vector)
 
 
-def normalize_vectors(v: np.ndarray) -> np.ndarray:
+def normalize_vectors(v: np.ndarray, atol: float = 1e-15) -> np.ndarray:
     """Normalize each vector, handling both single vectors and arrays of vectors.
-
+ 
     Parameters
     ----------
     v : ndarray (n,d)
-
+        Vectors to normalize.
+    atol : float, default=1e-15
+        Vectors whose norm does not exceed this value are returned as zero
+        vectors rather than as ``nan``, so that a caller testing the result's
+        magnitude can discard them.
+ 
     Returns
     -------
     ndarray (n,d)
         Array of normalized vectors.
-
+ 
     Examples
     --------
     >>> import numpy as np
     >>> v = np.array([[1, 2, 3], [4, 5, 6]])
     >>> normalize_vectors(v)
-    array([[0.26726124, 0.53452248, 0.80178373],^
-              [0.45584231, 0.56980288, 0.68376346]])
+    array([[0.26726124, 0.53452248, 0.80178373],
+           [0.45584231, 0.56980288, 0.68376346]])
+    >>> normalize_vectors(np.array([[0.0, 0.0, 0.0]]))
+    array([[0., 0., 0.]])
     """
+    v = np.asarray(v, dtype=float)
     norm = np.linalg.norm(v, axis=-1, keepdims=True)
-    return v / norm
+    return np.divide(v, norm, out=np.zeros_like(v), where=norm > atol)
 
 
 # TODO: This function should not be necessary due to "angle_between_vectors"
@@ -4116,53 +4124,222 @@ def vector_angular_distance_signed(
     u: ArrayLike,
     v: ArrayLike,
     n: ArrayLike | None = None,
-) -> float:
+) -> float | np.ndarray:
     """Compute the signed angular distance between two vectors.
-
+ 
     Parameters
     ----------
     u : ArrayLike
-        First input vector.
+        First input vector, or ``(K, 3)`` vectors.
     v : ArrayLike
-        Second input vector.
+        Second input vector, or ``(K, 3)`` vectors.  Broadcast against *u*.
     n : ArrayLike, optional
-        Normal vector to the plane containing `u` and `v`. If not provided, the function
-        computes the unsigned angular distance.
-
+        Normal vector to the plane containing `u` and `v`, or one per pair. If
+        not provided, the function computes the unsigned angular distance.
+ 
     Returns
     -------
-    float
-        The signed angular distance between vectors `u` and `v`. This is the angle in radians
-        between the two vectors, signed according to the direction given by `n`. If `n` is not
-        provided, the result is the unsigned angle.
-
+    float or ndarray
+        The signed angular distance in radians between vectors `u` and `v`,
+        signed according to the direction given by `n`. If `n` is not
+        provided, the result is the unsigned angle. A float when every input
+        is a single vector, otherwise one angle per pair.
+ 
     Notes
     -----
     The signed angle is computed based on the right-hand rule. If `n` is provided, the sign
     of the angle is determined by the direction of `n` relative to the cross product of `u` and `v`.
     If `n` is not provided, the function returns the magnitude of the angle only.
-
+ 
     Examples
     --------
     >>> u = np.array([1, 0, 0])
     >>> v = np.array([0, 1, 0])
     >>> vector_angular_distance_signed(u, v)
     1.5707963267948966  # 90 degrees in radians
-
+ 
     >>> n = np.array([0, 0, 1])
     >>> vector_angular_distance_signed(u, v, n)
     1.5707963267948966  # 90 degrees in radians, positive as per right-hand rule with `n` as z-axis
-
+ 
     >>> n = np.array([0, 0, -1])
     >>> vector_angular_distance_signed(u, v, n)
     -1.5707963267948966  # 90 degrees in radians, negative as per right-hand rule with `n` as -z-axis
+ 
+    >>> vectors = np.array([[0, 1, 0], [0, -1, 0]])
+    >>> np.degrees(vector_angular_distance_signed(u, vectors, n))
+    array([ 90., -90.])
     """
-
+    single = np.ndim(u) == 1 and np.ndim(v) == 1 and (n is None or np.ndim(n) == 1)
+ 
+    u = np.atleast_2d(np.asarray(u, dtype=float))
+    v = np.atleast_2d(np.asarray(v, dtype=float))
+ 
+    cross = np.cross(u, v)
+    cosines = np.sum(u * v, axis=-1)
+ 
     if n is None:
-        return np.arctan2(np.linalg.norm(np.cross(u, v)), np.dot(u, v))
+        sines = np.linalg.norm(cross, axis=-1)
     else:
-        return np.arctan2(np.dot(n, np.cross(u, v)), np.dot(u, v))
+        n = np.atleast_2d(np.asarray(n, dtype=float))
+        sines = np.sum(n * cross, axis=-1)
+ 
+    angles = np.arctan2(sines, cosines)
+ 
+    return float(angles[0]) if single else angles
 
+def circular_mean_n_fold(
+    angles: ArrayLike,
+    n: int,
+    reference: float | None = None,
+) -> float:
+    """Mean of angles that are equivalent under n-fold rotation.
+ 
+    Angles describing directions on an n-fold symmetric object are only
+    defined up to a multiple of ``2*pi/n``, so averaging them directly is
+    meaningless.  This function maps each angle onto the unit circle
+    multiplied by *n*, where the n-fold ambiguity cancels, averages there,
+    and divides the argument of the result by *n*.
+ 
+    Parameters
+    ----------
+    angles : ArrayLike
+        Angles in radians, one per observation.
+    n : int
+        Order of the rotational symmetry.  ``n = 1`` reduces to an ordinary
+        circular mean.
+    reference : float, optional
+        Angle in radians.  When given, the result is shifted by whichever
+        multiple of ``2*pi/n`` brings it closest to *reference*.  Without it
+        the result lies in ``(-pi/n, pi/n]``.
+ 
+    Returns
+    -------
+    float
+        Mean angle in radians, or ``numpy.nan`` when the angles cancel and no
+        mean direction exists, for example two observations exactly ``pi/n``
+        apart.
+ 
+    Raises
+    ------
+    ValueError
+        If *n* is smaller than 1, or *angles* is empty.
+ 
+    Notes
+    -----
+    The n-fold fold is what makes this differ from a plain circular mean: for
+    a C3 object, angles of 10, 130 and 250 degrees all describe the same
+    orientation and average to 10 degrees, not to 130.
+ 
+    Examples
+    --------
+    >>> import numpy as np
+    >>> np.degrees(circular_mean_n_fold(np.radians([10.0, 130.0, 250.0]), 3))
+    10.000000000000002
+    >>> np.degrees(circular_mean_n_fold(np.radians([8.0, 12.0]), 3))
+    10.0
+    """
+    angles = np.atleast_1d(np.asarray(angles, dtype=float))
+    if n < 1:
+        raise ValueError(f"n has to be at least 1, got {n}.")
+    if angles.size == 0:
+        raise ValueError("angles is empty; at least one angle is required.")
+ 
+    resultant = np.mean(np.exp(1j * float(n) * angles))
+    if abs(resultant) < 1e-9:
+        return float("nan")
+ 
+    mean_angle = float(np.angle(resultant) / float(n))
+ 
+    if reference is not None:
+        step = 2.0 * np.pi / float(n)
+        mean_angle += round((float(reference) - mean_angle) / step) * step
+ 
+    return mean_angle
+
+def cn_pairwise_angular_residuals(
+    vectors: np.ndarray,
+    cyclic_symmetry: Symmetry,
+    degrees: bool = True,
+) -> np.ndarray:
+    """How far a set of directions departs from an ideal Cn arrangement.
+ 
+    On an object with Cn symmetry the directions to equivalent sites are
+    separated by whole multiples of ``360/n``.  For every pair of *vectors*
+    this returns the distance from their separation to the nearest such
+    multiple, so a set that matches the symmetry gives residuals near zero.
+ 
+    The nearest multiple is never taken as zero: two directions that nearly
+    coincide are not a valid Cn pair, and their residual is measured against
+    one full step instead, which makes them fail any sensible tolerance.
+ 
+    Parameters
+    ----------
+    vectors : ndarray (K, 3)
+        Directions to the sites, expected to be roughly coplanar — for
+        instance site directions already projected onto the plane
+        perpendicular to the symmetry axis.  Need not be unit length.
+    cyclic_symmetry : Symmetry
+        Cyclic symmetry specifier (``"Cn"`` or ``n``); normalized via
+        :func:`as_symmetry`.  Must specify an order greater than 1.
+    degrees : bool, default=True
+        Whether the returned residuals are in degrees or radians.
+ 
+    Returns
+    -------
+    ndarray
+        One residual per pair, for pairs ``(0,1), (0,2), …, (1,2), …`` in that
+        order — ``K*(K-1)/2`` values, empty for fewer than two vectors.
+ 
+    Raises
+    ------
+    NotImplementedError
+        If *cyclic_symmetry* is not cyclic.
+    ValueError
+        If the symmetry order is not greater than 1.
+ 
+    Notes
+    -----
+    Separations are unsigned, so the result does not depend on the order of
+    the vectors within a pair, nor on which side of the plane they are seen
+    from.
+ 
+    Examples
+    --------
+    >>> import numpy as np
+    >>> ideal = np.array([[1.0, 0.0, 0.0], [-0.5, np.sqrt(3) / 2, 0.0], [-0.5, -np.sqrt(3) / 2, 0.0]])
+    >>> np.round(cn_pairwise_angular_residuals(ideal, "C3"), 6)
+    array([0., 0., 0.])
+    >>> # two directions 10 degrees apart are not a C3 pair
+    >>> pair = np.array([[1.0, 0.0, 0.0], [np.cos(np.radians(10)), np.sin(np.radians(10)), 0.0]])
+    >>> np.round(cn_pairwise_angular_residuals(pair, "C3"), 6)
+    array([110.])
+    """
+    require_cyclic_symmetry(cyclic_symmetry, "Cn pairwise angular residuals")
+    _, order = as_symmetry(cyclic_symmetry)
+    if order <= 1:
+        raise ValueError(f"Cyclic symmetry order has to be greater than 1, got {order}.")
+ 
+    vectors = np.atleast_2d(np.asarray(vectors, dtype=float))
+    if len(vectors) < 2:
+        return np.empty(0, dtype=float)
+ 
+    vectors = normalize_vectors(vectors)
+ 
+    first, second = np.triu_indices(len(vectors), k=1)
+    cosines = np.clip(np.sum(vectors[first] * vectors[second], axis=-1), -1.0, 1.0)
+    separations = np.arccos(cosines)
+ 
+    step = 2.0 * np.pi / float(order)
+    if degrees:
+        separations = np.degrees(separations)
+        step = 360.0 / float(order)
+ 
+    # Never match a pair to zero separation: coincident directions are not a
+    # valid Cn pair and must fail the caller's tolerance.
+    nearest = np.maximum(1.0, np.round(separations / step))
+ 
+    return np.abs(separations - nearest * step)
 
 def oversample_spline(coords: np.ndarray, target_spacing: float) -> np.ndarray:
     """Fit a spline through 3D coordinates and oversample so that the distance between points is approximately `target_spacing`.

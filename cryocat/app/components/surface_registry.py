@@ -45,13 +45,19 @@ class SurfaceHandle:
 
 
 def _mesh_has_curvatures(mesh) -> bool:
-    """True iff per-vertex curvature fields are populated on ``mesh``.
+    """True iff any per-vertex curvature field is populated on ``mesh``.
 
     :meth:`Mesh.compute_curvatures` and :meth:`Mesh.read_curvatures` both
-    populate the private ``_mean_curvature`` / ``_principal_curvatures``
-    attributes; we check the cheaper of the two.
+    populate some subset of the private curvature attributes.  A VTP written
+    with ``include_curvatures=True`` always has at least ``_principal_curvatures``
+    (k1/k2), but may not have ``_mean_curvature`` as a separate array.  Checking
+    only ``_mean_curvature`` would block coloring for such files.
     """
-    return getattr(mesh, "_mean_curvature", None) is not None
+    return (
+        getattr(mesh, "_mean_curvature", None) is not None
+        or getattr(mesh, "_principal_curvatures", None) is not None
+        or getattr(mesh, "_gaussian_curvature", None) is not None
+    )
 
 
 def _has_hit_counts(surface) -> bool:

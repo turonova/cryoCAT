@@ -1430,6 +1430,7 @@ class NearestNeighbors:
     def get_angular_distances(
         self,
         rotation_type: RotationDistanceType = "angular_distance",
+        add_to_df: bool = False,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return per-pair angular distances between qp and nn orientations.
 
@@ -1439,6 +1440,15 @@ class NearestNeighbors:
             One of ``{"all", "angular_distance", "cone_distance",
             "in_plane_distance"}``.  ``"all"`` returns a tuple of three
             arrays.
+        add_to_df : bool, default=False
+            When ``True``, write the result into ``self.df``:
+
+            * ``rotation_type="all"`` → columns ``angular_distance``,
+              ``cone_distance``, ``in_plane_distance`` (in that order).
+            * any single *rotation_type* → one column named by the
+              *rotation_type* value itself.
+
+            Existing columns of those names are overwritten.
 
         Returns
         -------
@@ -1446,11 +1456,19 @@ class NearestNeighbors:
             Angular distances in degrees.  Shape ``(N,)`` for a single type;
             tuple of three ``(N,)`` arrays for ``"all"``.
         """
-        return angular_distances(
+        result = angular_distances(
             self.df[self._QP_ANGLE_COLS].to_numpy(),
             self.df[self._NN_ANGLE_COLS].to_numpy(),
             rotation_type=rotation_type,
         )
+        if add_to_df:
+            if rotation_type == "all":
+                self.df["angular_distance"] = result[0]
+                self.df["cone_distance"] = result[1]
+                self.df["in_plane_distance"] = result[2]
+            else:
+                self.df[rotation_type] = result
+        return result
 
     def to_stats_dataframe(
         self,
