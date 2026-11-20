@@ -745,7 +745,7 @@ def trace_faces(
     block: np.ndarray,
     site: np.ndarray,
     n_sites: np.ndarray,
-) -> np.ndarray:
+) -> tuple[np.ndarray, dict[int, list[int]]]:
     """Assign face IDs to half-edges by walking the contact graph.
 
     A face is a closed cycle obtained by repeatedly crossing a contact and
@@ -767,11 +767,15 @@ def trace_faces(
 
     Returns
     -------
-    numpy.ndarray, shape (H,), dtype int
+    face : numpy.ndarray, shape (H,), dtype int
         ``face[h]`` is −1 for boundary half-edges, or a positive integer
         identifying the closed face that contains ``h``.  Face IDs are
         assigned in traversal order (first closed face found gets id 1,
         second gets 2, …).
+    walks : dict[int, list[int]]
+        Maps each closed face ID to its half-edge indices in walk order,
+        starting from the lowest-index half-edge of that face.  Boundary
+        paths are not included.
 
     Notes
     -----
@@ -785,6 +789,7 @@ def trace_faces(
     H = len(partner)
     lookup: dict[tuple[int, int], int] = {(int(block[h]), int(site[h])): h for h in range(H)}
     face = np.full(H, -2, dtype=np.intp)
+    walks: dict[int, list[int]] = {}
     next_id = 1
     for start in range(H):
         if face[start] != -2:
@@ -811,8 +816,9 @@ def trace_faces(
         arr = np.array(walk, dtype=np.intp)
         face[arr] = next_id if closed else -1
         if closed:
+            walks[next_id] = walk
             next_id += 1
-    return face
+    return face, walks
 
 
 def _opposite_distances(order_to_coord: "dict[float, np.ndarray]", n: int) -> "dict[float, float]":
@@ -7742,6 +7748,7 @@ class PleomorphicSurface:
         self._source_id_column: MotlColumn = "geom4"
         self._added: cryomotl.Motl | None = None
         self._all_state: dict | None = None
+        self._face_method: str = "cycle_basis"
         self.max_cycle_length: int = 25
         self.bonding_tolerance: float | None = None
         self.tip_tolerance: float | None = None
@@ -7782,6 +7789,7 @@ class PleomorphicSurface:
                 self._source_id_column = surface._source_id_column
                 self._added = copy.deepcopy(surface._added)
                 self._all_state = copy.deepcopy(surface._all_state)
+                self._face_method = surface._face_method
                 self.max_cycle_length = surface.max_cycle_length
                 self.bonding_tolerance = surface.bonding_tolerance
                 self.tip_tolerance = surface.tip_tolerance
@@ -8513,14 +8521,14 @@ class PleomorphicSurface:
         self,
         max_distance: float,
         *,
+        face_method: Literal["cycle_basis", "traversal"] = "cycle_basis",
         scope: str = "original",
     ) -> None:
         """Build and cache the contact graph from the block layer.
 
         Matches sites across blocks within *max_distance* voxels, assigns
-        each block to a connected-component assembly, and computes faces as
-        the minimum cycle basis of the block contact graph (weighted by
-        centre-to-centre distance).
+        each block to a connected-component assembly, and computes faces using
+        the selected method.
 
         After calling this method the following getters become available:
         :meth:`get_contact_stats`, :meth:`get_face_stats`,
@@ -8531,6 +8539,21 @@ class PleomorphicSurface:
         max_distance : float
             Upper bound on site tip-to-tip distance (voxels).  Two contact
             points bond when they are within this distance of each other.
+        face_method : {'cycle_basis', 'traversal'}, default='cycle_basis'
+            Algorithm used to assign half-edges to faces.
+
+            ``'cycle_basis'`` uses NetworkX :func:`minimum_cycle_basis` on the
+            block contact graph (weighted by centre-to-centre distance) and
+            applies the ``max_cycle_length`` filter.  This is the default and
+            reproduces published results exactly.
+
+            ``'traversal'`` uses the rotation-system walk in
+            :func:`trace_faces`, which is linear in the number of half-edges.
+            Half-edges that form open paths are labelled boundary (face −1).
+            ``max_cycle_length`` is not consulted by this method.
+
+            The chosen method is stored on the instance and reused whenever the
+            ``scope='all'`` state is rebuilt.
         scope : str, default=``'original'``
             ``'original'`` connects using :attr:`blocks` only and stores
             the result in the instance's primary contact-graph slots
@@ -8552,15 +8575,20 @@ class PleomorphicSurface:
         Raises
         ------
         ValueError
-            If no block layer is present, or *scope* is not ``'original'``
-            or ``'all'``.
+            If no block layer is present, *scope* is not ``'original'`` or
+            ``'all'``, or *face_method* is not a recognised value.
         """
+        if face_method not in ("cycle_basis", "traversal"):
+            raise ValueError(
+                f"face_method must be 'cycle_basis' or 'traversal', got {face_method!r}."
+            )
         if scope not in ("original", "all"):
             raise ValueError(f"connect() scope must be 'original' or 'all', got {scope!r}.")
         if self.blocks is None:
             raise ValueError("connect() requires a block layer (blocks=...).")
+        self._face_method = face_method
         _blks = self._blocks_for_scope(scope)
-        self._connect_impl(max_distance, scope=scope, blocks=_blks)
+        self._connect_impl(max_distance, scope=scope, blocks=_blks, face_method=face_method)
         if scope == "original":
             self._all_state = None
 
@@ -8570,6 +8598,7 @@ class PleomorphicSurface:
         *,
         scope: str = "original",
         blocks: "cryomotl.Motl | None" = None,
+        face_method: str = "cycle_basis",
     ) -> "tuple[pd.DataFrame, list[dict], cryomotl.Motl]":
         """Internal connect logic; *blocks* is the motl to connect (defaults to ``self.blocks``)."""
         _blks = blocks if blocks is not None else self.blocks
@@ -8760,228 +8789,231 @@ class PleomorphicSurface:
             for local_i, global_i in enumerate(t_idx):
                 assembly_id_arr[global_i] = float(block_assembly.get(block_t[local_i], -1))
 
-            # Node ids are plain Python ints — numpy integers can break networkx.
-            from collections import deque as _deque
+            face_local = np.full(n_t, -1, dtype=np.intp)
+            face_walks: dict[int, list[int]] = {}
 
-            G_faces = _nx.Graph()
-            he_lookup: dict[tuple[int, int], int] = {}  # (block_a, block_b) → local_i
-            for local_i in range(n_t):
-                p = int(partner_local[local_i])
-                if p >= 0:
-                    ba = int(block_t[local_i])
-                    bb = int(block_t[p])
-                    he_lookup[(ba, bb)] = local_i
-                    if not G_faces.has_edge(ba, bb):
-                        dist = float(np.linalg.norm(cc_arr[p] - cc_arr[local_i]))
-                        G_faces.add_edge(ba, bb, weight=dist)
-
-            cycles_to_assign = [
-                _c for _c in _nx.minimum_cycle_basis(G_faces, weight="weight")
-                if len(_c) <= self.max_cycle_length
-            ]
-            n_mcb = len(cycles_to_assign)
-
-            _block_center: dict[int, np.ndarray] = {}
-            for _li in range(n_t):
-                _bid = int(block_t[_li])
-                if _bid not in _block_center:
-                    _block_center[_bid] = cc_arr[_li]
-
-            def _cycle_area_3d(_nodes: list) -> float:
-                _pts = np.array([_block_center.get(int(_n), np.zeros(3)) for _n in _nodes])
-                _c = _pts.mean(0)
-                _n = len(_pts)
-                _av = np.zeros(3)
-                for _ii in range(_n):
-                    _av += np.cross(_pts[_ii] - _c, _pts[(_ii + 1) % _n] - _c)
-                return float(np.linalg.norm(_av)) / 2.0
-
-            _cycle_areas = [_cycle_area_3d(_cn) for _cn in cycles_to_assign]
-
-            fwd_edges: list[set[tuple[int, int]]] = []
-            for _cn in cycles_to_assign:
-                _nc = len(_cn)
-                fwd_edges.append({(int(_cn[k]), int(_cn[(k + 1) % _nc])) for k in range(_nc)})
-            edge_to_fwd: dict[tuple[int, int], list[int]] = {}
-            for _ci, _fe in enumerate(fwd_edges):
-                for _e in _fe:
-                    edge_to_fwd.setdefault(_e, []).append(_ci)
-
-            def _run_bfs(_mask: list[bool]) -> list[bool | None]:
-                _ori: list[bool | None] = [None] * n_mcb
-                _q: _deque[int] = _deque()
-                for _s in range(n_mcb):
-                    if not _mask[_s] or _ori[_s] is not None:
-                        continue
-                    _ori[_s] = True
-                    _q.append(_s)
-                    while _q:
-                        _c = _q.popleft()
-                        _mdir: set[tuple[int, int]] = (
-                            fwd_edges[_c] if _ori[_c] else {(_b, _a) for (_a, _b) in fwd_edges[_c]}
-                        )
-                        for _a, _b in _mdir:
-                            for _adj in edge_to_fwd.get((_b, _a), []):
-                                if _adj != _c and _mask[_adj] and _ori[_adj] is None:
-                                    _ori[_adj] = True
-                                    _q.append(_adj)
-                            for _adj in edge_to_fwd.get((_a, _b), []):
-                                if _adj != _c and _mask[_adj] and _ori[_adj] is None:
-                                    _ori[_adj] = False
-                                    _q.append(_adj)
-                return _ori
-
-            _all_face: list[bool] = [True] * n_mcb
-            _ori_p1 = _run_bfs(_all_face)
-
-            _he_claimed_p1: dict[int, int] = {}
-            _has_conflict_p1 = False
-            _conflict_pair: tuple[int, int] = (-1, -1)
-            for _ci, _cn in enumerate(cycles_to_assign):
-                _nc = len(_cn)
-                _d = _cn if _ori_p1[_ci] else list(reversed(_cn))
-                for _i in range(_nc):
-                    _ba = int(_d[_i])
-                    _bb = int(_d[(_i + 1) % _nc])
-                    _he = he_lookup.get((_ba, _bb))
-                    if _he is not None:
-                        if _he in _he_claimed_p1:
-                            _has_conflict_p1 = True
-                            _conflict_pair = (_he_claimed_p1[_he], _ci)
-                            break
-                        _he_claimed_p1[_he] = _ci
-                if _has_conflict_p1:
-                    break
-
-            def _check_conflicts(_fm: list[bool], _ori: list[bool | None]) -> bool:
-                _hc: dict[int, int] = {}
-                for _ci2, _cn2 in enumerate(cycles_to_assign):
-                    if not _fm[_ci2]:
-                        continue
-                    _nc2 = len(_cn2)
-                    _d2 = _cn2 if _ori[_ci2] else list(reversed(_cn2))
-                    for _i2 in range(_nc2):
-                        _ba2 = int(_d2[_i2])
-                        _bb2 = int(_d2[(_i2 + 1) % _nc2])
-                        _he2 = he_lookup.get((_ba2, _bb2))
-                        if _he2 is not None:
-                            if _he2 in _hc:
-                                return True
-                            _hc[_he2] = _ci2
-                return False
-
-            if not _has_conflict_p1:
-                _face_mask: list[bool] = _all_face
-                orientation: list[bool | None] = _ori_p1
+            if face_method == "traversal":
+                face_local, face_walks = trace_faces(partner_local, block_t, site_t, n_sites_t)
             else:
-                _cf, _cs = _conflict_pair
-                _pair_order = sorted([_cf, _cs], key=lambda _i: _cycle_areas[_i], reverse=True)
-                _topo_loop_set: set[int] = set()
-                orientation = _ori_p1
-                _face_mask = _all_face
-                _resolved = False
-                for _cand in _pair_order:
-                    _fm_try: list[bool] = [_ci != _cand for _ci in range(n_mcb)]
-                    _ori_try = _run_bfs(_fm_try)
-                    if not _check_conflicts(_fm_try, _ori_try):
-                        _face_mask = _fm_try
-                        orientation = _ori_try
-                        _topo_loop_set = {_cand}
-                        _resolved = True
+                # Node ids are plain Python ints — numpy integers can break networkx.
+                from collections import deque as _deque
+
+                G_faces = _nx.Graph()
+                he_lookup: dict[tuple[int, int], int] = {}  # (block_a, block_b) → local_i
+                for local_i in range(n_t):
+                    p = int(partner_local[local_i])
+                    if p >= 0:
+                        ba = int(block_t[local_i])
+                        bb = int(block_t[p])
+                        he_lookup[(ba, bb)] = local_i
+                        if not G_faces.has_edge(ba, bb):
+                            dist = float(np.linalg.norm(cc_arr[p] - cc_arr[local_i]))
+                            G_faces.add_edge(ba, bb, weight=dist)
+
+                cycles_to_assign = [
+                    _c for _c in _nx.minimum_cycle_basis(G_faces, weight="weight")
+                    if len(_c) <= self.max_cycle_length
+                ]
+                n_mcb = len(cycles_to_assign)
+
+                _block_center: dict[int, np.ndarray] = {}
+                for _li in range(n_t):
+                    _bid = int(block_t[_li])
+                    if _bid not in _block_center:
+                        _block_center[_bid] = cc_arr[_li]
+
+                def _cycle_area_3d(_nodes: list) -> float:
+                    _pts = np.array([_block_center.get(int(_n), np.zeros(3)) for _n in _nodes])
+                    _c = _pts.mean(0)
+                    _n = len(_pts)
+                    _av = np.zeros(3)
+                    for _ii in range(_n):
+                        _av += np.cross(_pts[_ii] - _c, _pts[(_ii + 1) % _n] - _c)
+                    return float(np.linalg.norm(_av)) / 2.0
+
+                _cycle_areas = [_cycle_area_3d(_cn) for _cn in cycles_to_assign]
+
+                fwd_edges: list[set[tuple[int, int]]] = []
+                for _cn in cycles_to_assign:
+                    _nc = len(_cn)
+                    fwd_edges.append({(int(_cn[k]), int(_cn[(k + 1) % _nc])) for k in range(_nc)})
+                edge_to_fwd: dict[tuple[int, int], list[int]] = {}
+                for _ci, _fe in enumerate(fwd_edges):
+                    for _e in _fe:
+                        edge_to_fwd.setdefault(_e, []).append(_ci)
+
+                def _run_bfs(_mask: list[bool]) -> list[bool | None]:
+                    _ori: list[bool | None] = [None] * n_mcb
+                    _q: _deque[int] = _deque()
+                    for _s in range(n_mcb):
+                        if not _mask[_s] or _ori[_s] is not None:
+                            continue
+                        _ori[_s] = True
+                        _q.append(_s)
+                        while _q:
+                            _c = _q.popleft()
+                            _mdir: set[tuple[int, int]] = (
+                                fwd_edges[_c] if _ori[_c] else {(_b, _a) for (_a, _b) in fwd_edges[_c]}
+                            )
+                            for _a, _b in _mdir:
+                                for _adj in edge_to_fwd.get((_b, _a), []):
+                                    if _adj != _c and _mask[_adj] and _ori[_adj] is None:
+                                        _ori[_adj] = True
+                                        _q.append(_adj)
+                                for _adj in edge_to_fwd.get((_a, _b), []):
+                                    if _adj != _c and _mask[_adj] and _ori[_adj] is None:
+                                        _ori[_adj] = False
+                                        _q.append(_adj)
+                    return _ori
+
+                _all_face: list[bool] = [True] * n_mcb
+                _ori_p1 = _run_bfs(_all_face)
+
+                _he_claimed_p1: dict[int, int] = {}
+                _has_conflict_p1 = False
+                _conflict_pair: tuple[int, int] = (-1, -1)
+                for _ci, _cn in enumerate(cycles_to_assign):
+                    _nc = len(_cn)
+                    _d = _cn if _ori_p1[_ci] else list(reversed(_cn))
+                    for _i in range(_nc):
+                        _ba = int(_d[_i])
+                        _bb = int(_d[(_i + 1) % _nc])
+                        _he = he_lookup.get((_ba, _bb))
+                        if _he is not None:
+                            if _he in _he_claimed_p1:
+                                _has_conflict_p1 = True
+                                _conflict_pair = (_he_claimed_p1[_he], _ci)
+                                break
+                            _he_claimed_p1[_he] = _ci
+                    if _has_conflict_p1:
                         break
-                if not _resolved:
-                    _area_order = sorted(range(n_mcb), key=lambda _i: _cycle_areas[_i], reverse=True)
-                    _topo_loop_set = set()
-                    for _candidate in _area_order:
-                        _topo_loop_set.add(_candidate)
-                        _fm_try = [_ci not in _topo_loop_set for _ci in range(n_mcb)]
+
+                def _check_conflicts(_fm: list[bool], _ori: list[bool | None]) -> bool:
+                    _hc: dict[int, int] = {}
+                    for _ci2, _cn2 in enumerate(cycles_to_assign):
+                        if not _fm[_ci2]:
+                            continue
+                        _nc2 = len(_cn2)
+                        _d2 = _cn2 if _ori[_ci2] else list(reversed(_cn2))
+                        for _i2 in range(_nc2):
+                            _ba2 = int(_d2[_i2])
+                            _bb2 = int(_d2[(_i2 + 1) % _nc2])
+                            _he2 = he_lookup.get((_ba2, _bb2))
+                            if _he2 is not None:
+                                if _he2 in _hc:
+                                    return True
+                                _hc[_he2] = _ci2
+                    return False
+
+                if not _has_conflict_p1:
+                    _face_mask: list[bool] = _all_face
+                    orientation: list[bool | None] = _ori_p1
+                else:
+                    _cf, _cs = _conflict_pair
+                    _pair_order = sorted([_cf, _cs], key=lambda _i: _cycle_areas[_i], reverse=True)
+                    _topo_loop_set: set[int] = set()
+                    orientation = _ori_p1
+                    _face_mask = _all_face
+                    _resolved = False
+                    for _cand in _pair_order:
+                        _fm_try: list[bool] = [_ci != _cand for _ci in range(n_mcb)]
                         _ori_try = _run_bfs(_fm_try)
                         if not _check_conflicts(_fm_try, _ori_try):
                             _face_mask = _fm_try
                             orientation = _ori_try
+                            _topo_loop_set = {_cand}
+                            _resolved = True
                             break
+                    if not _resolved:
+                        _area_order = sorted(range(n_mcb), key=lambda _i: _cycle_areas[_i], reverse=True)
+                        _topo_loop_set = set()
+                        for _candidate in _area_order:
+                            _topo_loop_set.add(_candidate)
+                            _fm_try = [_ci not in _topo_loop_set for _ci in range(n_mcb)]
+                            _ori_try = _run_bfs(_fm_try)
+                            if not _check_conflicts(_fm_try, _ori_try):
+                                _face_mask = _fm_try
+                                orientation = _ori_try
+                                break
 
-            local_fid = 0
-            assigned_he: set[int] = set()
-            for _ci, cycle_nodes in enumerate(cycles_to_assign):
-                if not _face_mask[_ci]:
-                    continue
-                n_cycle = len(cycle_nodes)
-                _dir = cycle_nodes if orientation[_ci] else list(reversed(cycle_nodes))
-                local_hedges: list[int] = []
-                _ok = True
-                for _i in range(n_cycle):
-                    _ba = int(_dir[_i])
-                    _bb = int(_dir[(_i + 1) % n_cycle])
-                    _he = he_lookup.get((_ba, _bb))
-                    if _he is None or _he in assigned_he:
-                        _ok = False
+                local_fid = 0
+                assigned_he: set[int] = set()
+                for _ci, cycle_nodes in enumerate(cycles_to_assign):
+                    if not _face_mask[_ci]:
+                        continue
+                    n_cycle = len(cycle_nodes)
+                    _dir = cycle_nodes if orientation[_ci] else list(reversed(cycle_nodes))
+                    local_hedges: list[int] = []
+                    _ok = True
+                    for _i in range(n_cycle):
+                        _ba = int(_dir[_i])
+                        _bb = int(_dir[(_i + 1) % n_cycle])
+                        _he = he_lookup.get((_ba, _bb))
+                        if _he is None or _he in assigned_he:
+                            _ok = False
+                            break
+                        local_hedges.append(_he)
+                    if not _ok:
+                        continue
+                    local_fid += 1
+                    assigned_he.update(local_hedges)
+                    for li in local_hedges:
+                        face_local[li] = local_fid
+                    face_walks[local_fid] = local_hedges
+
+                _boundary_block_ids: set[int] = {int(block_t[_li]) for _li in range(n_t) if partner_local[_li] < 0}
+
+                _outgoing: dict[int, tuple[int, int]] = {}
+                for (_ba, _bb), _li in he_lookup.items():
+                    if _li not in assigned_he:
+                        _outgoing[_ba] = (_bb, _li)
+
+                _visited_rec: set[int] = set()
+                while _outgoing:
+                    _starts = [_k for _k in _outgoing if _k not in _visited_rec]
+                    if not _starts:
                         break
-                    local_hedges.append(_he)
-                if not _ok:
-                    continue
-                local_fid += 1
-                assigned_he.update(local_hedges)
-                for li in local_hedges:
-                    face_id_arr[t_idx[li]] = local_fid
+                    _start = _starts[0]
+                    _cycle_he: list[int] = []
+                    _ba = _start
+                    while True:
+                        if _ba not in _outgoing:
+                            _cycle_he = []
+                            break
+                        _bb, _li = _outgoing[_ba]
+                        _cycle_he.append(_li)
+                        _visited_rec.add(_ba)
+                        del _outgoing[_ba]
+                        _ba = _bb
+                        if _ba == _start:
+                            break
+                        if _ba in _visited_rec:
+                            _cycle_he = []
+                            break
+                    if len(_cycle_he) < 3:
+                        continue
+                    if not _cycle_he:
+                        continue
+                    if _boundary_block_ids:
+                        continue
+                    local_fid += 1
+                    assigned_he.update(_cycle_he)
+                    for _li in _cycle_he:
+                        face_local[_li] = local_fid
+                    face_walks[local_fid] = _cycle_he
+
+            # Shared record building — runs for both face_method values.
+            for local_i, global_i in enumerate(t_idx):
+                face_id_arr[global_i] = face_local[local_i]
+
+            for fid, local_hedges in sorted(face_walks.items()):
                 global_hedges = [int(t_idx[li]) for li in local_hedges]
-                asm_id = float(block_assembly.get(float(block_t[local_hedges[0]]), -1)) if local_hedges else -1.0
+                asm_id = float(block_assembly.get(float(block_t[local_hedges[0]]), -1))
                 face_records.append(
                     {
                         tomo_col: tomo_val,
                         aff_col: aff_val,
-                        "face_id": local_fid,
-                        "assembly_id": asm_id,
-                        "half_edges": global_hedges,
-                    }
-                )
-
-            _boundary_block_ids: set[int] = {int(block_t[_li]) for _li in range(n_t) if partner_local[_li] < 0}
-
-            _outgoing: dict[int, tuple[int, int]] = {}
-            for (_ba, _bb), _li in he_lookup.items():
-                if _li not in assigned_he:
-                    _outgoing[_ba] = (_bb, _li)
-
-            _visited_rec: set[int] = set()
-            while _outgoing:
-                _starts = [_k for _k in _outgoing if _k not in _visited_rec]
-                if not _starts:
-                    break
-                _start = _starts[0]
-                _cycle_he: list[int] = []
-                _ba = _start
-                while True:
-                    if _ba not in _outgoing:
-                        _cycle_he = []
-                        break
-                    _bb, _li = _outgoing[_ba]
-                    _cycle_he.append(_li)
-                    _visited_rec.add(_ba)
-                    del _outgoing[_ba]
-                    _ba = _bb
-                    if _ba == _start:
-                        break
-                    if _ba in _visited_rec:
-                        _cycle_he = []
-                        break
-                if len(_cycle_he) < 3:
-                    continue
-                if not _cycle_he:
-                    continue
-                if _boundary_block_ids:
-                    continue
-                local_fid += 1
-                assigned_he.update(_cycle_he)
-                for _li in _cycle_he:
-                    face_id_arr[t_idx[_li]] = local_fid
-                global_hedges = [int(t_idx[_li]) for _li in _cycle_he]
-                asm_id = float(block_assembly.get(float(block_t[_cycle_he[0]]), -1)) if _cycle_he else -1.0
-                face_records.append(
-                    {
-                        tomo_col: tomo_val,
-                        aff_col: aff_val,
-                        "face_id": local_fid,
+                        "face_id": fid,
                         "assembly_id": asm_id,
                         "half_edges": global_hedges,
                     }
@@ -9113,6 +9145,7 @@ class PleomorphicSurface:
                 self._max_distance,
                 scope="all",
                 blocks=_blks_a,
+                face_method=self._face_method,
             )
 
             # he_lookup for all-scope site_table: (new_block_a, new_block_b) -> row index
