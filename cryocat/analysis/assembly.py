@@ -3958,8 +3958,11 @@ class CnComplex(SymmetricComplex):
             ``affiliation_column``, ``subtomo_id``, ``radius``,
             ``axial_offset``, ``distance_to_centre``, ``tilt_angle``.
             ``order_column``, ``central_angle_prev``, ``central_angle_next``,
-            and ``interior_angle`` are added when the component carries an
-            ``order_column``.
+            ``interior_angle``, ``cone_to_ref`` and ``inplane_to_ref`` are added
+            when the component carries an ``order_column``. ``cone_to_ref`` and
+            ``inplane_to_ref`` are the cone and in-plane angular distances
+            between the particle's orientation and the reference-ring particle
+            with the same order value (``NaN`` if there is none).
         """
         _state = self._resolve_state(label)
         _orig_motl = self.motl

@@ -677,6 +677,7 @@ def _filter_to_segmentation_boundary(
 # Point matching functions
 #############################################
 
+@cuda.jit
 def find_all_possible_matches_kernel(
     points,
     normals,
@@ -825,7 +826,7 @@ def measure_thickness_gpu(
     surface2_mask,
     pixel_size,
     max_distance_nm=8.0,
-    max_angle_degrees=1.0,
+    max_angle_degrees=10.0,
     direction="1to2",
     logger=None,
 ):
@@ -862,7 +863,7 @@ def measure_thickness_gpu(
     max_distance_nm : float
         Maximum source-target distance in nm (converted to voxels internally)
     max_angle_degrees : float
-        Maximum angle for cone search
+        Half-angle of the normal-aligned search cone in degrees (default 10.0)
     direction : str
         Which surface seeds the rays: ``"1to2"`` matches surface1→surface2,
         ``"2to1"`` reverses the roles.
@@ -982,7 +983,7 @@ def measure_thickness_cpu(
     surface2_mask,
     pixel_size,
     max_distance_nm=8.0,
-    max_angle_degrees=1.0,
+    max_angle_degrees=10.0,
     direction="1to2",
     num_threads=None,
     logger=None,
@@ -1007,7 +1008,7 @@ def measure_thickness_cpu(
         Voxel size in **nanometers** (used to convert distances).
     max_distance_nm : float, default 8.0
         Maximum source-target distance in nm (converted to voxels internally).
-    max_angle_degrees : float, default 1.0
+    max_angle_degrees : float, default 10.0
         Half-angle of the normal-aligned search cone in degrees.
     direction : {"1to2", "2to1"}, default "1to2"
         Which surface seeds the matching rays.
@@ -1575,7 +1576,7 @@ class IntensityProfileAnalyzer:
     Examples
     --------
     >>> analyzer = IntensityProfileAnalyzer(smooth_sigma_intensity_profiles=1.0)
-    >>> results = analyzer.detect(profiles, thickness_df, profile_half_width_nm=6.0, max_distance_nm=10.0)
+    >>> results = analyzer.detect(profiles, thickness_df, profile_half_width_nm=5.5, max_distance_nm=10.0)
     """
 
     def __init__(
@@ -1606,7 +1607,7 @@ class IntensityProfileAnalyzer:
         self,
         profiles: list[dict],
         thickness_df: pd.DataFrame,
-        profile_half_width_nm: float = 6.0,
+        profile_half_width_nm: float = 5.5,
         max_distance_nm: float = 8.0,
         logger: logging.Logger = None,
     ) -> dict:
@@ -1619,7 +1620,7 @@ class IntensityProfileAnalyzer:
         self,
         profiles: list[dict],
         thickness_df: pd.DataFrame,
-        profile_half_width_nm: float = 6.0,
+        profile_half_width_nm: float = 5.5,
         max_distance_nm: float = 8.0,
         logger: logging.Logger = None,
     ) -> dict:
@@ -3209,9 +3210,15 @@ def process_membrane_segmentation(
         Loop subdivision passes after mesh extraction (densifies the mesh).
         Normal flipping is suppressed when > 0 (subdivision normals are inward-facing).
     surface_separation_mode : {"planar", "closed"} or dict, default "planar"
-        How the two bilayer leaflets are separated. ``"planar"`` uses PCA on vertex
-        coordinates (bilayers, flat patches); ``"closed"`` uses connected-component
-        labeling (vesicles, organelle membranes). Pass a ``dict`` to use different
+        How the two bilayer leaflets are separated. ``"planar"`` (bilayers, flat
+        patches) runs PCA on vertex coordinates, takes the least-variance axis as the
+        membrane-normal direction and assigns each vertex by the sign of its normal's
+        projection onto that axis; separation fails (empty masks) if either side has
+        < 10 % of vertices. ``"closed"`` (vesicles, organelle membranes) labels a vertex
+        as inner (surface 1) if the angle between its normal and the direction to the
+        vertex centroid is < 90°, otherwise outer (surface 2); it assumes the centroid
+        lies inside the membrane and the surface is roughly star-shaped about it, so
+        strongly folded membranes (e.g. cristae) may be split wrongly. Pass a ``dict`` to use different
         modes per label, e.g. ``{"NE": "planar", "OMM": "closed"}``. Labels not
         present in the dict fall back to ``"planar"``.
     snap_vertices_to_boundary : bool, default False
@@ -3405,7 +3412,7 @@ def match_points(
     output_csv: PathOrStr | None = None,
     output_path: PathOrStr = None,
     max_distance_nm: float = 8.0,
-    max_angle: float = 1.0,
+    max_angle: float = 10.0,
     direction: Literal["1to2", "2to1"] = "1to2",
     use_gpu: bool = True,
     num_cpu_threads: int | None = None,
@@ -3438,7 +3445,7 @@ def match_points(
     max_distance_nm : float, default 8.0
         Hard cap on candidate source-target distance (nm). Converted to voxels
         internally; points farther apart are never considered.
-    max_angle : float, default 1.0
+    max_angle : float, default 10.0
         Half-angle (degrees) of the normal-aligned cone. Candidate targets whose
         lateral deviation from the source normal exceeds this are rejected.
     direction : {"1to2", "2to1"}, default "1to2"
@@ -3446,7 +3453,11 @@ def match_points(
         their nearest surface-2 partner; ``"2to1"`` reverses the roles.
     use_gpu : bool, default True
         Prefer the CUDA kernel when a compatible GPU is available. Falls back to
-        the CPU KDTree path automatically if CUDA is unavailable.
+        the CPU KDTree path automatically if CUDA is unavailable or the GPU
+        path raises; the backend actually used is recorded in the stats file
+        as ``matching_backend_used``. For GPU support install the optional
+        extra ``pip install "cryocat[gpu]"`` (NVIDIA ``numba-cuda``; Numba's
+        built-in CUDA target is deprecated).
     num_cpu_threads : int, optional
         Numba thread count for the CPU path (``None`` = use all available).
     query_batch_size : int, optional
@@ -3575,20 +3586,28 @@ def match_points(
     logger.info(f"Starting surface matching ({direction})...")
     start_time = time.time()
 
+    backend_used = "cpu"
+    gpu_error = None
     if use_gpu and gpu_available:
-        # Use GPU implementation
-        thickness_results, valid_mask, point_pairs = measure_thickness_gpu(
-            points,
-            normals,
-            surface1_mask,
-            surface2_mask,
-            pixel_size=pixel_size,
-            max_distance_nm=max_distance_nm,
-            max_angle_degrees=max_angle,
-            direction=direction,
-            logger=logger,
-        )
-    else:
+        # Use GPU implementation; fall back to CPU if it fails for any reason
+        try:
+            thickness_results, valid_mask, point_pairs = measure_thickness_gpu(
+                points,
+                normals,
+                surface1_mask,
+                surface2_mask,
+                pixel_size=pixel_size,
+                max_distance_nm=max_distance_nm,
+                max_angle_degrees=max_angle,
+                direction=direction,
+                logger=logger,
+            )
+            backend_used = "cuda"
+        except Exception as e:
+            gpu_error = f"{type(e).__name__}: {e}"
+            logger.warning(f"GPU matching failed ({gpu_error}) - falling back to CPU")
+
+    if backend_used == "cpu":
         # Use CPU implementation
         thickness_results, valid_mask, point_pairs = measure_thickness_cpu(
             points,
@@ -3611,7 +3630,6 @@ def match_points(
     vtx_path_rs = Path(input_csv).expanduser().resolve()
     out_csv_rs = Path(output_csv).expanduser().resolve()
 
-    backend_used = "cuda" if use_gpu and gpu_available else "cpu"
     matching_params: dict[str, Any] = {
         "segmentation_mrc_path": str(seg_path_rs),
         "vertices_normals_csv_path": str(vtx_path_rs),
@@ -3629,6 +3647,8 @@ def match_points(
     }
     if use_gpu:
         matching_params["cuda_available_at_runtime"] = gpu_available
+    if gpu_error is not None:
+        matching_params["gpu_fallback_reason"] = gpu_error
 
     # Generate and save statistics
     stats = generate_matching_statistics(
@@ -3722,7 +3742,7 @@ def analyse_intensity_profiles(
     thickness_csv: PathOrStr,
     tomogram_map: MapSource,
     output_path: PathOrStr,
-    profile_half_width_nm: float = 6.0,
+    profile_half_width_nm: float = 5.5,
     max_distance_nm: float = 8.0,
     analyzer: "IntensityProfileAnalyzer | None" = None,
     save_cleaned_df: bool = True,
@@ -3752,7 +3772,7 @@ def analyse_intensity_profiles(
         Tomogram MRC path or ndarray (same grid as the segmentation).
     output_path : PathOrStr
         Directory for saved tables, pickles, and statistics text.
-    profile_half_width_nm : float, default 6.0
+    profile_half_width_nm : float, default 5.5
         Half-width of sampled profile segments on each side of the midpoint (nm).
         Passed directly to ``cryomap.sample_line_profiles``; not part of the analyzer.
     max_distance_nm : float, default 8.0
@@ -3913,7 +3933,7 @@ def run_full_pipeline(
     save_split_surface_meshes: bool = False,
     # ── Geometric matching ────────────────────────────────────────────
     max_distance_nm: float = 8.0,
-    max_angle: float = 1.0,
+    max_angle: float = 10.0,
     direction: Literal["1to2", "2to1"] = "1to2",
     use_gpu: bool = True,
     num_cpu_threads: int | None = None,
@@ -3923,7 +3943,7 @@ def run_full_pipeline(
     # ── Profile / boundary stage ──────────────────────────────────────
     extract_intensity_profiles: bool = True,
     tomogram_map: MapSource = None,
-    profile_half_width_nm: float = 6.0,
+    profile_half_width_nm: float = 5.5,
     analyzer: "IntensityProfileAnalyzer | None" = None,
     intensity_save_profiles: bool = True,
     intensity_save_statistics: bool = True,
@@ -3969,10 +3989,16 @@ def run_full_pipeline(
         When True, replaces marching-cubes vertices with integer segmentation-boundary
         voxels before normal refinement. Use when you trust the segmentation and want
         matching to occur only between confirmed boundary voxels.
-    surface_separation_mode : {"planar", "closed"}, default "planar"
-        How the two bilayer leaflets are separated. ``"planar"`` uses PCA on vertex
-        coordinates to split along the membrane plane (bilayers, flat patches);
-        ``"closed"`` uses connected-component labeling (vesicles, organelle membranes).
+    surface_separation_mode : {"planar", "closed"} or dict, default "planar"
+        How the two bilayer leaflets are separated. ``"planar"`` (bilayers, flat
+        patches) runs PCA on vertex coordinates and splits vertices by the sign of the
+        normal projection onto the least-variance axis. ``"closed"`` (vesicles,
+        organelle membranes) labels a vertex as inner (surface 1) if the angle between
+        its normal and the direction to the vertex centroid is < 90°, otherwise outer
+        (surface 2); it assumes the centroid lies inside the membrane, so strongly
+        folded membranes (e.g. cristae) may be split wrongly. Pass a ``dict`` to choose
+        per label, e.g. ``{"NE": "planar", "OMM": "closed"}``; missing labels use
+        ``"planar"``.
     refine_normals : bool, default True
         Neighbor-based normal refinement after surface separation.
     radius_hit : float, default 3.0
@@ -3988,7 +4014,7 @@ def run_full_pipeline(
     max_distance_nm : float, default 8.0
         Nanometer cap for **both** the geometric matcher and the downstream
         inflection-thickness filter (passed through as ``max_distance_nm``).
-    max_angle : float, default 1.0
+    max_angle : float, default 10.0
         Half-angle (degrees) of the normal-aligned search cone.
     direction : {"1to2", "2to1"}, default "1to2"
         Which surface seeds the ray casting / one-to-one pairing.
@@ -4012,7 +4038,7 @@ def run_full_pipeline(
     tomogram_map : MapSource, optional
         Tomogram MRC path or ndarray aligned with ``segmentation_map`` (required when
         ``extract_intensity_profiles=True``).
-    profile_half_width_nm : float, default 6.0
+    profile_half_width_nm : float, default 5.5
         Half-width of each sampled profile segment (nm) on both sides of the midpoint.
         Controls sampling extent; not part of the analyzer.
     analyzer : IntensityProfileAnalyzer, optional
@@ -4079,7 +4105,7 @@ def run_full_pipeline(
     ...     output_path="analysis_with_profiles",
     ...     extract_intensity_profiles=True,
     ...     tomogram_map="tomogram.mrc",
-    ...     profile_half_width_nm=6.0,
+    ...     profile_half_width_nm=5.5,
     ...     analyzer=IntensityProfileAnalyzer(),
     ... )
     >>> kept = results["plasma_membrane"]["intensity_results"]["profiles_kept_after_distance_filter"]

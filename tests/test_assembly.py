@@ -1,3 +1,6 @@
+import contextlib
+import io
+
 import pytest
 import numpy as np
 import pandas as pd
@@ -593,39 +596,61 @@ def test_PleomorphicSurface_get_surface_area_returns_float():
 
 
 def test_PleomorphicSurface_get_mean_curvature_returns_array():
-    """Mean curvature is a per-vertex array; loaders may need to compute first."""
+    """Mean curvature is a per-vertex array, computed on first access."""
     psurf = _tiny_mesh_psurf()
-    try:
+    with contextlib.redirect_stdout(io.StringIO()):
         mc = psurf.get_mean_curvature()
-        assert mc.shape[0] == len(psurf.vertices)
-    except Exception:
-        # Curvature may be unavailable on a raw mesh without precomputation;
-        # the call surface still needs to be referenced for the audit.
-        pass
+    assert mc.shape == (len(psurf.vertices),)
+    assert np.all(np.isfinite(mc))
 
 
-def test_PleomorphicSurface_get_gaussian_curvature_call_path():
+def test_PleomorphicSurface_get_gaussian_curvature_returns_array():
     psurf = _tiny_mesh_psurf()
-    try:
-        psurf.get_gaussian_curvature()
-    except Exception:
-        pass
+    with contextlib.redirect_stdout(io.StringIO()):
+        gc = psurf.get_gaussian_curvature()
+    assert gc.shape == (len(psurf.vertices),)
+    assert np.all(np.isfinite(gc))
 
 
-def test_PleomorphicSurface_get_principal_curvatures_call_path():
+def test_PleomorphicSurface_get_principal_curvatures_returns_array():
     psurf = _tiny_mesh_psurf()
-    try:
-        psurf.get_principal_curvatures()
-    except Exception:
-        pass
+    with contextlib.redirect_stdout(io.StringIO()):
+        pc = psurf.get_principal_curvatures()
+    assert pc.shape == (len(psurf.vertices), 2)
+    assert np.all(np.isfinite(pc))
 
 
-def test_PleomorphicSurface_get_curvature_directions_call_path():
+def test_PleomorphicSurface_get_curvature_directions_returns_array():
     psurf = _tiny_mesh_psurf()
-    try:
-        psurf.get_curvature_directions()
-    except Exception:
-        pass
+    with contextlib.redirect_stdout(io.StringIO()):
+        dirs = psurf.get_curvature_directions()
+    assert dirs.shape == (len(psurf.vertices), 3, 2)
+    assert np.all(np.isfinite(dirs))
+
+
+def test_PleomorphicSurface_curvature_accuracy_on_sphere():
+    """Curvatures through the PleomorphicSurface interface match a sphere of radius r."""
+    import open3d as o3d
+    from cryocat.core.surface import Mesh
+
+    r = 10.0
+    o3m = o3d.geometry.TriangleMesh.create_sphere(radius=r, resolution=60)
+    o3m.compute_vertex_normals()
+    m = Mesh()
+    m.vertices = np.asarray(o3m.vertices)
+    m.faces = np.asarray(o3m.triangles)
+    m.normals = np.asarray(o3m.vertex_normals)
+    m.units = "nm"
+    psurf = assembly.PleomorphicSurface(m)
+    with contextlib.redirect_stdout(io.StringIO()):
+        psurf.surface.compute_curvatures(smoothing_iterations=0)
+        H = psurf.get_mean_curvature()
+        K = psurf.get_gaussian_curvature()
+        k = psurf.get_principal_curvatures()
+    assert np.median(H) == pytest.approx(1 / r, rel=0.01)
+    assert np.median(K) == pytest.approx(1 / r**2, rel=0.02)
+    assert np.median(k[:, 0]) == pytest.approx(1 / r, rel=0.01)
+    assert np.median(k[:, 1]) == pytest.approx(1 / r, rel=0.01)
 
 
 def test_PleomorphicSurface_apply_vertex_mask_returns_psurf():
