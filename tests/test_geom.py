@@ -1242,8 +1242,8 @@ from cryocat.utils.geom import (
     compare_rotations, cone_distance, get_axis_from_rotation,
     inplane_distance, cone_inplane_distance, angular_score_for_c_symmetry,
     compute_relative_orientations, in_box_bounds,
-    fill_ellipsoid, fit_ellipsoid, point_ellipsoid_distance,
-    ray_ellipsoid_intersection_3d, construct_rays, rotate_points_rodrigues,
+    fill_ellipsoid, fit_ellipsoid,
+    construct_rays, rotate_points_rodrigues,
     project_3d_points_on_2d_plane_normal_aligned,
     project_3d_points_on_2d_plane_variance_based,
     fit_circle_3d_lsq, fit_circle_2d_lsq, fit_circle_3d_pratt,
@@ -1544,28 +1544,6 @@ def test_fill_ellipsoid_returns_volume_with_inside_points():
     vol = fill_ellipsoid(box, params)
     assert vol.shape == box
     assert np.sum(vol) > 0
-
-
-def test_point_ellipsoid_distance_is_nonnegative():
-    """Euclidean distance from an interior point to the surface is >= 0."""
-    # params = [cx, cy, cz, rx, ry, rz, ev1, ev2, ev3 (3x3 row-major), p1..p10]
-    params = np.concatenate([
-        [0.0, 0.0, 0.0],          # centre
-        [5.0, 5.0, 5.0],          # radii
-        np.eye(3).flatten(),      # axis-aligned eigenvectors
-    ])
-    d = point_ellipsoid_distance(np.array([1.0, 0.0, 0.0]), params)
-    assert d >= 0.0
-
-
-def test_ray_ellipsoid_intersection_returns_tuple_of_five():
-    """Two intersections with a ray through a unit sphere centred at the origin."""
-    point = np.array([0.0, 0.0, -2.0])
-    normal = np.array([0.0, 0.0, 1.0])
-    # Unit sphere: x^2 + y^2 + z^2 - 1 = 0  -> [1,1,1,0,0,0,0,0,0,-1]
-    params = np.array([1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0])
-    result = ray_ellipsoid_intersection_3d(point, normal, params)
-    assert len(result) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -2735,3 +2713,252 @@ class TestInplaneAngleAfterAlignment:
     def test_mismatched_lengths_raise(self):
         with pytest.raises(ValueError, match="same number of rotations"):
             inplane_angle_after_alignment(srot.random(3, random_state=1), srot.random(2, random_state=2))
+
+
+# ---------------------------------------------------------------------------
+# Ellipsoid geometry: projection, line roots, quadric conversion, fit, sampling
+# ---------------------------------------------------------------------------
+
+_ELL_CENTER = np.array([3.0, -2.0, 5.0])
+_ELL_RADII = np.array([4.0, 7.0, 10.0])
+_ELL_EVECS = srot.from_euler("zxz", [30.0, 50.0, -20.0], degrees=True).as_matrix()
+
+
+def _ellipsoid_level(points, center=_ELL_CENTER, radii=_ELL_RADII, evecs=_ELL_EVECS):
+    """sum((local / r)^2) for each point: 1 on the ellipsoid."""
+    local = (np.atleast_2d(points) - center) @ evecs
+    return np.sum((local / radii) ** 2, axis=1)
+
+
+def _ellipsoid_gradient(points, center=_ELL_CENTER, radii=_ELL_RADII, evecs=_ELL_EVECS):
+    local = (np.atleast_2d(points) - center) @ evecs
+    return (local / radii**2) @ evecs.T
+
+
+def _unit_rows(v):
+    return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+
+class TestProjectPointsOnEllipsoid:
+    def test_projected_points_satisfy_the_ellipsoid_equation(self):
+        rng = np.random.default_rng(0)
+        pts = _ELL_CENTER + rng.normal(scale=12.0, size=(200, 3))
+        proj, _ = project_points_on_ellipsoid(pts, _ELL_CENTER, _ELL_RADII, _ELL_EVECS)
+        np.testing.assert_allclose(_ellipsoid_level(proj), 1.0, atol=1e-10)
+
+    def test_normals_are_unit_and_perpendicular_to_the_surface(self):
+        rng = np.random.default_rng(1)
+        pts = _ELL_CENTER + rng.normal(scale=12.0, size=(200, 3))
+        proj, normals = project_points_on_ellipsoid(pts, _ELL_CENTER, _ELL_RADII, _ELL_EVECS)
+        np.testing.assert_allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-12)
+        grad = _ellipsoid_gradient(proj)
+        np.testing.assert_allclose(np.linalg.norm(np.cross(normals, _unit_rows(grad)), axis=1), 0.0, atol=1e-10)
+        assert np.all(np.einsum("ij,ij->i", normals, grad) > 0)
+
+    def test_centre_has_signed_distance_minus_smallest_radius(self):
+        proj, normals = project_points_on_ellipsoid(_ELL_CENTER, _ELL_CENTER, _ELL_RADII, _ELL_EVECS)
+        signed = float(np.dot(_ELL_CENTER - proj[0], normals[0]))
+        assert signed == pytest.approx(-_ELL_RADII.min())
+
+
+class TestLineEllipsoidRoots:
+    params = ellipsoid_quadric_from_axes(_ELL_CENTER, _ELL_RADII, _ELL_EVECS)
+
+    def test_every_root_lies_on_the_surface(self):
+        rng = np.random.default_rng(2)
+        for _ in range(50):
+            p = _ELL_CENTER + rng.normal(scale=15.0, size=3)
+            d = rng.normal(size=3)
+            roots, _ = line_ellipsoid_roots(p, d, self.params)
+            if roots.size:
+                np.testing.assert_allclose(_ellipsoid_level(p + roots[:, None] * d), 1.0, atol=1e-9)
+
+    def test_line_through_centre_has_two_roots_and_starts_inside(self):
+        roots, is_inside = line_ellipsoid_roots(_ELL_CENTER, np.array([1.0, 2.0, -0.5]), self.params)
+        assert roots.size == 2
+        assert roots[0] < 0 < roots[1]
+        assert is_inside
+
+    def test_line_that_misses_has_no_roots(self):
+        far = _ELL_CENTER + np.array([0.0, 0.0, 100.0])
+        roots, is_inside = line_ellipsoid_roots(far, np.array([1.0, 0.0, 0.0]), self.params)
+        assert roots.size == 0
+        assert not is_inside
+
+
+class TestEllipsoidQuadricConversion:
+    def test_axes_and_quadric_invert_each_other(self):
+        params = ellipsoid_quadric_from_axes(_ELL_CENTER, _ELL_RADII, _ELL_EVECS)
+        center, radii, evecs = ellipsoid_axes_from_quadric(params)
+        np.testing.assert_allclose(center, _ELL_CENTER, atol=1e-10)
+        np.testing.assert_allclose(np.sort(np.abs(radii)), np.sort(_ELL_RADII), atol=1e-10)
+        np.testing.assert_allclose(ellipsoid_quadric_from_axes(center, radii, evecs), params, atol=1e-12)
+
+    def test_fit_ellipsoid_recovers_a_known_ellipsoid(self):
+        pts, _ = sample_ellipsoid_surface(_ELL_CENTER, _ELL_RADII, _ELL_EVECS, spacing=1.0)
+        center, radii, _evecs, _params = fit_ellipsoid(pts)
+        np.testing.assert_allclose(center, _ELL_CENTER, atol=1e-6)
+        np.testing.assert_allclose(np.sort(np.abs(radii)), np.sort(_ELL_RADII), atol=1e-6)
+
+
+class TestEllipsoidSampling:
+    def test_surface_samples_lie_on_the_surface_with_outward_normals(self):
+        pts, normals = sample_ellipsoid_surface(_ELL_CENTER, _ELL_RADII, _ELL_EVECS, spacing=1.5)
+        np.testing.assert_allclose(_ellipsoid_level(pts), 1.0, atol=1e-10)
+        assert np.all(np.einsum("ij,ij->i", pts - _ELL_CENTER, normals) > 0)
+        grad = _unit_rows(_ellipsoid_gradient(pts))
+        np.testing.assert_allclose(np.linalg.norm(np.cross(normals, grad), axis=1), 0.0, atol=1e-10)
+
+    def test_direction_samples_lie_on_the_surface(self):
+        params = ellipsoid_quadric_from_axes(_ELL_CENTER, _ELL_RADII, _ELL_EVECS)
+        pts = sample_ellipsoid_by_directions(_ELL_CENTER, params, angular_step=10.0)
+        np.testing.assert_allclose(_ellipsoid_level(pts), 1.0, atol=1e-9)
+
+    @pytest.mark.parametrize("cap_angle", [360.0, 120.0])
+    def test_on_a_sphere_direction_samples_equal_the_scaled_cone(self, cap_angle):
+        center, r = np.array([10.0, 20.0, -5.0]), 6.5
+        params = ellipsoid_quadric_from_axes(center, np.full(3, r), np.eye(3))
+        pts = sample_ellipsoid_by_directions(center, params, angular_step=15.0, cap_angle=cap_angle)
+        np.testing.assert_allclose(pts, sample_cone(cap_angle, 15.0, center=center, radius=r), atol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Open tube geometry: projection, line roots, wall sampling, polylines, splines
+# ---------------------------------------------------------------------------
+
+_TUBE_AXIS = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 40.0]])
+_TUBE_R = 5.0
+
+
+class TestProjectPointsOnTube:
+    def test_signed_distance_is_axis_distance_minus_radius_between_the_ends(self):
+        rng = np.random.default_rng(3)
+        pts = np.column_stack([rng.uniform(-12, 12, 100), rng.uniform(-12, 12, 100), rng.uniform(1, 39, 100)])
+        proj, normals = project_points_on_tube(pts, _TUBE_AXIS, _TUBE_R)
+        signed = np.einsum("ij,ij->i", pts - proj, normals)
+        np.testing.assert_allclose(signed, np.hypot(pts[:, 0], pts[:, 1]) - _TUBE_R, atol=1e-10)
+
+    def test_beyond_an_end_the_distance_is_to_the_rim_and_positive(self):
+        pts = np.array([[2.0, 1.0, -7.0], [9.0, 0.5, 45.0], [0.3, -3.0, 52.0]])
+        proj, normals = project_points_on_tube(pts, _TUBE_AXIS, _TUBE_R)
+        rho = np.hypot(pts[:, 0], pts[:, 1])
+        overshoot = np.where(pts[:, 2] < 0, -pts[:, 2], pts[:, 2] - 40.0)
+        rim_distance = np.hypot(overshoot, rho - _TUBE_R)
+        signed = np.einsum("ij,ij->i", pts - proj, normals)
+        np.testing.assert_allclose(signed, rim_distance, atol=1e-10)
+        assert np.all(signed > 0)
+        np.testing.assert_allclose(np.hypot(proj[:, 0], proj[:, 1]), _TUBE_R, atol=1e-10)
+
+
+class TestLineTubeRoots:
+    def test_roots_lie_on_the_lateral_wall_and_never_beyond_an_end(self):
+        rng = np.random.default_rng(4)
+        for _ in range(100):
+            p = rng.uniform([-15, -15, -20], [15, 15, 60])
+            d = rng.normal(size=3)
+            roots, _ = line_tube_roots(p, d, _TUBE_AXIS, _TUBE_R)
+            hits = p + roots[:, None] * d
+            if hits.size:
+                np.testing.assert_allclose(np.hypot(hits[:, 0], hits[:, 1]), _TUBE_R, atol=1e-8)
+                assert np.all((hits[:, 2] >= -1e-9) & (hits[:, 2] <= 40.0 + 1e-9))
+
+    def test_a_line_from_outside_across_the_tube_crosses_the_wall_an_even_number_of_times(self):
+        # Lines perpendicular to the axis, between the ends: they cannot leave through an open end.
+        rng = np.random.default_rng(5)
+        for _ in range(50):
+            z = rng.uniform(2, 38)
+            angle = rng.uniform(0, 2 * np.pi)
+            start = np.array([30.0 * np.cos(angle), 30.0 * np.sin(angle), z])
+            direction = np.array([rng.normal(), rng.normal(), 0.0])
+            roots, is_inside = line_tube_roots(start, direction, _TUBE_AXIS, _TUBE_R)
+            assert not is_inside
+            assert roots.size % 2 == 0
+
+
+class TestSampleTubeSurface:
+    def test_every_point_lies_one_radius_from_the_centerline(self):
+        t = np.linspace(0, np.pi, 25)
+        centers = np.column_stack([30 * np.cos(t), 30 * np.sin(t), 2 * t])
+        tangents = np.column_stack([-30 * np.sin(t), 30 * np.cos(t), np.full_like(t, 2.0)])
+        pts, normals = sample_tube_surface(centers, tangents, 4.0, spacing=1.0)
+        n_ring = len(pts) // len(centers)
+        ring_centres = np.repeat(centers, n_ring, axis=0)
+        np.testing.assert_allclose(np.linalg.norm(pts - ring_centres, axis=1), 4.0, atol=1e-10)
+        ring_tangents = np.repeat(_unit_rows(tangents), n_ring, axis=0)
+        np.testing.assert_allclose(np.einsum("ij,ij->i", normals, ring_tangents), 0.0, atol=1e-10)
+
+
+class TestPolylineAndSpline:
+    def test_closest_points_on_polyline_are_nearest(self):
+        poly = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [20.0, 10.0, 5.0]])
+        dense = np.concatenate([np.linspace(a, b, 2001) for a, b in zip(poly[:-1], poly[1:])])
+        rng = np.random.default_rng(6)
+        pts = rng.uniform([-5, -5, -5], [25, 15, 10], size=(100, 3))
+        closest, dist = closest_points_on_polyline(pts, poly)
+        brute = np.min(np.linalg.norm(pts[:, None, :] - dense[None, :, :], axis=2), axis=1)
+        np.testing.assert_allclose(dist, np.linalg.norm(pts - closest, axis=1), atol=1e-12)
+        assert np.all(dist <= brute + 1e-9)
+        assert np.all(brute - dist < 0.02)
+
+    def test_spline_samples_are_evenly_spaced_along_the_curve(self):
+        from scipy.interpolate import splprep
+        t = np.linspace(0, 1.5 * np.pi, 30)
+        tck, _ = splprep(np.vstack([20 * np.cos(t), 20 * np.sin(t), 3 * t]), s=0)
+        pts, tangents = sample_spline_by_arc_length(tck, spacing=2.0)
+        steps = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        assert steps.max() <= 2.0 + 1e-9
+        np.testing.assert_allclose(steps, steps.mean(), rtol=5e-3)
+        np.testing.assert_allclose(np.linalg.norm(tangents, axis=1), 1.0, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Rigid transforms
+# ---------------------------------------------------------------------------
+
+class TestRigidTransformParts:
+    def test_accepts_a_rigid_matrix(self):
+        M = np.eye(4)
+        M[:3, :3] = srot.from_euler("zxz", [10, 70, -40], degrees=True).as_matrix()
+        M[:3, 3] = [1.0, -2.0, 3.0]
+        R, t = rigid_transform_parts(M)
+        np.testing.assert_allclose(R, M[:3, :3])
+        np.testing.assert_allclose(t, M[:3, 3])
+
+    @pytest.mark.parametrize("matrix", [
+        np.diag([2.0, 2.0, 2.0, 1.0]),
+        np.array([[1, 0.2, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1.0]]),
+        np.diag([1.0, 1.0, -1.0, 1.0]),
+        np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0.5, 1.0]]),
+    ], ids=["uniform scale", "shear", "reflection", "bottom row"])
+    def test_rejects_non_rigid_matrices(self, matrix):
+        with pytest.raises(UserInputError):
+            rigid_transform_parts(matrix)
+
+
+# ---------------------------------------------------------------------------
+# normals_to_euler_angles: single vectors and seeds
+# ---------------------------------------------------------------------------
+
+class TestNormalsToEulerAnglesSeed:
+    # No normal with y = 0 and x > 0: that case is a known, deferred defect.
+    normals = np.array([[0.3, 0.4, 0.866], [-1.0, 0.2, 0.1], [0.5, -0.5, -0.7], [0.0, 1.0, 0.0]])
+
+    def test_accepts_a_single_vector(self):
+        single = normals_to_euler_angles(self.normals[0], seed=3)
+        assert single.shape == (3,)
+        np.testing.assert_allclose(single, normals_to_euler_angles(self.normals[:1], seed=3)[0])
+
+    def test_same_seed_gives_identical_angles(self):
+        np.testing.assert_array_equal(normals_to_euler_angles(self.normals, seed=11),
+                                      normals_to_euler_angles(self.normals, seed=11))
+
+    def test_no_seed_gives_different_phi(self):
+        a = normals_to_euler_angles(self.normals)
+        b = normals_to_euler_angles(self.normals)
+        assert not np.array_equal(a[:, 0], b[:, 0])
+        np.testing.assert_allclose(a[:, 1:], b[:, 1:])
+
+    def test_orientation_z_axis_equals_the_normal(self):
+        angles = normals_to_euler_angles(self.normals, seed=5)
+        z = srot.from_euler("zxz", angles, degrees=True).apply([0.0, 0.0, 1.0])
+        np.testing.assert_allclose(z, _unit_rows(self.normals), atol=1e-10)

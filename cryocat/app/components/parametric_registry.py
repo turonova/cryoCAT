@@ -1,4 +1,4 @@
-"""Server-side **active fit** slot for :class:`ParametricSurface`.
+"""Server-side **active fit** slot for :class:`ParametricAssembly`.
 
 Phase 3 of the Structure page holds at most one fitted parametric surface at
 a time. The fit is live state (a :class:`AnalyticSurfacesM` with open3d/numpy buffers)
@@ -25,10 +25,10 @@ from typing import TYPE_CHECKING
 from cryocat.app.components.registry import Registry
 
 if TYPE_CHECKING:
-    from cryocat.analysis.assembly import ParametricSurface
+    from cryocat.analysis.assembly import ParametricAssembly
 
 
-registry: Registry["ParametricSurface"] = Registry("parametric", max_items=1)
+registry: Registry["ParametricAssembly"] = Registry("parametric", max_items=1)
 
 
 @dataclass
@@ -41,7 +41,7 @@ class ParametricHandle:
     source: str
 
 
-def make_handle(psurf: "ParametricSurface", source: str) -> dict:
+def make_handle(psurf: "ParametricAssembly", source: str) -> dict:
     """Build the lightweight handle the page's ``parametric-active`` store carries.
 
     The schema is defined by :class:`ParametricHandle`; ``dataclasses.fields``
@@ -49,7 +49,7 @@ def make_handle(psurf: "ParametricSurface", source: str) -> dict:
 
     Parameters
     ----------
-    psurf : ParametricSurface
+    psurf : ParametricAssembly
         The live fit (used to derive ``column_name``, the count of fitted
         surfaces, and the surface type label).
     source : str

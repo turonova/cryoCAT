@@ -16,7 +16,6 @@ import skimage.measure
 import scipy.ndimage
 from scipy.spatial import KDTree
 from scipy.spatial import cKDTree
-from scipy.optimize import fsolve
 from sklearn.decomposition import PCA
 
 from cryocat.core import cryomap
@@ -5389,7 +5388,7 @@ class OrientedPointCloud(DiscreteSurface):
             exists, returns a dict of :class:`OrientedPointCloud` instances keyed by
             that column's value. If None (default), returns a single OrientedPointCloud
             with all points. Follows the same grouping convention as
-            :class:`~cryocat.analysis.assembly.ParametricSurface`
+            :class:`~cryocat.analysis.assembly.ParametricAssembly`
             (``column_name``).
         recompute_normals : bool, default=False
             If True, recompute normals from geometry instead of using Euler angles.
@@ -5754,6 +5753,7 @@ class OrientedPointCloud(DiscreteSurface):
         input_dict: dict[str, Any] | None = None,
         subtomo_ids: np.ndarray | None = None,
         tomo_id: int | float | np.ndarray | None = None,
+        seed: int | None = None,
     ) -> "cryomotl.Motl":
         """Build a :class:`cryocat.core.cryomotl.Motl` from this point cloud.
 
@@ -5774,6 +5774,10 @@ class OrientedPointCloud(DiscreteSurface):
         tomo_id : int, float, or array-like, optional
             Tomogram ID; scalar applies to all points, array assigns per-point
             IDs (must be shape (N,)).
+        seed : int, optional
+            Seed for the random in-plane angle ``phi``
+            (:func:`cryocat.utils.geom.normals_to_euler_angles`); ``None`` draws
+            a new one on every call.
 
         Returns
         -------
@@ -5781,7 +5785,7 @@ class OrientedPointCloud(DiscreteSurface):
             A fresh motl with N rows where N = ``len(self.vertices)``.
         """
         # Convert normals to Euler angles (zxz convention)
-        angles = geom.normals_to_euler_angles(self.normals)
+        angles = geom.normals_to_euler_angles(self.normals, seed=seed)
 
         motl = cryomotl.Motl()
         motl.fill({"coord": self.vertices})
@@ -6859,6 +6863,109 @@ class AnalyticSurface(Surface):
     def rotate(self, rotation_matrix: np.ndarray) -> None:
         """Rotate the surface in-place."""
 
+    @property
+    @abstractmethod
+    def mean_radius(self) -> float:
+        """Radius the surface keeps from its centre (an ellipsoid's mean semi-axis, a tube's radius)."""
+
+    @abstractmethod
+    def project_points(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Project points onto the surface.
+
+        Parameters
+        ----------
+        points : np.ndarray (N, 3)
+
+        Returns
+        -------
+        projected : np.ndarray (N, 3)
+            Points on the surface.
+        normals : np.ndarray (N, 3)
+            Outward unit surface normals at *projected*.
+        """
+
+    def signed_distances(self, points: np.ndarray) -> np.ndarray:
+        """Signed distance of each point to the surface, negative inside.
+
+        Measured from the point's projection (:meth:`project_points`) along the
+        outward normal there.
+
+        Parameters
+        ----------
+        points : np.ndarray (N, 3)
+
+        Returns
+        -------
+        np.ndarray (N,)
+        """
+        points = np.atleast_2d(np.asarray(points, dtype=float))
+        projected, normals = self.project_points(points)
+        return np.einsum("ij,ij->i", points - projected, normals)
+
+    @abstractmethod
+    def oversample(self, *args, **kwargs) -> "OrientedPointCloud":
+        """Sample the surface as an :class:`OrientedPointCloud` with outward normals.
+
+        Each surface type has its own sampling and its own parameters.
+        """
+
+    @abstractmethod
+    def _line_roots(self, point: np.ndarray, direction: np.ndarray) -> tuple[np.ndarray, bool]:
+        """Ascending line parameters ``t`` where ``point + t * direction`` meets the surface, and whether *point* is inside."""
+
+    def _line_hits(self, line) -> tuple[list[np.ndarray], np.ndarray, bool]:
+        """Intersection points of *line* with the surface, their signed distances from ``line.p``, and the inside flag."""
+        p0 = np.asarray(line.p, dtype=float)
+        direction = np.asarray(line.dir, dtype=float)
+        roots, is_inside = self._line_roots(p0, direction)
+        points = [p0 + t * direction for t in roots]
+        dists = np.array([np.sign(t) * np.linalg.norm(p - p0) for t, p in zip(roots, points)])
+        return points, dists, is_inside
+
+    @staticmethod
+    def _two_hits(points, dists, order, is_inside):
+        """Pack the hits listed in *order* into the ``(p1, p2, d1, d2, is_inside)`` result, NaN-padded."""
+        p = [points[i] for i in order][:2] + [np.nan, np.nan]
+        d = [float(dists[i]) for i in order][:2] + [np.nan, np.nan]
+        return p[0], p[1], d[0], d[1], is_inside
+
+    def intersection_line(self, line):
+        """
+        Compute intersections between a line and the surface.
+
+        Parameters
+        ----------
+        line : object with attributes ``p`` (3,) and ``dir`` (3,)
+
+        Returns
+        -------
+        p1, p2 : np.ndarray or nan
+            The two intersections nearest ``line.p``. When ``line.p`` is inside,
+            ``p1`` is the nearest one ahead (along ``dir``) and ``p2`` the
+            nearest one behind.
+        d1, d2 : float or nan — signed distances from line.p
+        is_inside : bool
+        """
+        points, dists, is_inside = self._line_hits(line)
+        if is_inside:
+            order = [i for i in np.argsort(dists) if dists[i] > 0][:1]
+            order += [i for i in np.argsort(-dists) if dists[i] < 0][:1]
+        else:
+            order = list(np.argsort(np.abs(dists), kind="stable"))
+        return self._two_hits(points, dists, order, is_inside)
+
+    def intersection_ray(self, ray):
+        """Intersections with a ray (positive direction only), nearest first. Same return signature as intersection_line."""
+        points, dists, is_inside = self._line_hits(ray)
+        order = [i for i in np.argsort(dists, kind="stable") if dists[i] > 0]
+        return self._two_hits(points, dists, order, is_inside)
+
+    def intersection_line_segment(self, line_segment):
+        """Intersections clipped to segment length. line_segment must have a ``length`` attribute."""
+        points, dists, is_inside = self._line_hits(line_segment)
+        order = [i for i in np.argsort(dists, kind="stable") if 0 < dists[i] <= line_segment.length]
+        return self._two_hits(points, dists, order, is_inside)
+
 
 class Tube(AnalyticSurface):
     """Tube representation for filament and microtubule fitting.
@@ -7029,6 +7136,55 @@ class Tube(AnalyticSurface):
         tube.radius = radius_stored
         return tube
 
+    def _centerline_points(self) -> np.ndarray:
+        """Centerline as a polyline (V, 3).
+
+        A straight tube gives its two axis endpoints. A spline-fitted tube gives
+        the spline sampled at even arc-length steps of at most half a radius,
+        and at least 100 vertices.
+        """
+        if self.radius is None:
+            raise ValueError("Tube must be fitted before use")
+        if getattr(self, "_spline_type", None) == "bspline":
+            spacing = self.centerline_length / 99
+            if self.radius > 0:
+                spacing = min(spacing, 0.5 * self.radius)
+            points, _ = geom.sample_spline_by_arc_length(self._spline_tck, spacing)
+            return points
+        if self.center is None or self.axis_direction is None:
+            raise ValueError("Tube must be fitted before use")
+        half = self.centerline_length / 2.0
+        return np.array([self.center - half * self.axis_direction, self.center + half * self.axis_direction])
+
+    @property
+    def mean_radius(self) -> float:
+        """Tube radius."""
+        return float(self.radius)
+
+    def project_points(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Project points onto the tube wall.
+
+        The wall is the lateral surface at distance :attr:`radius` from the
+        centerline (straight axis or spline); the two ends are open, and a
+        point beyond an end is projected onto that end's rim
+        (:func:`geom.project_points_on_tube`).
+
+        Parameters
+        ----------
+        points : np.ndarray (N, 3)
+
+        Returns
+        -------
+        projected : np.ndarray (N, 3)
+            Nearest points on the wall.
+        normals : np.ndarray (N, 3)
+            Outward unit wall normals at *projected*.
+        """
+        return geom.project_points_on_tube(points, self._centerline_points(), self.radius)
+
+    def _line_roots(self, point: np.ndarray, direction: np.ndarray) -> tuple[np.ndarray, bool]:
+        return geom.line_tube_roots(point, direction, self._centerline_points(), self.radius)
+
     def distance_point_surface(self, point: np.ndarray) -> float:
         """Compute distance from point to tube surface.
 
@@ -7040,30 +7196,20 @@ class Tube(AnalyticSurface):
         Returns
         -------
         float
-            Distance to tube surface.
+            Distance to the wall as defined by :meth:`project_points`.
         """
-        if self.center is None or self.axis_direction is None or self.radius is None:
-            raise ValueError("Tube must be fitted before computing distances")
-        
-        # Vector from center to point
-        vec_to_point = point - self.center
-        
-        # Project onto axis
-        proj_length = np.dot(vec_to_point, self.axis_direction)
-        proj_point = self.center + proj_length * self.axis_direction
-        
-        # Radial vector (perpendicular to axis)
-        radial_vec = point - proj_point
-        radial_distance = np.linalg.norm(radial_vec)
-        
-        # Distance to surface = |radial_distance - radius|
-        return np.abs(radial_distance - self.radius)
-    
+        point = np.asarray(point, dtype=float)
+        projected, _ = self.project_points(point)
+        return float(np.linalg.norm(point - projected[0]))
+
     def distance_point_center(self, point: np.ndarray) -> float:
-        """Compute distance from point to tube center."""
-        if self.center is None:
-            raise ValueError("Tube must have center defined")
-        return np.linalg.norm(point - self.center)
+        """Compute distance from point to the tube centerline.
+
+        The centerline plays the part an ellipsoid's centre plays: a point on
+        the wall is :attr:`mean_radius` away from it.
+        """
+        _, distances = geom.closest_points_on_polyline(point, self._centerline_points())
+        return float(distances[0])
 
     @staticmethod
     def _extract_centerline(points: np.ndarray, n_bins: int = 50) -> np.ndarray:
@@ -7141,19 +7287,22 @@ class Tube(AnalyticSurface):
 
         if len(points) < 3:
             raise ValueError(f"Need at least 3 points to fit tube, got {len(points)}")
-        
+
         # Extract centerline
         centerline = cls._extract_centerline(points, n_bins=n_bins)
-        
+
         if len(centerline) < 4:
-            # Too few centerline points, fall back to PCA
+            warnings.warn(
+                f"Only {len(centerline)} centerline bins are populated; fitting a straight tube instead of a spline.",
+                stacklevel=2,
+            )
             return cls.fit_to_points(points)
-        
+
         # Fit B-spline to centerline
         try:
             tck, u = splprep(centerline.T, s=smoothing, k=min(3, len(centerline)-1))
-        except:
-            # If spline fitting fails, fall back to PCA
+        except ValueError as exc:
+            warnings.warn(f"Spline fit failed ({exc}); fitting a straight tube instead.", stacklevel=2)
             return cls.fit_to_points(points)
         
         # Compute radius (mean distance from all points to centerline)
@@ -7187,60 +7336,42 @@ class Tube(AnalyticSurface):
     def sample_along_axis_spline(self, spacing: float) -> tuple[np.ndarray, np.ndarray]:
         """
         Sample points along spline centerline at regular arc-length intervals.
-        
+
         Parameters
         ----------
         spacing : float
-            Spacing between sampled points (arc-length distance)
-            
+            Largest arc-length step between sampled points; the spline length is
+            divided into equal steps (:func:`geom.sample_spline_by_arc_length`).
+
         Returns
         -------
         np.ndarray (M, 3)
             Sampled points along centerline
         np.ndarray (M, 3)
-            Tangent vectors (orientations) at sampled points
+            Unit tangent vectors (orientations) at sampled points
         """
         if not hasattr(self, '_spline_type') or self._spline_type != 'bspline':
             raise ValueError("Spline sampling only available for B-spline fitted tubes")
-        
-        from scipy.interpolate import splev
-        
-        # Sample at regular arc-length intervals
-        n_samples = max(2, int(np.ceil(self.centerline_length / spacing)) + 1)
-        u_new = np.linspace(0, 1, n_samples)
-        
-        # Evaluate spline
-        sampled_points = np.array(splev(u_new, self._spline_tck)).T
-        
-        # Get tangent vectors (first derivative)
-        tangents = np.array(splev(u_new, self._spline_tck, der=1)).T
-        # Normalize
-        tangent_norms = np.linalg.norm(tangents, axis=1, keepdims=True)
-        tangents = tangents / (tangent_norms + 1e-12)
-        
-        return sampled_points, tangents
+        return geom.sample_spline_by_arc_length(self._spline_tck, spacing)
 
-    def oversample(self, sampling_distance: float | None = None, point_spacing: float | None = None) -> "OrientedPointCloud":
+    def oversample(self, spacing: float) -> "OrientedPointCloud":
         """
-        Sample the tube centerline as an :class:`OrientedPointCloud`.
+        Sample the tube wall as an :class:`OrientedPointCloud`.
+
+        Rings of points are placed around the centerline (straight axis or
+        spline) by :func:`geom.sample_tube_surface`; the tube ends are left open.
 
         Parameters
         ----------
-        sampling_distance : float, optional
-            Spacing between sampled points along the centerline.
-        point_spacing : float, optional
-            Alias for ``sampling_distance`` for consistency with other surface classes.
+        spacing : float
+            Spacing in voxels between rings along the centerline and between
+            points around each ring.
 
         Returns
         -------
         OrientedPointCloud
-            Points sampled along the tube axis or spline centerline, with tangent
-            vectors stored as normals.
+            Points on the tube wall with outward wall normals.
         """
-        spacing = sampling_distance if sampling_distance is not None else point_spacing
-        if spacing is None:
-            raise ValueError("Provide sampling_distance or point_spacing")
-
         if hasattr(self, "_spline_type") and self._spline_type == "bspline":
             sampled_points, tangents = self.sample_along_axis_spline(spacing)
         else:
@@ -7251,25 +7382,51 @@ class Tube(AnalyticSurface):
             tangent = tangent / (np.linalg.norm(tangent) + 1e-12)
             tangents = np.tile(tangent, (len(sampled_points), 1))
 
+        wall_points, wall_normals = geom.sample_tube_surface(sampled_points, tangents, self.radius, spacing)
         oriented_pcd = OrientedPointCloud()
-        oriented_pcd.vertices = sampled_points
-        oriented_pcd.normals = tangents
+        oriented_pcd.vertices = wall_points
+        oriented_pcd.normals = wall_normals
         oriented_pcd.inherit_coordinate_metadata(self)
         return oriented_pcd
 
+    def _move_spline(self, linear: np.ndarray, shift: np.ndarray) -> None:
+        """Apply ``x -> linear @ x + shift`` to a spline centerline: its control points and stored centerline points.
+
+        B-spline curves are affine-invariant, so moving the control points moves
+        the whole curve. A straight tube has no spline and is left unchanged.
+        """
+        if getattr(self, "_spline_type", None) != "bspline":
+            return
+        knots, coeffs, degree = self._spline_tck
+        moved = linear @ np.asarray(coeffs, dtype=float) + shift[:, None]
+        self._spline_tck = [knots, list(moved), degree]
+        self._centerline = self._centerline @ linear.T + shift
+
+    def translate(self, v):
+        """Shift the tube, including a spline centerline, by vector v."""
+        super().translate(v)
+        self._move_spline(np.eye(3), np.asarray(v, dtype=float))
+
     def transform(self, transformation_matrix: np.ndarray):
-        """Apply a 4x4 homogeneous transformation matrix in-place."""
-        M = np.asarray(transformation_matrix, dtype=float)
-        self.center = M[:3, :3].dot(self.center) + M[:3, 3]
+        """Apply a 4x4 homogeneous rigid transformation in-place, including to a spline centerline.
+
+        Raises
+        ------
+        UserInputError
+            If the transformation is not rigid (see :func:`geom.rigid_transform_parts`);
+            a scaled tube would no longer match its stored radius and length.
+        """
+        R, t = geom.rigid_transform_parts(transformation_matrix)
+        self.center = R.dot(self.center) + t
+        self._move_spline(R, t)
         if self.axis_direction is not None:
-            R = M[:3, :3] / np.linalg.norm(M[:3, :3], axis=0)
             self.axis_direction = R.dot(self.axis_direction)
-            self.axis_direction /= np.linalg.norm(self.axis_direction)
 
     def rotate(self, rotation_matrix: np.ndarray):
-        """Rotate the tube in-place."""
+        """Rotate the tube in-place, including a spline centerline."""
         R = np.asarray(rotation_matrix, dtype=float)
         self.center = R.dot(self.center)
+        self._move_spline(R, np.zeros(3))
         if self.axis_direction is not None:
             self.axis_direction = R.dot(self.axis_direction)
             self.axis_direction /= np.linalg.norm(self.axis_direction)
@@ -7281,33 +7438,46 @@ class Ellipsoid(AnalyticSurface):
 
     Fits ellipsoids to point clouds and provides geometric operations,
     serialization, and ray intersection.
+
+    The state is :attr:`center`, :attr:`radii` and the axis directions
+    :attr:`e_vec1`, :attr:`e_vec2`, :attr:`e_vec3`.  The quadric coefficients
+    :attr:`params` are computed from them on every read, so a move cannot leave
+    them stale.
     """
 
     columns = [
+        "surface_type",
         "cx", "cy", "cz",
         "rx", "ry", "rz",
         "ev1x", "ev1y", "ev1z",
         "ev2x", "ev2y", "ev2z",
         "ev3x", "ev3y", "ev3z",
-        "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10",
     ]
 
-    def __init__(self, center: np.ndarray | None = None, radii: np.ndarray | None = None, e_vec1: np.ndarray | None = None, e_vec2: np.ndarray | None = None, e_vec3: np.ndarray | None = None, params: np.ndarray | None = None):
+    def __init__(self, center: np.ndarray | None = None, radii: np.ndarray | None = None, e_vec1: np.ndarray | None = None, e_vec2: np.ndarray | None = None, e_vec3: np.ndarray | None = None):
         super().__init__()
         self.center = center if center is not None else np.zeros(3)
         self.radii = radii if radii is not None else np.zeros(3)
         self.e_vec1 = e_vec1 if e_vec1 is not None else np.zeros(3)
         self.e_vec2 = e_vec2 if e_vec2 is not None else np.zeros(3)
         self.e_vec3 = e_vec3 if e_vec3 is not None else np.zeros(3)
-        self.params = params if params is not None else np.zeros(10)
         self.singular = False
-    
+
+    @classmethod
+    def _from_params(cls, params: np.ndarray) -> "Ellipsoid":
+        """Ellipsoid whose centre, radii and axes are derived from ten quadric coefficients."""
+        center, radii, evecs = geom.ellipsoid_axes_from_quadric(params)
+        return cls(center=center, radii=radii, e_vec1=evecs[:, 0], e_vec2=evecs[:, 1], e_vec3=evecs[:, 2])
+
+    @property
+    def params(self) -> np.ndarray:
+        """Quadric coefficients (10,), computed from the centre, radii and axes."""
+        return geom.ellipsoid_quadric_from_axes(self.center, self.radii, self._evecs())
+
     @classmethod
     def fit_to_points(cls, points: np.ndarray) -> "Ellipsoid":
         """
-        Fit ellipsoid to a set of 3D points using algebraic least squares.
-
-        Based on http://www.mathworks.com/matlabcentral/fileexchange/24693-ellipsoid-fit
+        Fit ellipsoid to a set of 3D points using algebraic least squares (:func:`geom.fit_ellipsoid`).
 
         Parameters
         ----------
@@ -7323,66 +7493,33 @@ class Ellipsoid(AnalyticSurface):
             el.singular = True
             return el
 
-        x, y, z = points[:, 0], points[:, 1], points[:, 2]
-        D = np.array([
-            x * x + y * y - 2 * z * z,
-            x * x + z * z - 2 * y * y,
-            2 * x * y, 2 * x * z, 2 * y * z,
-            2 * x, 2 * y, 2 * z,
-            1 - 0 * x,
-        ])
-        d2 = (x * x + y * y + z * z).T
-        u = np.linalg.solve(D.dot(D.T), D.dot(d2))
-        params = np.array([u[0] + u[1] - 1, u[0] - 2 * u[1] - 1, u[1] - 2 * u[0] - 1,
-                           u[2], u[3], u[4], u[5], u[6], u[7], u[8]])
-        el = cls(params=params)
-        el.compute_props()
-        return el
-
-    def compute_props(self):
-        """Derive center, radii, and eigenvectors from algebraic parameters."""
-        p = self.params
-        A = np.array([
-            [p[0], p[3], p[4], p[6]],
-            [p[3], p[1], p[5], p[7]],
-            [p[4], p[5], p[2], p[8]],
-            [p[6], p[7], p[8], p[9]],
-        ])
-        self.center = np.linalg.solve(-A[:3, :3], p[6:9])
-        T = np.eye(4)
-        T[3, :3] = self.center.T
-        R = T.dot(A).dot(T.T)
-        evals, evecs = np.linalg.eig(R[:3, :3] / -R[3, 3])
-        evecs = evecs.T
-        self.e_vec1, self.e_vec2, self.e_vec3 = evecs[0], evecs[1], evecs[2]
-        self.radii = np.sqrt(1.0 / np.abs(evals)) * np.sign(evals)
+        center, radii, evecs, _ = geom.fit_ellipsoid(points)
+        return cls(center=center, radii=radii, e_vec1=evecs[0], e_vec2=evecs[1], e_vec3=evecs[2])
 
     @classmethod
     def from_dict(cls, input_dict):
-        """Construct from a dict with keys: center, radii, e_vec1-3, params (optional)."""
-        el = cls()
-        for key in ("center", "radii", "e_vec1", "e_vec2", "e_vec3", "params"):
-            if key in input_dict:
-                setattr(el, key, np.asarray(input_dict[key], dtype=float))
-        if not hasattr(el, "params") or el.params is None:
-            raise ValueError("dict must contain 'params' for algebraic reconstruction.")
-        if not all(k in input_dict for k in ("center", "radii", "e_vec1", "e_vec2", "e_vec3")):
-            el.compute_props()
-        return el
+        """Construct from a dict with keys center, radii and e_vec1-3, or, failing those, params."""
+        geometry = ("center", "radii", "e_vec1", "e_vec2", "e_vec3")
+        if all(k in input_dict for k in geometry):
+            return cls(**{k: np.asarray(input_dict[k], dtype=float) for k in geometry})
+        if "params" in input_dict:
+            return cls._from_params(np.asarray(input_dict["params"], dtype=float))
+        raise ValueError("dict must contain center, radii and e_vec1-3, or params.")
 
     @classmethod
     def from_df(cls, df):
-        """Construct from a DataFrame or Series with the standard column set."""
-        el = cls()
-        el.center = np.asarray(df[["cx", "cy", "cz"]].values, dtype=float).flatten()
-        el.radii = np.asarray(df[["rx", "ry", "rz"]].values, dtype=float).flatten()
-        el.e_vec1 = np.asarray(df[["ev1x", "ev1y", "ev1z"]].values, dtype=float).flatten()
-        el.e_vec2 = np.asarray(df[["ev2x", "ev2y", "ev2z"]].values, dtype=float).flatten()
-        el.e_vec3 = np.asarray(df[["ev3x", "ev3y", "ev3z"]].values, dtype=float).flatten()
-        el.params = np.asarray(
-            df[["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]].values, dtype=float
-        ).flatten()
-        return el
+        """Construct from a DataFrame or Series with the standard column set.
+
+        Any other columns, such as ``p1``-``p10`` in older files, are ignored;
+        :attr:`params` is computed from the geometry.
+        """
+        return cls(
+            center=np.asarray(df[["cx", "cy", "cz"]].values, dtype=float).flatten(),
+            radii=np.asarray(df[["rx", "ry", "rz"]].values, dtype=float).flatten(),
+            e_vec1=np.asarray(df[["ev1x", "ev1y", "ev1z"]].values, dtype=float).flatten(),
+            e_vec2=np.asarray(df[["ev2x", "ev2y", "ev2z"]].values, dtype=float).flatten(),
+            e_vec3=np.asarray(df[["ev3x", "ev3y", "ev3z"]].values, dtype=float).flatten(),
+        )
 
     @classmethod
     def from_array_like(cls, array_like):
@@ -7390,20 +7527,17 @@ class Ellipsoid(AnalyticSurface):
         Construct from a flat array or list.
 
         - Length 10: algebraic params; geometric properties computed.
-        - Length 25: full vector [center(3), radii(3), ev1-3(9), params(10)].
+        - Length 15: [center(3), radii(3), ev1-3(9)], as :meth:`get_props_as_ndarray` returns.
         - Shape (N, 3): point coordinates; fits ellipsoid.
         """
         al = np.atleast_1d(np.asarray(array_like, dtype=float))
         if al.size == 10:
-            el = cls(params=al.flatten())
-            el.compute_props()
-            return el
-        elif al.size == 25:
+            return cls._from_params(al.flatten())
+        elif al.size == 15:
             al = al.flatten()
             return cls(
                 center=al[:3], radii=al[3:6],
                 e_vec1=al[6:9], e_vec2=al[9:12], e_vec3=al[12:15],
-                params=al[15:],
             )
         elif al.ndim == 2 and al.shape[1] == 3:
             return cls.fit_to_points(al)
@@ -7411,56 +7545,52 @@ class Ellipsoid(AnalyticSurface):
             raise ValueError(f"Cannot construct Ellipsoid from array of shape {al.shape}.")
 
     def get_props_as_ndarray(self):
-        """Return all properties as a flat (25,) array."""
-        out = np.zeros(25)
-        out[:3] = self.center
-        out[3:6] = self.radii
-        out[6:9] = self.e_vec1
-        out[9:12] = self.e_vec2
-        out[12:15] = self.e_vec3
-        out[15:] = self.params
-        return out
+        """Return the centre, radii and axes as a flat (15,) array."""
+        return np.concatenate([self.center, self.radii, self.e_vec1, self.e_vec2, self.e_vec3]).astype(float)
 
     def get_props_as_dict(self):
-        """Return all properties as a dict."""
+        """Return the centre, radii and axes as a dict."""
         return {
             "center": self.center, "radii": self.radii,
             "e_vec1": self.e_vec1, "e_vec2": self.e_vec2, "e_vec3": self.e_vec3,
-            "params": self.params,
         }
 
     def get_props_as_list(self):
-        """Return all properties as a list of arrays."""
-        return [self.center, self.radii, self.e_vec1, self.e_vec2, self.e_vec3, self.params]
+        """Return the centre, radii and axes as a list of arrays."""
+        return [self.center, self.radii, self.e_vec1, self.e_vec2, self.e_vec3]
 
     def get_props_as_df(self):
-        """Return all properties as a single-row DataFrame."""
+        """Return the surface type, centre, radii and axes as a single-row DataFrame.
+
+        ``surface_type`` is ``"ellipsoid"``, so :class:`AnalyticSurfacesM` can
+        tell the file from a tube file.
+        """
         df = pd.DataFrame(columns=self.columns)
         df[["cx", "cy", "cz"]] = [self.center]
         df[["rx", "ry", "rz"]] = [self.radii]
         df[["ev1x", "ev1y", "ev1z"]] = [self.e_vec1]
         df[["ev2x", "ev2y", "ev2z"]] = [self.e_vec2]
         df[["ev3x", "ev3y", "ev3z"]] = [self.e_vec3]
-        df[["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"]] = [self.params]
+        df["surface_type"] = "ellipsoid"
         return df
     
     def distance_point_surface(self, point):
-        """Shortest Euclidean distance from point to ellipsoid surface."""
-        e_vecs = np.column_stack([self.e_vec1, self.e_vec2, self.e_vec3])
-        p_local = e_vecs.T.dot(np.asarray(point) - self.center)
-
-        def scale_equation(lmbda):
-            return np.sum((p_local / ((1 + lmbda) * self.radii)) ** 2) - 1
-
-        lmbda = fsolve(scale_equation, 0)[0]
-        closest_global = e_vecs.dot(p_local / (1 + lmbda)) + self.center
-        return float(np.linalg.norm(np.asarray(point) - closest_global))
+        """Distance from point to its radial projection on the ellipsoid (see :meth:`project_points`)."""
+        point = np.asarray(point, dtype=float)
+        projected, _ = self.project_points(point)
+        return float(np.linalg.norm(point - projected[0]))
 
     def transform(self, transformation_matrix: np.ndarray):
-        """Apply a 4x4 homogeneous transformation matrix in-place."""
-        M = np.asarray(transformation_matrix, dtype=float)
-        self.center = M[:3, :3].dot(self.center) + M[:3, 3]
-        R = M[:3, :3] / np.linalg.norm(M[:3, :3], axis=0)
+        """Apply a 4x4 homogeneous rigid transformation in-place.
+
+        Raises
+        ------
+        UserInputError
+            If the transformation is not rigid (see :func:`geom.rigid_transform_parts`);
+            a scaled ellipsoid would no longer match its stored radii.
+        """
+        R, t = geom.rigid_transform_parts(transformation_matrix)
+        self.center = R.dot(self.center) + t
         self.e_vec1 = R.dot(self.e_vec1)
         self.e_vec2 = R.dot(self.e_vec2)
         self.e_vec3 = R.dot(self.e_vec3)
@@ -7473,76 +7603,87 @@ class Ellipsoid(AnalyticSurface):
         self.e_vec2 = R.dot(self.e_vec2)
         self.e_vec3 = R.dot(self.e_vec3)
 
-    def intersection_line(self, line):
-        """
-        Compute intersections between a line and the ellipsoid.
+    @property
+    def mean_radius(self) -> float:
+        """Mean of the three semi-axis lengths."""
+        return float(np.mean(self.radii))
+
+    def _evecs(self) -> np.ndarray:
+        """Semi-axis directions as the columns of a (3, 3) matrix."""
+        return np.column_stack([self.e_vec1, self.e_vec2, self.e_vec3])
+
+    def project_points(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Project points radially onto the ellipsoid.
+
+        Each point is moved along the line through :attr:`center`, the same
+        projection :meth:`distance_point_surface` measures to.
 
         Parameters
         ----------
-        line : object with attributes ``p`` (3,) and ``dir`` (3,)
+        points : np.ndarray (N, 3)
 
         Returns
         -------
-        p1, p2 : np.ndarray or nan
-        d1, d2 : float or nan — signed distances from line.p
-        is_inside : bool
+        projected : np.ndarray (N, 3)
+            Points on the surface.
+        normals : np.ndarray (N, 3)
+            Outward unit surface normals at *projected*.
         """
-        x, y, z = line.p[0], line.p[1], line.p[2]
-        n1, n2, n3 = line.dir[0], line.dir[1], line.dir[2]
-        a, b, c, d, e, f, g, h, i, j = self.params
+        return geom.project_points_on_ellipsoid(points, self.center, self.radii, self._evecs())
 
-        A = a*n1**2 + b*n2**2 + c*n3**2 + 2*d*n1*n2 + 2*e*n1*n3 + 2*f*n3*n2
-        B = 2*(a*x*n1 + b*y*n2 + c*z*n3
-               + d*x*n2 + d*y*n1 + e*x*n3 + e*z*n1 + f*z*n2 + f*y*n3
-               + g*n1 + h*n2 + i*n3)
-        C = j + a*x**2 + b*y**2 + c*z**2 + 2*(i*z + h*y + g*x + d*x*y + e*x*z + f*z*y)
+    def oversample(
+        self,
+        spacing: float | None = None,
+        *,
+        angular_step: float | None = None,
+        cap_angle: float = 360.0,
+    ) -> "OrientedPointCloud":
+        """Sample the ellipsoid surface as an :class:`OrientedPointCloud`.
 
-        disc = B**2 - 4*A*C
-        if disc < 0:
-            return np.nan, np.nan, np.nan, np.nan, False
-        elif disc == 0:
-            t1 = -B / (2*A)
-            p1 = line.p + t1 * line.dir
-            return p1, np.nan, float(np.sign(t1) * np.linalg.norm(p1 - line.p)), np.nan, False
+        Give exactly one of *spacing* and *angular_step*.
+
+        Parameters
+        ----------
+        spacing : float, optional
+            Target spacing in voxels between neighbouring points
+            (:func:`geom.sample_ellipsoid_surface`).
+        angular_step : float, optional
+            Angular step in degrees between directions from the centre
+            (:func:`geom.sample_ellipsoid_by_directions`); each point is where
+            the ray along its direction meets the surface.  On a sphere this
+            is :func:`geom.sample_cone` around the centre.
+        cap_angle : float, default=360.0
+            Restrict the sampling to the cap :func:`geom.sample_cone` samples
+            for this angle (:func:`geom.in_cone_cap`): the directions from the
+            centre with ``z >= 1 - cap_angle / 180``.  360 is the whole surface.
+
+        Returns
+        -------
+        OrientedPointCloud
+            Points on the surface with outward surface normals.
+
+        Raises
+        ------
+        ValueError
+            If both or neither of *spacing* and *angular_step* are given.
+        """
+        if (spacing is None) == (angular_step is None):
+            raise ValueError("Give exactly one of spacing (voxels) and angular_step (degrees).")
+        if spacing is not None:
+            points, normals = geom.sample_ellipsoid_surface(
+                self.center, self.radii, self._evecs(), spacing, cap_angle=cap_angle
+            )
         else:
-            t1 = (-B + np.sqrt(disc)) / (2*A)
-            t2 = (-B - np.sqrt(disc)) / (2*A)
-            p1 = line.p + t1 * line.dir
-            p2 = line.p + t2 * line.dir
-            d1 = float(np.sign(t1) * np.linalg.norm(p1 - line.p))
-            d2 = float(np.sign(t2) * np.linalg.norm(p2 - line.p))
-            is_inside = (d1 < 0) != (d2 < 0)
-            ps = np.column_stack((p1, p2))
-            dists = [d1, d2]
-            idx = int(np.argmin(np.abs(dists)))
-            return ps[:, idx], ps[:, 1-idx], dists[idx], dists[1-idx], is_inside
+            points = geom.sample_ellipsoid_by_directions(self.center, self.params, angular_step, cap_angle)
+            _, normals = self.project_points(points)
+        oriented_pcd = OrientedPointCloud()
+        oriented_pcd.vertices = points
+        oriented_pcd.normals = normals
+        oriented_pcd.inherit_coordinate_metadata(self)
+        return oriented_pcd
 
-    def intersection_ray(self, ray):
-        """Intersections with a ray (positive direction only). Same return signature as intersection_line."""
-        p1, p2, d1, d2, is_inside = self.intersection_line(ray)
-        if not np.isnan(d1) and not np.isnan(d2):
-            if d1 < 0 < d2:
-                return p2, np.nan, d2, np.nan, True
-            elif d2 < 0 < d1:
-                return p1, np.nan, d1, np.nan, True
-            elif d1 < 0 and d2 < 0:
-                return np.nan, np.nan, np.nan, np.nan, False
-            return p1, p2, d1, d2, False
-        elif not np.isnan(d1):
-            if d1 < 0:
-                return np.nan, np.nan, np.nan, np.nan, False
-            return p1, np.nan, d1, np.nan, False
-        return p1, p2, d1, d2, is_inside
-
-    def intersection_line_segment(self, line_segment):
-        """Intersections clipped to segment length. line_segment must have a ``length`` attribute."""
-        p1, p2, d1, d2, is_inside = self.intersection_ray(line_segment)
-        if not np.isnan(d1):
-            if d1 > line_segment.length:
-                return np.nan, np.nan, np.nan, np.nan, is_inside
-            if not np.isnan(d2) and d2 > line_segment.length:
-                return p1, np.nan, d1, np.nan, is_inside
-        return p1, p2, d1, d2, is_inside
+    def _line_roots(self, point: np.ndarray, direction: np.ndarray) -> tuple[np.ndarray, bool]:
+        return geom.line_ellipsoid_roots(point, direction, self.params)
 
 
 _SURFACE_TYPES: dict[str, tuple] = {
@@ -7557,11 +7698,21 @@ Register a new entry here to add a surface type; no other edits needed.
 
 
 class AnalyticSurfacesM:
-    """Container managing a collection of analytic surfaces keyed by (tomo_id, feature_id)."""
+    """Container managing a collection of analytic surfaces keyed by (tomo_id, feature_id).
 
-    def __init__(self, input_data, surface_type="ellipsoid", feature_id="object_id"):
+    *input_data* is a :class:`~cryocat.core.cryomotl.Motl`, whose
+    ``(tomo_id_column, feature_id)`` groups are fitted, one surface each; a path to a CSV written by
+    :meth:`write_out`; or a dict ``{(tomo_id, feature_id): surface}`` of
+    surfaces already built, which is taken as it is.
+
+    *tomo_id_column* is the column of the input motl or CSV, and of the CSV
+    :meth:`write_out` writes, that holds the tomogram of each surface.
+    """
+
+    def __init__(self, input_data, surface_type="ellipsoid", feature_id="object_id", tomo_id_column: MotlColumn = "tomo_id"):
         self.dict = {}
         self.f_id = feature_id
+        self.tomo_id_column = tomo_id_column
 
         if surface_type not in _SURFACE_TYPES:
             raise ValueError(
@@ -7572,11 +7723,12 @@ class AnalyticSurfacesM:
 
         if isinstance(input_data, cryomotl.Motl):
             input_motl = cryomotl.Motl.load(input_data)
+            # Object ids repeat across tomograms, so one surface is fitted per (tomogram, object).
             for f in input_motl.get_unique_values(column_name=feature_id):
                 fm = input_motl.get_motl_subset(column_values=f, column_name=feature_id, reset_index=True)
-                tomo_id = fm.df["tomo_id"].values[0]
-                coords = fm.get_coordinates()
-                self.dict[(tomo_id, f)] = _fit_fn(coords)
+                for tomo_id in fm.get_unique_values(column_name=tomo_id_column):
+                    tm = fm.get_motl_subset(column_values=tomo_id, column_name=tomo_id_column, reset_index=True)
+                    self.dict[(tomo_id, f)] = _fit_fn(tm.get_coordinates())
         elif isinstance(input_data, str):
             df = pd.read_csv(input_data)
             if "surface_type" in df.columns:
@@ -7586,8 +7738,10 @@ class AnalyticSurfacesM:
                         f"File surface_type {list(file_types)!r} does not match "
                         f"requested {surface_type!r}"
                     )
-            for (tomo_id_val, f_val), group in df.groupby(["tomo_id", feature_id], sort=False):
+            for (tomo_id_val, f_val), group in df.groupby([tomo_id_column, feature_id], sort=False):
                 self.dict[(tomo_id_val, f_val)] = _from_df_fn(group)
+        elif isinstance(input_data, dict):
+            self.dict = dict(input_data)
         else:
             raise ValueError(f"Unsupported input type: {type(input_data)}")
 
@@ -7596,7 +7750,7 @@ class AnalyticSurfacesM:
     def write_out(self, output_name):
         """Write all surfaces to a CSV file."""
         frames = [
-            surface.get_props_as_df().assign(tomo_id=tomo_id, **{self.f_id: f_id})
+            surface.get_props_as_df().assign(**{self.tomo_id_column: tomo_id, self.f_id: f_id})
             for (tomo_id, f_id), surface in self.dict.items()
         ]
         pd.concat(frames, ignore_index=True).to_csv(output_name, index=False)

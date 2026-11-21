@@ -101,7 +101,7 @@ def _render_call_row(ev: dict):
     assign_to = ev.get("assign_to")
 
     # Summary line: always visible — icon + script line + duration.
-    # command_src (set on synthetic wrap events like PleomorphicSurface()) is
+    # command_src (set on synthetic wrap events like PleomorphicAssembly()) is
     # already a full assignment expression and takes priority over reconstruction.
     icon = "✓" if status == "ok" else "✗"
     icon_style = _STATUS_STYLE.get(status, _STATUS_STYLE["ok"])

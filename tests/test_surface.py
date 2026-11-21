@@ -70,7 +70,7 @@ def test_fit_singular_on_too_few_points():
 def test_get_props_as_ndarray_shape(fitted_ellipsoid):
     el, _, _ = fitted_ellipsoid
     arr = el.get_props_as_ndarray()
-    assert arr.shape == (25,), f"expected (25,), got {arr.shape}"
+    assert arr.shape == (15,), f"expected (15,), got {arr.shape}"
 
 
 def test_get_props_as_ndarray_contains_center(fitted_ellipsoid):
@@ -79,10 +79,11 @@ def test_get_props_as_ndarray_contains_center(fitted_ellipsoid):
     assert np.allclose(arr[:3], el.center, atol=1e-10)
 
 
-def test_get_props_as_ndarray_contains_params(fitted_ellipsoid):
+def test_get_props_as_ndarray_params_recomputed(fitted_ellipsoid):
+    """The array holds only the geometry; params computed from it are the same."""
     el, _, _ = fitted_ellipsoid
     arr = el.get_props_as_ndarray()
-    assert np.allclose(arr[15:], el.params, atol=1e-10)
+    assert np.allclose(Ellipsoid.from_array_like(arr).params, el.params, atol=1e-10)
 
 
 def test_get_props_as_df_columns(fitted_ellipsoid):
@@ -1579,3 +1580,263 @@ class TestMeshSaveSTL:
         out = tmp_path / "opc.stl"
         with pytest.raises(ValueError, match="point cloud|triangle mesh|STL"):
             unit_sphere_opc.save(out, format="stl")
+
+
+# =============================================================================
+# Analytic surfaces: Tube, Ellipsoid, signed distances, AnalyticSurfacesM
+# =============================================================================
+
+import pandas as pd
+from scipy.spatial.transform import Rotation as _srot
+from cryocat.core import cryomotl
+from cryocat.core.surface import Tube, AnalyticSurfacesM
+from cryocat.utils import geom
+from cryocat.utils.exceptions import UserInputError
+
+_RIGID = np.eye(4)
+_RIGID[:3, :3] = _srot.from_euler("zxz", [25.0, 60.0, -35.0], degrees=True).as_matrix()
+_RIGID[:3, 3] = [7.0, -4.0, 12.0]
+
+
+def _apply(matrix, points):
+    return np.atleast_2d(points) @ matrix[:3, :3].T + matrix[:3, 3]
+
+
+def _straight_tube():
+    return Tube(center=np.array([1.0, 2.0, 3.0]), axis_direction=np.array([0.0, 0.0, 1.0]),
+                radius=5.0, centerline_length=40.0)
+
+
+def _spline_tube():
+    # Wall points of a gently bent tube (bend radius >> tube radius).
+    t = np.linspace(0.0, 1.0, 60)
+    centres = np.column_stack([60.0 * t, 8.0 * np.sin(np.pi * t), 2.0 * t])
+    tangents = np.gradient(centres, axis=0)
+    wall, _ = geom.sample_tube_surface(centres, tangents, 4.0, spacing=1.0)
+    return Tube.fit_to_points_spline(wall, n_bins=20)
+
+
+def _distance_to_centerline(tube, points):
+    _, dist = geom.closest_points_on_polyline(np.atleast_2d(points), tube._centerline_points())
+    return dist
+
+
+def _query_points(tube, seed):
+    """Points around the middle of a tube, inside and outside its wall."""
+    rng = np.random.default_rng(seed)
+    line = tube._centerline_points()
+    base = line[len(line) // 2]
+    return base + rng.normal(scale=tube.radius * 1.5, size=(40, 3))
+
+
+@pytest.fixture(params=["straight", "spline"])
+def tube(request):
+    return _straight_tube() if request.param == "straight" else _spline_tube()
+
+
+class TestTube:
+    def test_projected_points_lie_on_the_wall(self, tube):
+        pts = _query_points(tube, seed=0)
+        proj, normals = tube.project_points(pts)
+        np.testing.assert_allclose(_distance_to_centerline(tube, proj), tube.radius, atol=1e-6)
+        np.testing.assert_allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-12)
+
+    def test_mean_radius_is_the_radius(self, tube):
+        assert tube.mean_radius == pytest.approx(tube.radius)
+
+    def test_intersections_lie_on_the_wall(self, tube):
+        line = tube._centerline_points()
+        i = len(line) // 2
+        mid = line[i]
+        tangent = line[min(i + 1, len(line) - 1)] - line[i - 1]
+        across = np.cross(tangent, [0.3, 0.5, 0.8])
+        across /= np.linalg.norm(across)
+        start = mid - 3 * tube.radius * across
+        for p1, p2, d1, d2, _inside in (
+            tube.intersection_line(geom.Line(start, across)),
+            tube.intersection_ray(geom.Line(start, across)),
+            tube.intersection_line_segment(geom.LineSegment(start, mid + 3 * tube.radius * across)),
+        ):
+            np.testing.assert_allclose(_distance_to_centerline(tube, np.vstack([p1, p2])), tube.radius, atol=1e-6)
+            assert d1 > 0 and d2 > 0
+
+    def test_segment_hits_are_clipped_to_its_length(self, tube):
+        line = tube._centerline_points()
+        i = len(line) // 2
+        mid = line[i]
+        tangent = line[min(i + 1, len(line) - 1)] - line[i - 1]
+        across = np.cross(tangent, [0.3, 0.5, 0.8])
+        across /= np.linalg.norm(across)
+        start = mid - 3 * tube.radius * across
+        p1, p2, d1, d2, _ = tube.intersection_line_segment(geom.LineSegment(start, mid))
+        np.testing.assert_allclose(_distance_to_centerline(tube, p1), tube.radius, atol=1e-6)
+        assert 0 < d1 <= 3 * tube.radius
+        assert np.all(np.isnan(p2)) and np.isnan(d2)
+
+    def test_oversample_gives_wall_points(self, tube):
+        pcd = tube.oversample(1.5)
+        assert len(pcd.vertices) > 0
+        # Measured to the exact centerline: a dense resampling of the spline, or the straight axis.
+        if getattr(tube, "_spline_type", None) == "bspline":
+            exact, _ = geom.sample_spline_by_arc_length(tube._spline_tck, 0.02)
+        else:
+            exact = tube._centerline_points()
+        _, dist = geom.closest_points_on_polyline(pcd.vertices, exact)
+        np.testing.assert_allclose(dist, tube.radius, atol=1e-3)
+
+    @pytest.mark.parametrize("move", ["transform", "rotate", "translate"])
+    def test_rigid_move_keeps_point_to_wall_distances(self, tube, move):
+        pts = _query_points(tube, seed=1)
+        before = tube.signed_distances(pts)
+        if move == "transform":
+            tube.transform(_RIGID)
+            moved = _apply(_RIGID, pts)
+        elif move == "rotate":
+            tube.rotate(_RIGID[:3, :3])
+            moved = pts @ _RIGID[:3, :3].T
+        else:
+            tube.translate(_RIGID[:3, 3])
+            moved = pts + _RIGID[:3, 3]
+        np.testing.assert_allclose(tube.signed_distances(moved), before, atol=1e-6)
+
+    def test_non_rigid_matrix_is_rejected(self, tube):
+        with pytest.raises(UserInputError):
+            tube.transform(np.diag([2.0, 2.0, 2.0, 1.0]))
+
+    def test_straight_df_round_trip_is_exact(self):
+        tube = _straight_tube()
+        back = Tube.from_df(tube.get_props_as_df())
+        np.testing.assert_allclose(back.center, tube.center)
+        np.testing.assert_allclose(back.axis_direction, tube.axis_direction)
+        assert back.radius == tube.radius
+        assert back.centerline_length == pytest.approx(tube.centerline_length)
+
+    def test_spline_df_round_trip_keeps_the_surface(self):
+        tube = _spline_tube()
+        back = Tube.from_df(tube.get_props_as_df())
+        assert back._spline_type == "bspline"
+        assert back.radius == tube.radius
+        pts = _query_points(tube, seed=2)
+        np.testing.assert_allclose(back.signed_distances(pts), tube.signed_distances(pts), atol=0.05 * tube.radius)
+
+
+def _tilted_ellipsoid():
+    R = _srot.from_euler("zxz", [15.0, 40.0, 70.0], degrees=True).as_matrix()
+    return Ellipsoid(center=np.array([10.0, -5.0, 8.0]), radii=np.array([6.0, 9.0, 13.0]),
+                     e_vec1=R[:, 0], e_vec2=R[:, 1], e_vec3=R[:, 2])
+
+
+def _quadric_value(params, points):
+    a, b, c, d, e, f, g, h, i, j = params
+    x, y, z = np.atleast_2d(points).T
+    return a * x**2 + b * y**2 + c * z**2 + 2 * (d * x * y + e * x * z + f * y * z + g * x + h * y + i * z) + j
+
+
+class TestEllipsoidAnalytic:
+    def test_intersections_follow_a_rigid_move(self):
+        el = _tilted_ellipsoid()
+        start, direction = np.array([30.0, 4.0, -2.0]), np.array([-1.0, -0.4, 0.5])
+        p1, p2, _, _, _ = el.intersection_line(geom.Line(start, direction))
+        el.transform(_RIGID)
+        q1, q2, _, _, _ = el.intersection_line(
+            geom.Line(_apply(_RIGID, start)[0], _RIGID[:3, :3] @ direction))
+        np.testing.assert_allclose(np.vstack([q1, q2]), _apply(_RIGID, np.vstack([p1, p2])), atol=1e-8)
+        np.testing.assert_allclose(_quadric_value(el.params, np.vstack([q1, q2])), 0.0, atol=1e-9)
+
+    def test_params_agree_with_the_stored_geometry(self):
+        el = _tilted_ellipsoid()
+        el.transform(_RIGID)
+        pts = el.oversample(2.0).vertices
+        np.testing.assert_allclose(_quadric_value(el.params, pts), 0.0, atol=1e-9)
+        center, radii, _ = geom.ellipsoid_axes_from_quadric(el.params)
+        np.testing.assert_allclose(center, el.center, atol=1e-9)
+        np.testing.assert_allclose(np.sort(np.abs(radii)), np.sort(el.radii), atol=1e-9)
+
+    def test_csv_round_trip_has_no_quadric_columns(self, tmp_path):
+        el = _tilted_ellipsoid()
+        out = tmp_path / "ellipsoids.csv"
+        AnalyticSurfacesM({(1, 1): el}).write_out(out)
+        df = pd.read_csv(out)
+        assert not any(f"p{k}" in df.columns for k in range(1, 11))
+        back = AnalyticSurfacesM(str(out)).dict[(1, 1)]
+        np.testing.assert_allclose(back.get_props_as_ndarray(), el.get_props_as_ndarray(), atol=1e-12)
+
+    def test_csv_with_quadric_columns_loads_the_same_ellipsoid(self, tmp_path):
+        el = _tilted_ellipsoid()
+        out = tmp_path / "old_ellipsoids.csv"
+        AnalyticSurfacesM({(1, 1): el}).write_out(out)
+        df = pd.read_csv(out)
+        for k in range(10):
+            df[f"p{k + 1}"] = 999.0  # stale values: must be ignored
+        df.to_csv(out, index=False)
+        back = AnalyticSurfacesM(str(out)).dict[(1, 1)]
+        np.testing.assert_allclose(back.params, el.params, atol=1e-12)
+
+    @pytest.mark.parametrize("kwargs", [{}, {"spacing": 2.0, "angular_step": 10.0}],
+                             ids=["neither", "both"])
+    def test_oversample_needs_exactly_one_sampling_argument(self, kwargs):
+        with pytest.raises(ValueError, match="exactly one"):
+            _tilted_ellipsoid().oversample(**kwargs)
+
+    @pytest.mark.parametrize("kwargs", [{"spacing": 2.0}, {"angular_step": 10.0}])
+    def test_cap_angle_restricts_points_to_the_cap(self, kwargs):
+        el = _tilted_ellipsoid()
+        full = el.oversample(**kwargs).vertices
+        cap = el.oversample(cap_angle=90.0, **kwargs).vertices
+        assert 0 < len(cap) < len(full)
+        assert np.all(geom.in_cone_cap(cap - el.center, 90.0))
+        np.testing.assert_allclose(_quadric_value(el.params, cap), 0.0, atol=1e-9)
+
+
+@pytest.mark.parametrize("make", [_tilted_ellipsoid, _straight_tube], ids=["ellipsoid", "tube"])
+def test_signed_distances_signs(make):
+    surf = make()
+    on = surf.oversample(2.0).vertices[:30]
+    _, normals = surf.project_points(on)
+    inside = on - 0.5 * normals
+    outside = on + 0.5 * normals
+    np.testing.assert_allclose(surf.signed_distances(on), 0.0, atol=1e-8)
+    assert np.all(surf.signed_distances(inside) < 0)
+    assert np.all(surf.signed_distances(outside) > 0)
+
+
+def _surface_motl(groups: dict[tuple[int, int], np.ndarray]) -> cryomotl.Motl:
+    rows = []
+    for (tomo, obj), pts in groups.items():
+        for p in pts:
+            row = dict.fromkeys(cryomotl.Motl.motl_columns, 0.0)
+            row.update(tomo_id=float(tomo), object_id=float(obj), x=p[0], y=p[1], z=p[2])
+            rows.append(row)
+    df = pd.DataFrame(rows)[cryomotl.Motl.motl_columns]
+    df["subtomo_id"] = np.arange(1, len(df) + 1, dtype=float)
+    return cryomotl.Motl(df)
+
+
+class TestAnalyticSurfacesM:
+    def test_accepts_a_dict_of_built_surfaces(self):
+        surfaces = {(1, 1): _tilted_ellipsoid(), (1, 2): _straight_tube()}
+        m = AnalyticSurfacesM(surfaces)
+        assert m.dict.keys() == surfaces.keys()
+        assert all(m.dict[k] is surfaces[k] for k in surfaces)
+
+    def test_dispatches_ellipsoid_and_tube(self):
+        el_pts = _tilted_ellipsoid().oversample(3.0).vertices
+        t = np.linspace(0.0, 1.0, 40)
+        centres = np.column_stack([50.0 * t, 5.0 * np.sin(np.pi * t), np.zeros_like(t)])
+        tube_pts, _ = geom.sample_tube_surface(centres, np.gradient(centres, axis=0), 4.0, spacing=1.5)
+        m_el = AnalyticSurfacesM(_surface_motl({(1, 1): el_pts}), surface_type="ellipsoid")
+        m_tube = AnalyticSurfacesM(_surface_motl({(1, 1): tube_pts}), surface_type="tube")
+        assert isinstance(m_el.dict[(1.0, 1.0)], Ellipsoid)
+        assert isinstance(m_tube.dict[(1.0, 1.0)], Tube)
+
+    def test_file_of_another_surface_type_raises(self, tmp_path):
+        out = tmp_path / "tubes.csv"
+        AnalyticSurfacesM({(1, 1): _straight_tube()}).write_out(out)
+        with pytest.raises(ValueError, match="does not match"):
+            AnalyticSurfacesM(str(out), surface_type="ellipsoid")
+
+    def test_ellipsoid_file_loaded_as_tube_raises(self, tmp_path):
+        out = tmp_path / "ellipsoids.csv"
+        AnalyticSurfacesM({(1, 1): _tilted_ellipsoid()}).write_out(out)
+        with pytest.raises(ValueError, match="does not match"):
+            AnalyticSurfacesM(str(out), surface_type="tube")

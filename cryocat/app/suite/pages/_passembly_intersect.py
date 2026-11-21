@@ -89,7 +89,7 @@ def hits_summary_dataframe(data: dict) -> pd.DataFrame:
     Parameters
     ----------
     data : dict
-        Output of :meth:`cryocat.analysis.assembly.PleomorphicSurface.intersection_data`.
+        Output of :meth:`cryocat.analysis.assembly.PleomorphicAssembly.intersection_data`.
 
     Returns
     -------

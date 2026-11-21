@@ -1,5 +1,6 @@
 from __future__ import annotations
 import copy
+import functools
 import logging
 import numpy as np
 import pandas as pd
@@ -26,7 +27,6 @@ from cryocat._types import (
     MapSource,
     MotlColumn,
     PathOrStr,
-    TomoDimensions,
     TripletLike,
     RotationLike,
     MotlType,
@@ -49,7 +49,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 import math as _math
-from typing import Any, Literal
+from typing import Any, Literal, Self
 from cryocat.utils.classutils import gui_exposed
 
 # =============================================================================
@@ -586,9 +586,9 @@ def complex_centers(
     Returns
     -------
     cryomotl.Motl
-        One row per ``(tomo_id, affiliation)`` pair.  ``tomo_id`` and
-        ``object_id`` carry the group identifiers; all other columns are
-        zero-filled.
+        One row per ``(tomo_id, affiliation)`` pair.  *tomo_id_column* and
+        *affiliation_column* carry the group identifiers; all other columns
+        are zero-filled.
     """
     m = cryomotl.Motl.load(motl)
     central_points: list[np.ndarray] = []
@@ -613,8 +613,8 @@ def complex_centers(
                 "x": pts[:, 0],
                 "y": pts[:, 1],
                 "z": pts[:, 2],
-                "tomo_id": np.array(tomo_ids),
-                "object_id": np.array(object_ids),
+                tomo_id_column: np.array(tomo_ids),
+                affiliation_column: np.array(object_ids),
             }
         )
         out.renumber_particles()
@@ -631,6 +631,9 @@ def expand_motl(
     sort_vectors: bool = True,
     orientation: Literal["radial", "keep"] = "radial",
     start_index: int = 0,
+    subtomo_id_column: MotlColumn = "subtomo_id",
+    score_column: MotlColumn = "score",
+    subtomo_mean_column: MotlColumn = "subtomo_mean",
 ) -> "cryomotl.Motl":
     """Expand a particle list by placing one copy at each shift vector.
 
@@ -647,7 +650,8 @@ def expand_motl(
     shift_vecs : numpy.ndarray, shape (M, 3)
         Site displacement vectors in the particle frame (voxels).
     original_id_col : MotlColumn, default="object_id"
-        Column in which to store the source particle's ``subtomo_id``.
+        Column in which to store the source particle's id from
+        *subtomo_id_column*.
     order_id_col : MotlColumn, default="geom1"
         Column in which to store the site index (``start_index + position``).
     sort_vectors : bool, default=True
@@ -660,6 +664,12 @@ def expand_motl(
     start_index : int, default=0
         Value assigned to ``order_id_col`` for the first shift vector.
         Subsequent vectors receive ``start_index + 1``, ``start_index + 2``, …
+    subtomo_id_column : MotlColumn, default="subtomo_id"
+        Column that identifies each source particle.
+    score_column : MotlColumn, default="score"
+        Column set to 0 in every copy.
+    subtomo_mean_column : MotlColumn, default="subtomo_mean"
+        Column set to 0 in every copy.
 
     Returns
     -------
@@ -694,9 +704,9 @@ def expand_motl(
     for position in range(len(shift_vecs)):
         sv = shift_vecs[position]
         df_copy = motl.df.copy()
-        df_copy["score"] = 0
-        df_copy["subtomo_mean"] = 0
-        df_copy[original_id_col] = motl.df["subtomo_id"]
+        df_copy[score_column] = 0
+        df_copy[subtomo_mean_column] = 0
+        df_copy[original_id_col] = motl.df[subtomo_id_column]
         df_copy[order_id_col] = start_index + position
 
         motl_sub = cryomotl.Motl(df_copy)
@@ -850,7 +860,7 @@ def _opposite_distances(order_to_coord: "dict[float, np.ndarray]", n: int) -> "d
 
 @dataclass
 class _SubunitState:
-    """One labelled, ordered state in a :class:`CnComplex` state collection.
+    """One labelled, ordered state in a :class:`MultiSubunitComplex` state collection.
 
     ``position`` is mutable (shifts on insert); ``label`` is assigned once and
     never changed afterwards.
@@ -864,84 +874,182 @@ class _SubunitState:
 def _match_counts(
     base_df: "pd.DataFrame",
     new_df: "pd.DataFrame",
+    *,
+    tomo_id_column: MotlColumn = "tomo_id",
+    subtomo_id_column: MotlColumn = "subtomo_id",
 ) -> tuple[int, int, int]:
     """Return *(matched, in_base_not_in_new, in_new_not_in_base)*.
 
-    Matches on ``(tomo_id, subtomo_id)`` when both DataFrames carry
-    ``tomo_id``; on ``subtomo_id`` alone otherwise.  Never matches on row
+    Matches on ``(tomo_id_column, subtomo_id_column)`` when both DataFrames
+    carry *tomo_id_column*; on *subtomo_id_column* alone otherwise.  Never matches on row
     order.
     """
-    use_tomo = "tomo_id" in base_df.columns and "tomo_id" in new_df.columns
+    use_tomo = tomo_id_column in base_df.columns and tomo_id_column in new_df.columns
     if use_tomo:
-        base_keys: set = set(zip(base_df["tomo_id"].values, base_df["subtomo_id"].values))
-        new_keys: set = set(zip(new_df["tomo_id"].values, new_df["subtomo_id"].values))
+        base_keys: set = set(zip(base_df[tomo_id_column].values, base_df[subtomo_id_column].values))
+        new_keys: set = set(zip(new_df[tomo_id_column].values, new_df[subtomo_id_column].values))
     else:
-        base_keys = set(base_df["subtomo_id"].values)
-        new_keys = set(new_df["subtomo_id"].values)
+        base_keys = set(base_df[subtomo_id_column].values)
+        new_keys = set(new_df[subtomo_id_column].values)
     return len(base_keys & new_keys), len(base_keys - new_keys), len(new_keys - base_keys)
 
 
+def _move_split_objects_to(subunits: "cryomotl.Motl", affiliation_column: MotlColumn, original_object_id_column: MotlColumn) -> None:
+    """Move the per-parent object numbering of a ``split_into_objects=True`` split into *affiliation_column*.
+
+    :meth:`~cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits` writes
+    it to ``object_id`` and the parent's ``object_id`` to
+    *original_object_id_column*.  When *affiliation_column* is another
+    column, the numbering is moved there and ``object_id`` gets the parent's
+    value back; with ``object_id`` nothing changes.
+    """
+    if affiliation_column == "object_id":
+        return
+    subunits.df[affiliation_column] = subunits.df["object_id"]
+    subunits.df["object_id"] = subunits.df[original_object_id_column]
+
+
+def _pooled_over_complex(method):
+    """Mark a method whose result is pooled over the whole complex.
+
+    The decorated method first asks :meth:`_require_pooled` whether the
+    complex is one object yet, and refuses through it when it is not.
+    """
+
+    @functools.wraps(method)
+    def checked(self, *args, **kwargs):
+        self._require_pooled(method.__name__)
+        return method(self, *args, **kwargs)
+
+    return checked
+
+
+def _split_parent_by_shifts(
+    parent: "cryomotl.Motl",
+    shifts: np.ndarray,
+    *,
+    affiliation_column: MotlColumn,
+    subunit_index_column: MotlColumn,
+    original_subtomo_id_column: MotlColumn,
+    original_object_id_column: MotlColumn,
+    subtomo_id_column: MotlColumn,
+) -> "cryomotl.Motl":
+    """Split each parent particle into one subunit per shift, with the columns of ``split_into_objects=True``.
+
+    Subunit *k* (1-based) is the parent particle moved by ``shifts[k - 1]``
+    in its own frame (:meth:`~cryocat.core.cryomotl.Motl.shift_positions`),
+    with its orientation kept and *k* in *subunit_index_column*.  Rows are
+    ordered by the parent's *subtomo_id_column* and then by *k*; *affiliation_column*
+    becomes 1, 2, … per parent in that order, the parent's ``subtomo_id`` and
+    ``object_id`` go to *original_subtomo_id_column* and
+    *original_object_id_column*, and ``subtomo_id`` is renumbered from 1, as
+    :meth:`~cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits` does.
+    When *affiliation_column* is not ``object_id``, ``object_id`` keeps the
+    parent's value.
+    """
+    copies = []
+    for k, shift in enumerate(shifts, start=1):
+        moved = parent.shift_positions(shift, inplace=False)
+        moved.df[subunit_index_column] = k
+        copies.append(moved.df)
+    df = pd.concat(copies)
+    df[original_subtomo_id_column] = df[subtomo_id_column]
+    df = df.sort_values(by=subtomo_id_column, kind="stable")
+    df[original_object_id_column] = df["object_id"]
+    df[subtomo_id_column] = np.arange(1, len(df) + 1)
+    subunits = cryomotl.Motl(df.reset_index(drop=True))
+    subunits.df[affiliation_column] = np.repeat(np.arange(1, len(parent.df) + 1), len(shifts))
+    subunits.update_coordinates()
+    subunits.df.reset_index(inplace=True, drop=True)
+    return subunits
+
+
 # =============================================================================
-# SymmetricComplex — generic point-group symmetric multi-subunit complex
+# MultiSubunitComplex — subunits grouped into objects of known size
 # =============================================================================
 
 
-class SymmetricComplex:
-    """Base class for point-group symmetric multi-subunit complexes.
+class MultiSubunitComplex:
+    """Subunits grouped into objects, with a known number of subunits per object.
 
-    Encapsulates a motl of subunit particles that form a symmetric complex
-    (cyclic, dihedral, or Platonic) and provides per-object centre
-    computation, orientation unification, and geometric statistics that are
-    independent of the specific symmetry type.
+    Encapsulates a motl of subunit particles, each assigned to an object by
+    ``affiliation_column``, and the expected number of subunits per object
+    (``n_subunits``).  Nothing is assumed about how the subunits of an object
+    are arranged: there is no symmetry and no ideal arrangement at this level,
+    so nothing here measures a deviation from one.  Occupancy, cleaning,
+    affiliation, merging of objects, barycentric centres and pairwise
+    subunit orientations need only the subunit count.
+
+    A complex arrives in one of two ways.  As a motl of subunits it has
+    nothing to compare against.  Built by :meth:`from_parent` from a parent
+    motl and one shift per subunit, the parent defines where each subunit
+    should be, so states of the subunits (:meth:`add_subunit_state`,
+    :meth:`derive_initial_state`) can be measured against it
+    (:meth:`measure_elements` with ``reference="parent"``).  The methods that
+    need the parent refuse when none was given (:meth:`_require_parent`).
 
     Parameters
     ----------
     motl : MotlSource
         Subunit particle list.
-    symmetry : Symmetry
-        Symmetry specifier, e.g. ``"C8"``, ``"D6"``, ``"T"``, ``"O"``,
-        ``"I"``, or a bare integer (interpreted as cyclic).
+    n_subunits : int
+        Expected number of subunits per object.
     affiliation_column : MotlColumn, default='object_id'
         Column that identifies which object each particle belongs to.
-    order_column : MotlColumn, default='geom1'
-        Column that subunit-ordering methods write indices into.
+    subunit_index_column : MotlColumn, default='geom1'
+        Column that subunit-indexing methods write indices into.
     tomo_id_column : MotlColumn, default='tomo_id'
         Column that identifies the tomogram.
+    subtomo_id_column : MotlColumn, default='subtomo_id'
+        Column that identifies each particle.
     """
+
+    _pixel_size: float = 1.0
+    """Pixel size of the subunit, parent and state motls; set by the constructors that take one."""
 
     def __init__(
         self,
         motl: MotlSource,
-        symmetry: Symmetry,
+        n_subunits: int,
         *,
         affiliation_column: MotlColumn = "object_id",
-        order_column: MotlColumn = "geom1",
+        subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
     ) -> None:
         self._setup(
             motl,
-            symmetry,
+            n_subunits,
             affiliation_column=affiliation_column,
-            order_column=order_column,
+            subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
+            subtomo_id_column=subtomo_id_column,
         )
 
     def _setup(
         self,
         motl: MotlSource,
-        symmetry: Symmetry,
+        n_subunits: int,
         *,
         affiliation_column: MotlColumn = "object_id",
-        order_column: MotlColumn = "geom1",
+        subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
     ) -> None:
         """Shared constructor body; called by :meth:`__init__` and subclass constructors."""
         self.motl = cryomotl.Motl.load(motl)
-        self.group, self.fold = geom.as_symmetry(symmetry)
-        self.n_subunits: int = _GROUP_ORDER[self.group](self.fold)
+        self.n_subunits: int = n_subunits
         self.affiliation_column: MotlColumn = affiliation_column
-        self.order_column: MotlColumn = order_column
+        self.subunit_index_column: MotlColumn = subunit_index_column
         self.tomo_id_column: MotlColumn = tomo_id_column
+        self.subtomo_id_column: MotlColumn = subtomo_id_column
+        # State-tracking machinery.
+        self._states: list[_SubunitState] = []
+        self._parent_motl: cryomotl.Motl | None = None
+        self._parent_subunit_map: dict[int, int] = {}
+        self._shifts: np.ndarray | None = None
+        self._original_subtomo_id_column: MotlColumn = "geom5"
+        self._original_object_id_column: MotlColumn = "geom4"
 
     # ------------------------------------------------------------------
     # Centre computation
@@ -958,8 +1066,9 @@ class SymmetricComplex:
         Returns
         -------
         Motl
-            One row per (tomogram, object) pair.  ``tomo_id`` holds the
-            tomogram identifier and ``object_id`` holds the affiliation value.
+            One row per (tomogram, object) pair.  :attr:`tomo_id_column` holds
+            the tomogram identifier and :attr:`affiliation_column` the
+            affiliation value.
             All other columns are zero-filled.
         """
         central_points: list[np.ndarray] = []
@@ -984,8 +1093,8 @@ class SymmetricComplex:
                     "x": pts[:, 0],
                     "y": pts[:, 1],
                     "z": pts[:, 2],
-                    "tomo_id": np.array(tomo_ids),
-                    "object_id": np.array(object_ids),
+                    self.tomo_id_column: np.array(tomo_ids),
+                    self.affiliation_column: np.array(object_ids),
                 }
             )
             out.renumber_particles()
@@ -1004,36 +1113,6 @@ class SymmetricComplex:
                 "in self.motl.df.  Run affiliation first, or set affiliation_column correctly."
             )
 
-    def _resolve_state(self, label=None) -> "_SubunitState | None":
-        """Return the state to use for a state-dependent computation.
-
-        SymmetricComplex has no state machinery.  Overridden in CnComplex.
-
-        - label=None: returns None (use self.motl as-is)
-        - label given: raises KeyError
-        """
-        if label is not None:
-            raise KeyError(
-                f"Unknown state label {label!r}. {type(self).__name__} has no states."
-            )
-        return None
-
-    # ------------------------------------------------------------------
-    # Subunit ordering (dispatch hook — subclasses override)
-    # ------------------------------------------------------------------
-
-    def assign_subunit_order(self) -> None:
-        """Assign subunit indices into ``self.order_column``.
-
-        Subclasses must override this method with a symmetry-specific
-        implementation.
-
-        Raises
-        ------
-        NotImplementedError
-            Always; subclasses define subunit ordering.
-        """
-        raise NotImplementedError("subclasses define subunit ordering")
 
     # ------------------------------------------------------------------
     # Per-object evaluations
@@ -1045,7 +1124,7 @@ class SymmetricComplex:
 
         For every ``(tomo_id, object_id)`` group, counts present subunits
         and computes the fraction of the expected ``n_subunits``.  When
-        ``order_column`` is populated, the *missing* indices
+        ``subunit_index_column`` is populated, the *missing* indices
         (1 … n_subunits) are also reported.
 
         Returns
@@ -1061,8 +1140,8 @@ class SymmetricComplex:
                 ``n_present / self.n_subunits``.
             ``missing``
                 Sorted list of 1-based subunit indices absent from
-                ``order_column`` (empty list when fully occupied);
-                ``None`` when ``order_column`` is not in the motl.
+                ``subunit_index_column`` (empty list when fully occupied);
+                ``None`` when ``subunit_index_column`` is not in the motl.
 
         Raises
         ------
@@ -1076,14 +1155,14 @@ class SymmetricComplex:
         try:
             self._require_affiliation()
 
-            has_order = self.order_column in self.motl.df.columns
+            has_order = self.subunit_index_column in self.motl.df.columns
             rows: list[dict] = []
             all_expected = set(range(1, self.n_subunits + 1))
 
             for (tomo_id, object_id), group in self.motl.df.groupby([self.tomo_id_column, self.affiliation_column]):
                 n_present = len(group)
                 if has_order:
-                    present = set(int(v) for v in group[self.order_column].dropna())
+                    present = set(int(v) for v in group[self.subunit_index_column].dropna())
                     missing: list[int] | None = sorted(all_expected - present)
                 else:
                     missing = None
@@ -1155,88 +1234,6 @@ class SymmetricComplex:
         return cryomotl.Motl(df_out)
 
     # ------------------------------------------------------------------
-    # Object deduplication
-    # ------------------------------------------------------------------
-
-    @gui_exposed(label="Merge subunits", group="Affiliation", order=20, returns="none")
-    def merge_subunits(
-        self,
-        radius: float = 55,
-    ) -> None:
-        """Merge near-duplicate objects whose centres are within *radius*.
-
-        For each tomogram:
-
-        1. Compute per-object barycentric centres.
-        2. Find object-centre pairs within *radius* using
-           :func:`nnana.get_nn_within_distance`.
-        3. Re-assign ``affiliation_column`` of near objects to the first
-           encountered partner.
-        4. Recount occupancy into ``geom1`` and recompute subunit order for
-           all objects via :meth:`assign_subunit_order`.
-
-        Parameters
-        ----------
-        radius : float, default=55
-            Distance threshold in voxels.
-
-        Notes
-        -----
-        Modifies ``self.motl.df`` in place.
-        """
-        motl = self.motl
-        aff_col = self.affiliation_column
-        tomo_col = self.tomo_id_column
-
-        for t in motl.get_unique_values(tomo_col):
-            tm = motl.get_motl_subset(column_values=[t], column_name=tomo_col, reset_index=True)
-
-            pts: list[np.ndarray] = []
-            obj_ids: list[float] = []
-            for o in tm.get_unique_values(aff_col):
-                om = tm.get_motl_subset(column_values=[o], column_name=aff_col, reset_index=True)
-                coords = om.get_coordinates()
-                center = geom.barycenter(coords) if coords.shape[0] > 0 else np.zeros(3)
-                pts.append(center)
-                obj_ids.append(float(o))
-
-            centers_motl = cryomotl.Motl()
-            if pts:
-                pts_arr = np.vstack(pts)
-                centers_motl.fill(
-                    {
-                        "x": pts_arr[:, 0],
-                        "y": pts_arr[:, 1],
-                        "z": pts_arr[:, 2],
-                        "tomo_id": t,
-                        "object_id": obj_ids,
-                    }
-                )
-                centers_motl.renumber_particles()
-            centers_motl.df.fillna(0.0, inplace=True)
-
-            if centers_motl.df.shape[0] > 1:
-                center_stats = nnana.get_nn_stats(centers_motl, centers_motl)
-                if any(center_stats["distance"] <= radius):
-                    center_idx, nn_idx = nnana.get_nn_within_distance(centers_motl, radius)
-                    for i, o in enumerate(center_idx):
-                        o_id1 = centers_motl.df.loc[centers_motl.df.index[o], "object_id"]
-                        for j in nn_idx[i]:
-                            o_id2 = centers_motl.df.loc[centers_motl.df.index[j], "object_id"]
-                            tm.df.loc[tm.df[aff_col] == o_id2, aff_col] = o_id1
-
-            tm.df["geom1"] = tm.df.groupby([aff_col])[aff_col].transform("count")
-            tm.df[aff_col] = tm.df[aff_col].rank(method="dense").astype(int)
-
-            update_cols = list({aff_col, "geom1"})
-            motl.df.loc[motl.df[tomo_col] == t, update_cols] = tm.df[update_cols].values
-
-        motl.df.reset_index(inplace=True, drop=True)
-        motl.df["geom1"] = motl.df.groupby([tomo_col, aff_col])[aff_col].transform("count")
-        motl.df[aff_col] = motl.df[aff_col].rank(method="dense").astype(int)
-        self.assign_subunit_order()
-
-    # ------------------------------------------------------------------
     # Affiliation creation
     # ------------------------------------------------------------------
 
@@ -1248,9 +1245,8 @@ class SymmetricComplex:
         shift: float | None = None,
         radius: float | None = None,
         normals_threshold: float | None = None,
-        occupancy_column: MotlColumn | None = None,
-        cone_distance_column: MotlColumn | None = None,
         min_occupancy: int | None = None,
+        flag_column: MotlColumn = "geom5",
     ) -> "cryomotl.Motl":
         """Cluster subunit particles into objects and write affiliation labels.
 
@@ -1258,11 +1254,11 @@ class SymmetricComplex:
         ``affiliation_column`` populated.  For every object that ends up with
         more than ``self.n_subunits`` particles, outlier-normal particles are
         removed (see *normals_threshold*).  If an object remains over-populated
-        after cleaning its ``geom5`` column is set to ``1.0`` and a one-line
+        after cleaning its *flag_column* is set to ``1.0`` and a one-line
         notice is printed.
 
-        Subunit ordering is a separate stage-2 call to
-        :meth:`assign_subunit_order`.  Occupancy and normal deviations are
+        Subunit indexing is a separate stage-2 call to
+        :meth:`assign_subunit_index`.  Occupancy and normal deviations are
         computed on demand via :meth:`occupancy` and :meth:`normal_deviations`.
 
         Parameters
@@ -1296,20 +1292,18 @@ class SymmetricComplex:
             Cone-distance cutoff (degrees) applied **only** to over-populated
             objects (size > ``n_subunits``).  ``None`` uses the adaptive rule
             ``median(cone) + 1 × std(cone)`` per object.
-        occupancy_column : MotlColumn or None, default=None
-            Accepted but ignored.  Use :meth:`occupancy` on demand.
-        cone_distance_column : MotlColumn or None, default=None
-            Accepted but ignored.  Use :meth:`normal_deviations` on demand.
         min_occupancy : int or None, default=None
             When set, objects whose size (after over-population cleaning) is
             below this value are removed.  ``None`` keeps all objects.
+        flag_column : MotlColumn, default='geom5'
+            Column that marks objects still over-populated after cleaning.
 
         Returns
         -------
         cryomotl.Motl
-            A new motl with ``affiliation_column`` and ``geom5`` populated.
-            ``geom5`` is ``0.0`` for all particles; ``1.0`` marks objects that
-            are still over-populated after cleaning.
+            A new motl with ``affiliation_column`` and *flag_column* populated.
+            *flag_column* is ``0.0`` for all particles; ``1.0`` marks objects
+            that are still over-populated after cleaning.
 
         Raises
         ------
@@ -1339,7 +1333,7 @@ class SymmetricComplex:
         aff_col = self.affiliation_column
 
         # Initialize inspection flag column
-        motl_out.df["geom5"] = 0.0
+        motl_out.df[flag_column] = 0.0
 
         # Clean over-populated objects (size > n_subunits) only
         sizes = motl_out.df.groupby([tomo_col, aff_col]).size()
@@ -1366,7 +1360,7 @@ class SymmetricComplex:
             new_sizes = motl_out.df.groupby([tomo_col, aff_col]).size()
             still_over = new_sizes[new_sizes > self.n_subunits]
             if not still_over.empty:
-                flag_loc = motl_out.df.columns.get_loc("geom5")
+                flag_loc = motl_out.df.columns.get_loc(flag_column)
                 new_tomo = motl_out.df[tomo_col].values
                 new_aff = motl_out.df[aff_col].values
                 for (t, o), sz in still_over.items():
@@ -1416,7 +1410,7 @@ class SymmetricComplex:
         for tomo_val, group_df in motl_out.df.groupby(self.tomo_id_column):
             row_pos = group_df.index.to_numpy()
             coords = all_coords[row_pos]
-            subtomo_ids = group_df["subtomo_id"].to_numpy()
+            subtomo_ids = group_df[self.subtomo_id_column].to_numpy()
 
             qp_idx, nn_idx_list = nnana.find_nn_within_radius(coords, coords, radius, remove_qp=True)
 
@@ -1434,13 +1428,13 @@ class SymmetricComplex:
                 components = _clustering.connected_component_clusters(qp_ids, nn_ids, min_size=1)
                 for comp in components:
                     comp_ids = set(comp.nodes())
-                    mask = group_df["subtomo_id"].isin(comp_ids)
+                    mask = group_df[self.subtomo_id_column].isin(comp_ids)
                     motl_out.df.loc[group_df[mask].index, self.affiliation_column] = float(next_id)
                     in_component.update(comp_ids)
                     next_id += 1
 
             # Isolated particles — not in any NN edge
-            isolated = group_df[~group_df["subtomo_id"].isin(in_component)]
+            isolated = group_df[~group_df[self.subtomo_id_column].isin(in_component)]
             for idx in isolated.index:
                 motl_out.df.loc[idx, self.affiliation_column] = float(next_id)
                 next_id += 1
@@ -1483,9 +1477,9 @@ class SymmetricComplex:
         )
 
         # Copy affiliation to motl_out by subtomo_id alignment
-        traced.df.sort_values("subtomo_id", inplace=True)
+        traced.df.sort_values(self.subtomo_id_column, inplace=True)
         traced.df.reset_index(drop=True, inplace=True)
-        motl_out.df.sort_values("subtomo_id", inplace=True)
+        motl_out.df.sort_values(self.subtomo_id_column, inplace=True)
         motl_out.df.reset_index(drop=True, inplace=True)
         motl_out.df[self.affiliation_column] = traced.df[self.affiliation_column].values
 
@@ -1522,6 +1516,7 @@ class SymmetricComplex:
             out[pos] = np.degrees(np.arccos(np.clip(zv @ mean_z, -1.0, 1.0)))
         return out
 
+    @_pooled_over_complex
     def normal_deviations(self, *, label=None) -> pd.DataFrame:
         """Per-particle angle to per-object consensus z-axis with object stats.
 
@@ -1547,8 +1542,10 @@ class SymmetricComplex:
             df = self.motl.df.reset_index(drop=True)
             angles = self._cone_angles(df, tomo_col, aff_col)
 
-            result = df[[tomo_col, aff_col, "subtomo_id"]].copy()
-            result = result.rename(columns={tomo_col: "tomo_id", aff_col: "object_id"})
+            result = df[[tomo_col, aff_col, self.subtomo_id_column]].copy()
+            result = result.rename(
+                columns={tomo_col: "tomo_id", aff_col: "object_id", self.subtomo_id_column: "subtomo_id"}
+            )
             result["deviation"] = angles
 
             stats = (
@@ -1562,6 +1559,977 @@ class SymmetricComplex:
         finally:
             self.motl = _orig_motl
 
+    # ------------------------------------------------------------------
+    # Object deduplication
+    # ------------------------------------------------------------------
+
+    @gui_exposed(label="Merge subunits", group="Affiliation", order=20, returns="none")
+    def merge_subunits(
+        self,
+        radius: float = 55,
+    ) -> None:
+        """Merge near-duplicate objects whose centres are within *radius*.
+
+        For each tomogram:
+
+        1. Compute per-object barycentric centres.
+        2. Find object-centre pairs within *radius* using
+           :func:`nnana.get_nn_within_distance`.
+        3. Re-assign ``affiliation_column`` of near objects to the first
+           encountered partner.
+        4. Renumber ``affiliation_column`` densely from 1.
+
+        Only ``affiliation_column`` is written; the subunit count per object
+        is reported by :meth:`occupancy`.
+
+        Parameters
+        ----------
+        radius : float, default=55
+            Distance threshold in voxels.
+
+        Notes
+        -----
+        Modifies ``self.motl.df`` in place.
+        """
+        motl = self.motl
+        aff_col = self.affiliation_column
+        tomo_col = self.tomo_id_column
+
+        for t in motl.get_unique_values(tomo_col):
+            tm = motl.get_motl_subset(column_values=[t], column_name=tomo_col, reset_index=True)
+
+            pts: list[np.ndarray] = []
+            obj_ids: list[float] = []
+            for o in tm.get_unique_values(aff_col):
+                om = tm.get_motl_subset(column_values=[o], column_name=aff_col, reset_index=True)
+                coords = om.get_coordinates()
+                center = geom.barycenter(coords) if coords.shape[0] > 0 else np.zeros(3)
+                pts.append(center)
+                obj_ids.append(float(o))
+
+            centers_motl = cryomotl.Motl()
+            if pts:
+                pts_arr = np.vstack(pts)
+                centers_motl.fill(
+                    {
+                        "x": pts_arr[:, 0],
+                        "y": pts_arr[:, 1],
+                        "z": pts_arr[:, 2],
+                        tomo_col: t,
+                        aff_col: obj_ids,
+                    }
+                )
+                centers_motl.renumber_particles()
+            centers_motl.df.fillna(0.0, inplace=True)
+
+            if centers_motl.df.shape[0] > 1:
+                center_stats = nnana.get_nn_stats(centers_motl, centers_motl, column_name=tomo_col)
+                if any(center_stats["distance"] <= radius):
+                    center_idx, nn_idx = nnana.get_nn_within_distance(centers_motl, radius)
+                    for i, o in enumerate(center_idx):
+                        o_id1 = centers_motl.df.loc[centers_motl.df.index[o], aff_col]
+                        for j in nn_idx[i]:
+                            o_id2 = centers_motl.df.loc[centers_motl.df.index[j], aff_col]
+                            tm.df.loc[tm.df[aff_col] == o_id2, aff_col] = o_id1
+
+            tm.df[aff_col] = tm.df[aff_col].rank(method="dense").astype(int)
+            motl.df.loc[motl.df[tomo_col] == t, [aff_col]] = tm.df[[aff_col]].values
+
+        motl.df.reset_index(inplace=True, drop=True)
+        motl.df[aff_col] = motl.df[aff_col].rank(method="dense").astype(int)
+
+    # ------------------------------------------------------------------
+    # Parent link and state collection
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_parent(
+        cls,
+        parent_motl: MotlSource,
+        shifts: ArrayLike,
+        *,
+        affiliation_column: MotlColumn = "object_id",
+        subunit_index_column: MotlColumn = "geom1",
+        original_subtomo_id_column: MotlColumn = "geom5",
+        original_object_id_column: MotlColumn = "geom4",
+        subtomo_id_column: MotlColumn = "subtomo_id",
+        pixel_size: float = 1.0,
+    ) -> "MultiSubunitComplex":
+        """Build from a parent motl and one shift per subunit.
+
+        Each parent particle becomes one object with ``len(shifts)``
+        subunits.  Subunit *k* (1-based) is a copy of the parent particle
+        moved by ``shifts[k - 1]`` in the parent particle's own frame
+        (:meth:`~cryocat.core.cryomotl.Motl.shift_positions`); it keeps the
+        parent's orientation, and *k* is written to *subunit_index_column*.
+
+        The columns follow
+        :meth:`~cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits`
+        with ``split_into_objects=True``: rows are ordered by parent
+        ``subtomo_id`` and then by *k*; *affiliation_column* becomes 1, 2, …
+        per parent in that order; the parent's ``subtomo_id`` and
+        ``object_id`` are written to *original_subtomo_id_column* and
+        *original_object_id_column*; ``subtomo_id`` is renumbered from 1.
+        Every other column, ``object_id`` included when it is not the
+        affiliation column, is carried over from the parent.
+
+        The parent motl and the shifts are stored, so
+        :meth:`derive_initial_state` and ``measure_elements(reference="parent")``
+        work without further setup.
+
+        Parameters
+        ----------
+        parent_motl : MotlSource
+            The unsplit complex particle list.
+        shifts : ArrayLike
+            Shape ``(n_subunits, 3)``: one xyz shift per subunit, in the
+            parent particle's frame.
+        affiliation_column : MotlColumn, default='object_id'
+            Column that groups the subunits of one complex.
+        subunit_index_column : MotlColumn, default='geom1'
+            Column written with the 1-based subunit index.
+        original_subtomo_id_column : MotlColumn, default='geom5'
+            Column written with the parent's ``subtomo_id``.
+        original_object_id_column : MotlColumn, default='geom4'
+            Column written with the parent's ``object_id``.
+        subtomo_id_column : MotlColumn, default='subtomo_id'
+            Column that identifies each particle, in the parent and the subunits.
+        pixel_size : float, default=1.0
+            Pixel size.
+
+        Returns
+        -------
+        MultiSubunitComplex
+
+        Raises
+        ------
+        ValueError
+            If *shifts* is not of shape ``(n, 3)`` with ``n >= 1``.
+        """
+        pm = cryomotl.Motl.load(parent_motl)
+        shift_array = np.asarray(shifts, dtype=float)
+        if shift_array.ndim != 2 or shift_array.shape[1] != 3 or len(shift_array) == 0:
+            raise ValueError(f"shifts must have shape (n, 3) with n >= 1, got {shift_array.shape}.")
+        subunit_motl = _split_parent_by_shifts(
+            pm,
+            shift_array,
+            affiliation_column=affiliation_column,
+            subunit_index_column=subunit_index_column,
+            original_subtomo_id_column=original_subtomo_id_column,
+            original_object_id_column=original_object_id_column,
+            subtomo_id_column=subtomo_id_column,
+        )
+        obj = cls(
+            subunit_motl,
+            len(shift_array),
+            affiliation_column=affiliation_column,
+            subunit_index_column=subunit_index_column,
+        )
+        obj._pixel_size = float(pixel_size)
+        obj._parent_motl = pm
+        obj._shifts = shift_array
+        obj._original_subtomo_id_column = original_subtomo_id_column
+        obj._original_object_id_column = original_object_id_column
+        obj.subtomo_id_column = subtomo_id_column
+        return obj
+
+    def _resolve_state(self, label=None) -> "_SubunitState | None":
+        """Return the state to use for a state-dependent computation.
+
+        - label=None: returns the state with the highest position, or None
+          when no states have been added (use self.motl as-is).
+        - label given: returns the matching state, or raises KeyError listing
+          existing labels.
+        """
+        if not self._states:
+            if label is not None:
+                raise KeyError(
+                    f"Unknown state label {label!r}. No states have been added."
+                )
+            return None
+        if label is None:
+            return max(self._states, key=lambda s: s.position)
+        for s in self._states:
+            if s.label == label:
+                return s
+        existing = [s.label for s in sorted(self._states, key=lambda s: s.position)]
+        raise KeyError(f"Unknown state label {label!r}. Existing labels: {existing!r}.")
+
+    def _require_parent(self) -> None:
+        """Raise if no parent motl has been linked to this instance."""
+        if self._parent_motl is None:
+            raise RuntimeError(
+                f"No parent motl linked.  Construct via {type(self).__name__}.from_parent() "
+                "or call add_parent() first."
+            )
+
+    def _check_pixel_size_pair(self, motl_pixel_size: float, who: str) -> None:
+        """Raise if the two pixel sizes disagree."""
+        if not np.isclose(float(self._pixel_size), float(motl_pixel_size)):
+            raise ValueError(
+                f"Pixel size mismatch: instance has {self._pixel_size}, "
+                f"{who} has {motl_pixel_size}."
+            )
+
+    @_pooled_over_complex
+    def add_parent(
+        self,
+        parent_motl: MotlSource,
+        parent_id_column: MotlColumn,
+        *,
+        pixel_size: float | None = None,
+    ) -> None:
+        """Link a parent motl to a path-(a) constructed instance.
+
+        Builds the subunit→parent mapping keyed by subunit ``subtomo_id``
+        and reports how many subunits mapped and how many did not.  A
+        path-(a) construction stores no default for *parent_id_column*, so
+        it must be supplied explicitly here.  *parent_id_column* becomes the
+        parent link that :meth:`measure_elements` and
+        :meth:`restore_affiliation` read.
+
+        Parameters
+        ----------
+        parent_motl :
+            The unsplit complex motl.
+        parent_id_column :
+            Column in ``self.motl`` that holds the parent ``subtomo_id``
+            for each subunit.
+        pixel_size :
+            Pixel size declared by *parent_motl*.  ``None`` (default) uses
+            the instance pixel size without checking.  An explicit value is
+            validated against the instance pixel size and raises
+            :class:`ValueError` on mismatch.
+        """
+        if pixel_size is not None:
+            self._check_pixel_size_pair(pixel_size, "parent motl")
+        pm = cryomotl.Motl.load(parent_motl)
+        if parent_id_column not in self.motl.df.columns:
+            raise ValueError(
+                f"parent_id_column {parent_id_column!r} not found in subunit motl."
+            )
+        parent_ids = set(pm.df[self.subtomo_id_column].values)
+        # Named apart, so parent_id_column may itself be the subtomo_id column.
+        sub_df = pd.DataFrame({
+            "subunit": self.motl.df[self.subtomo_id_column].to_numpy(),
+            "parent": self.motl.df[parent_id_column].to_numpy(),
+        })
+        valid_mask = sub_df["parent"].notna() & sub_df["parent"].isin(parent_ids)
+        mapped_df = sub_df[valid_mask]
+        n_mapped = len(mapped_df)
+        n_unmapped = len(sub_df) - n_mapped
+        mapping: dict[int, int] = dict(zip(
+            mapped_df["subunit"].astype(int).values,
+            mapped_df["parent"].astype(int).values,
+        ))
+        self._parent_motl = pm
+        self._parent_subunit_map = mapping
+        self._original_subtomo_id_column = parent_id_column
+        print(f"add_parent: {n_mapped} subunit(s) mapped, {n_unmapped} did not map.")
+
+    @_pooled_over_complex
+    def add_subunit_state(
+        self,
+        motl: MotlSource,
+        position: int | None = None,
+        label: int | str | None = None,
+        *,
+        pixel_size: float | None = None,
+    ) -> None:
+        """Add a subunit motl as a named, ordered state.
+
+        Matching against the instance's base motl uses ``subtomo_id``
+        as the primary key with ``tomo_id`` as an additional guard when
+        both motls carry it.
+
+        Three counts are always printed:
+
+        * **matched** — subunits present in both the instance and the new motl.
+        * **in instance not in new motl** — subunits missing from the new motl.
+        * **in new motl not in instance** — extra subunits not in the instance.
+
+        When an occupied *position* is given the existing states at that
+        position and later are shifted up by one, and the full
+        ``label -> position`` table is printed before and after.
+
+        Parameters
+        ----------
+        motl :
+            Subunit motl for this state.
+        position :
+            Target position (0-based).  ``None`` appends.  An occupied
+            position inserts and shifts later states up by one.
+        label :
+            Stable identifier for this state.  Defaults to the position
+            it occupies at the moment of insertion and is never changed
+            afterwards.
+        pixel_size :
+            Pixel size declared by this state's motl.  ``None`` (default)
+            uses the instance pixel size without checking.  An explicit
+            value is validated against the instance pixel size and raises
+            :class:`ValueError` on mismatch.
+        """
+        if pixel_size is not None:
+            self._check_pixel_size_pair(pixel_size, "state motl")
+        m = cryomotl.Motl.load(motl)
+        matched, missing, extra = _match_counts(
+            self.motl.df, m.df, tomo_id_column=self.tomo_id_column, subtomo_id_column=self.subtomo_id_column
+        )
+        print(
+            f"add_subunit_state: {matched} matched, "
+            f"{missing} in instance not in new motl, "
+            f"{extra} in new motl not in instance."
+        )
+
+        n = len(self._states)
+        new_pos = n if position is None else int(position)
+        # Clamp out-of-range positions to the end.
+        if new_pos > n:
+            new_pos = n
+        if label is None:
+            label = new_pos
+
+        if new_pos < n:
+            # Insert: shift every state at or after new_pos up by one.
+            print("Before shift:")
+            for s in sorted(self._states, key=lambda x: x.position):
+                print(f"  {s.label!r} -> {s.position}")
+            for s in self._states:
+                if s.position >= new_pos:
+                    s.position += 1
+            self._states.append(_SubunitState(motl=m, position=new_pos, label=label))
+            self._states.sort(key=lambda x: x.position)
+            print("After shift:")
+            for s in self._states:
+                print(f"  {s.label!r} -> {s.position}")
+        else:
+            self._states.append(_SubunitState(motl=m, position=new_pos, label=label))
+
+    def derive_initial_state(
+        self,
+        *,
+        label: int | str = "derived",
+    ) -> None:
+        """Insert the parent-derived subunit state at position 0.
+
+        Re-runs the split that built this object from the stored parent
+        (:meth:`_split_parent`) with exactly the arguments stored at
+        construction.  The result is inserted at position 0, shifting all
+        existing states.
+
+        Parameters
+        ----------
+        label :
+            Stable identifier for the inserted state.  Defaults to
+            ``"derived"``.  When the default is already taken by an
+            existing state the next free non-negative integer is used
+            instead.
+        """
+        self._require_parent()
+        existing_labels = {s.label for s in self._states}
+        if label in existing_labels:
+            i = 0
+            while i in existing_labels:
+                i += 1
+            label = i
+        derived_motl = self._split_parent()
+        self.add_subunit_state(derived_motl, position=0, label=label, pixel_size=self._pixel_size)
+
+    def _split_parent(self) -> "cryomotl.Motl":
+        """Re-run the shift-list split of :meth:`from_parent` on the stored parent."""
+        if self._shifts is None:
+            raise RuntimeError(
+                f"No shifts stored.  Construct via {type(self).__name__}.from_parent() to derive a state."
+            )
+        return _split_parent_by_shifts(
+            self._parent_motl,
+            self._shifts,
+            affiliation_column=self.affiliation_column,
+            subunit_index_column=self.subunit_index_column,
+            original_subtomo_id_column=self._original_subtomo_id_column,
+            original_object_id_column=self._original_object_id_column,
+            subtomo_id_column=self.subtomo_id_column,
+        )
+
+    @_pooled_over_complex
+    def restore_affiliation(self, state_label: int | str) -> None:
+        """Write affiliation columns from the base motl into the named state's motl.
+
+        Writes :attr:`subunit_index_column`, ``_original_subtomo_id_column``, and
+        ``_original_object_id_column`` — no other columns are touched.
+        Matching is on ``subtomo_id``.
+
+        Parameters
+        ----------
+        state_label :
+            Label of the target state.
+        """
+        self._require_parent()
+        state = next((s for s in self._states if s.label == state_label), None)
+        if state is None:
+            raise KeyError(f"No state with label {state_label!r}.")
+
+        # Rows are matched on the subtomo_id column, so it is never written, even when it is the parent link.
+        write_cols = [
+            c
+            for c in dict.fromkeys(
+                [self.subunit_index_column, self._original_subtomo_id_column, self._original_object_id_column]
+            )
+            if c != self.subtomo_id_column
+        ]
+        base_df = self.motl.df
+        present_cols = [c for c in write_cols if c in base_df.columns]
+        ref = (
+            base_df[[self.subtomo_id_column] + present_cols]
+            .drop_duplicates(self.subtomo_id_column)
+            .set_index(self.subtomo_id_column)
+        )
+
+        state_df = state.motl.df.copy()
+        matched_mask = state_df[self.subtomo_id_column].isin(ref.index)
+        n_written = int(matched_mask.sum())
+        n_unmatched = len(state_df) - n_written
+
+        for col in present_cols:
+            vals = state_df.loc[matched_mask, self.subtomo_id_column].map(ref[col])
+            if col not in state_df.columns:
+                state_df[col] = 0.0
+            state_df.loc[matched_mask, col] = vals.values
+
+        state.motl.df = state_df
+        print(f"restore_affiliation: {n_written} row(s) written, {n_unmatched} unmatched.")
+
+    def _require_pooled(self, method_name: str) -> None:
+        """Refuse a result pooled over the whole complex when the complex is not one object yet; a no-op here."""
+
+    def _elements(self) -> list[_SubunitState]:
+        """The elements of the complex, in position order: its registered states."""
+        return sorted(self._states, key=lambda s: s.position)
+
+    def per_element(self, method_name: str, *args, **kwargs):
+        """Dispatch *method_name* over each element of the complex, tagging results with the element label.
+
+        The elements are :meth:`_elements`: the rings when the complex holds
+        rings, its registered states otherwise.  When there are none,
+        delegates directly to the instance method.
+        Otherwise walks the MRO past ``type(self)`` to find the base-class
+        implementation, temporarily swaps ``self.motl`` to each element's motl,
+        calls the base implementation, and tags the result with the element's
+        ``label`` in a column ``"element_label"``.  DataFrame results are
+        concatenated; Motl results are returned as a list.
+
+        Parameters
+        ----------
+        method_name : str
+            Name of the method to dispatch.
+        *args, **kwargs
+            Forwarded verbatim to the base-class implementation.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Concatenated per-element DataFrames, each stamped with
+            ``"element_label"``.
+        list
+            Per-element results when the base implementation returns a
+            non-DataFrame.
+        """
+        elements = self._elements()
+        if not elements:
+            return getattr(self, method_name)(*args, **kwargs)
+        base_fn = None
+        for _cls in type(self).__mro__[1:]:
+            if method_name in _cls.__dict__:
+                _fn = _cls.__dict__[method_name]
+                if callable(_fn):
+                    base_fn = _fn.__get__(self, type(self))
+                break
+        if base_fn is None:
+            raise AttributeError(
+                f"{type(self).__name__} has no base-class implementation of '{method_name}'"
+            )
+        orig_motl = self.motl
+        parts = []
+        try:
+            for _state in elements:
+                self.motl = _state.motl
+                result = base_fn(*args, **kwargs)
+                if isinstance(result, pd.DataFrame):
+                    result = result.copy()
+                    result["element_label"] = _state.label
+                elif isinstance(result, cryomotl.Motl):
+                    tagged = cryomotl.Motl(result.df.copy())
+                    tagged.df["element_label"] = _state.label
+                    result = tagged
+                parts.append(result)
+        finally:
+            self.motl = orig_motl
+        if parts and isinstance(parts[0], pd.DataFrame):
+            return pd.concat(parts, ignore_index=True)
+        return parts
+
+    # ------------------------------------------------------------------
+    # Cross-element measurement
+    # ------------------------------------------------------------------
+
+    def measure_elements(
+        self,
+        label_a: int | str,
+        label_b: int | str,
+        *,
+        reference: Literal["parent"] = "parent",
+    ) -> pd.DataFrame:
+        """Measure per-particle offsets between two registered states, in the parent frame.
+
+        Matches particles by ``subtomo_id`` (with ``tomo_id`` as an additional
+        guard when both state motls carry it), computes vectors from the
+        parent particle to each subunit's position in both states, expressed
+        in the parent-particle frame, and returns one row per matched particle.
+        The axis is the parent's z-axis (:meth:`_parent_symmetry_axis`).
+        Raises via :meth:`_require_parent` when no parent is registered.
+
+        Parameters
+        ----------
+        label_a :
+            Label of the first element.
+        label_b :
+            Label of the second element.
+        reference : {``'parent'``}, default=``'parent'``
+            Only the parent frame is available without a symmetry; see
+            :meth:`CnComplex.measure_elements` for ``'fit'``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per matched particle, with the columns listed in
+            :meth:`CnComplex.measure_elements`.
+        """
+        if reference != "parent":
+            raise ValueError(f"reference must be 'parent', got {reference!r}.")
+        self._require_parent()
+        return self._measure_states(label_a, label_b, reference, self._parent_frame)
+
+    def _measure_states(self, label_a, label_b, reference: str, frame_builder) -> pd.DataFrame:
+        """Shared body of :meth:`measure_elements`: match the two states and measure every matched particle.
+
+        *frame_builder* ``(df_a, use_tomo, label_a)`` returns a function
+        ``(tomo_val, sid_val, row_a, coords_a_world, coords_b_world) -> (vec_a, vec_b, axis)``
+        that expresses one particle's two positions relative to its centre.
+        """
+        state_a = next((s for s in self._elements() if s.label == label_a), None)
+        state_b = next((s for s in self._elements() if s.label == label_b), None)
+        if state_a is None:
+            raise KeyError(f"No element with label {label_a!r}.")
+        if state_b is None:
+            raise KeyError(f"No element with label {label_b!r}.")
+
+        # Reset indices so coords_*_all[i] aligns with df_*[i].
+        df_a = state_a.motl.df.reset_index(drop=True)
+        df_b = state_b.motl.df.reset_index(drop=True)
+        coords_a_all = state_a.motl.get_coordinates()   # (N_a, 3): x+shift_x …
+        coords_b_all = state_b.motl.get_coordinates()   # (N_b, 3)
+        use_tomo = self.tomo_id_column in df_a.columns and self.tomo_id_column in df_b.columns
+
+        if use_tomo:
+            indexed_a = df_a.set_index([self.tomo_id_column, self.subtomo_id_column])
+            indexed_b = df_b.set_index([self.tomo_id_column, self.subtomo_id_column])
+            a_key_to_pos = {
+                (float(df_a.at[i, self.tomo_id_column]), float(df_a.at[i, self.subtomo_id_column])): i
+                for i in range(len(df_a))
+            }
+            b_key_to_pos = {
+                (float(df_b.at[i, self.tomo_id_column]), float(df_b.at[i, self.subtomo_id_column])): i
+                for i in range(len(df_b))
+            }
+        else:
+            indexed_a = df_a.set_index(self.subtomo_id_column)
+            indexed_b = df_b.set_index(self.subtomo_id_column)
+            a_key_to_pos = {float(df_a.at[i, self.subtomo_id_column]): i for i in range(len(df_a))}
+            b_key_to_pos = {float(df_b.at[i, self.subtomo_id_column]): i for i in range(len(df_b))}
+
+        common_keys = indexed_a.index.intersection(indexed_b.index)
+        n_matched = len(common_keys)
+        n_only_a = len(indexed_a) - n_matched
+        n_only_b = len(indexed_b) - n_matched
+        print(
+            f"measure_elements: {n_matched} matched, "
+            f"{n_only_a} in {label_a!r} not in {label_b!r}, "
+            f"{n_only_b} in {label_b!r} not in {label_a!r}."
+        )
+
+        frame = frame_builder(df_a, use_tomo, label_a)
+
+        def _elevation(v: np.ndarray, ax: np.ndarray) -> float:
+            vlen = float(np.linalg.norm(v))
+            if vlen < 1e-15:
+                return float("nan")
+            v_ax = float(np.dot(v, ax))
+            v_perp_len = float(np.linalg.norm(v - v_ax * ax))
+            return float(np.degrees(np.arctan2(v_ax, v_perp_len)))
+
+        rows: list[dict] = []
+
+        for key in common_keys:
+            row_a = indexed_a.loc[key]
+            if use_tomo:
+                tomo_val, sid_val = float(key[0]), float(key[1])
+            else:
+                tomo_val, sid_val = None, float(key)
+
+            a_pos = a_key_to_pos[key]
+            b_pos = b_key_to_pos[key]
+            coords_a_world = coords_a_all[a_pos]  # (3,) via get_coordinates()
+            coords_b_world = coords_b_all[b_pos]  # (3,) via get_coordinates()
+
+            vec_a, vec_b, axis = frame(tomo_val, sid_val, row_a, coords_a_world, coords_b_world)
+
+            len_a = float(np.linalg.norm(vec_a))
+            len_b = float(np.linalg.norm(vec_b))
+
+            if len_a > 1e-15 and len_b > 1e-15:
+                angle_ab = float(geom.vector_angular_distance(vec_a, vec_b))
+            else:
+                angle_ab = float("nan")
+
+            elev_a = _elevation(vec_a, axis)
+            elev_b = _elevation(vec_b, axis)
+
+            # angle_in_plane: signed angle from proj_a to proj_b about the axis.
+            proj_a = vec_a - np.dot(vec_a, axis) * axis
+            proj_b = vec_b - np.dot(vec_b, axis) * axis
+            if np.linalg.norm(proj_a) > 1e-15 and np.linalg.norm(proj_b) > 1e-15:
+                angle_in_plane = float(np.degrees(
+                    geom.vector_angular_distance_signed(proj_a, proj_b, axis)
+                ))
+            else:
+                angle_in_plane = float("nan")
+
+            angle_out_of_plane = (
+                float("nan") if np.isnan(elev_a) or np.isnan(elev_b) else elev_b - elev_a
+            )
+
+            diff = vec_b - vec_a
+            axis_component = float(np.dot(diff, axis))
+            plane_component = float(np.linalg.norm(diff - axis_component * axis))
+
+            out_row: dict = {
+                "subtomo_id": sid_val,
+                "len_a": len_a,
+                "len_b": len_b,
+                "angle_ab": angle_ab,
+                "angle_in_plane": angle_in_plane,
+                "angle_out_of_plane": angle_out_of_plane,
+                "axis_component": axis_component,
+                "plane_component": plane_component,
+                "reference": reference,
+                "frame_element": label_a,
+            }
+            if tomo_val is not None:
+                out_row["tomo_id"] = tomo_val
+            rows.append(out_row)
+
+        return pd.DataFrame(rows)
+
+    def _parent_symmetry_axis(self) -> np.ndarray:
+        """Axis used by the parent frame of :meth:`measure_elements`: the parent's z-axis."""
+        return geom.normalize_vector(np.array([0.0, 0.0, 1.0]))
+
+    def _parent_frame(self, df_a: pd.DataFrame, use_tomo: bool, label_a):
+        """Frame function for ``reference='parent'``: positions relative to the parent particle, in its frame."""
+        orig_sid_col = self._original_subtomo_id_column
+        # Symmetry axis in parent frame (same for all particles).
+        _axis_parent = self._parent_symmetry_axis()
+
+        # Validate that each subunit carries the parent-id column.
+        if orig_sid_col not in df_a.columns:
+            raise RuntimeError(
+                f"State motl for label {label_a!r} does not have the original "
+                f"subtomo_id column {orig_sid_col!r}. "
+                f"Construct via {type(self).__name__}.from_parent() or call add_parent() first."
+            )
+
+        # Build per-particle parent lookup.
+        # get_coordinates() adds shifts; get_angles() returns (N, 3) ZXZ degrees.
+        _pm = self._parent_motl
+        _pm_df = _pm.df.reset_index(drop=True)
+        _pm_coords = _pm.get_coordinates()   # (N_pm, 3)
+        _pm_angles = _pm.get_angles()         # (N_pm, 3)
+        _pm_sid_to_idx = {
+            float(sid): i for i, sid in enumerate(_pm_df[self.subtomo_id_column].to_numpy())
+        }
+
+        def frame(tomo_val, sid_val, row_a, coords_a_world, coords_b_world):
+            # row_a is indexed by the subtomo_id column; when that is the parent link, the parent id is sid_val.
+            _psid = sid_val if orig_sid_col == self.subtomo_id_column else row_a[orig_sid_col]
+            if pd.isna(_psid):
+                raise RuntimeError(
+                    f"Particle subtomo_id={sid_val} has no parent id in {orig_sid_col!r}."
+                )
+            _pm_idx = _pm_sid_to_idx.get(float(_psid))  # type: ignore[union-attr]
+            if _pm_idx is None:
+                raise RuntimeError(
+                    f"Parent particle subtomo_id={float(_psid)!r} not found "
+                    "in the registered parent motl."
+                )
+            c = _pm_coords[_pm_idx]            # type: ignore[index]
+            parent_ang = _pm_angles[_pm_idx]   # type: ignore[index]
+            # Express position differences in the parent's frame.
+            # nnana.rotated_nn_coords applies the inverse ZXZ rotation per row.
+            centered_a = (coords_a_world - c).reshape(1, 3)
+            centered_b = (coords_b_world - c).reshape(1, 3)
+            ang_arr = parent_ang.reshape(1, 3)
+            vec_a = nnana.rotated_nn_coords(centered_a, ang_arr)[0]
+            vec_b = nnana.rotated_nn_coords(centered_b, ang_arr)[0]
+            axis = _axis_parent  # type: ignore[assignment]
+            return vec_a, vec_b, axis
+
+        return frame
+
+    # ------------------------------------------------------------------
+    # Pairwise orientation
+    # ------------------------------------------------------------------
+
+    @_pooled_over_complex
+    def get_subunit_pair_orientations(self, *, degrees: bool = True, label=None) -> pd.DataFrame:
+        """Return the orientation difference of every pair of subunits within each object.
+
+        One row per unordered pair of subunits of the same object in the
+        same tomogram, all pairs, in motl row order.  The two distances come
+        from :func:`geom.cone_inplane_distance` and are kept apart: the cone
+        distance is the angle between the two z-axes, the in-plane distance
+        the remaining rotation about them.  Nothing is selected here; the
+        subunit indices are reported as stored so pairs can be chosen by
+        index afterwards.
+
+        Parameters
+        ----------
+        degrees : bool, default=True
+            Return both distances in degrees; ``False`` returns radians.
+        label : int or str, optional
+            State to measure (see :meth:`_resolve_state`); ``None`` uses the
+            current one.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: ``tomo_id``, ``object_id``, ``subtomo_id_a``,
+            ``subtomo_id_b``, ``subunit_index_a``, ``subunit_index_b``
+            (``NaN`` when :attr:`subunit_index_column` is absent),
+            ``cone_distance``, ``in_plane_distance`` and ``element_label``.
+        """
+        _state = self._resolve_state(label)
+        _orig_motl = self.motl
+        if _state is not None:
+            self.motl = _state.motl
+        try:
+            df = self.motl.df.reset_index(drop=True)
+            first: list[int] = []
+            second: list[int] = []
+            for _, rows in sorted(df.groupby([self.tomo_id_column, self.affiliation_column]).indices.items()):
+                rows = np.sort(rows)
+                for i in range(len(rows)):
+                    for j in range(i + 1, len(rows)):
+                        first.append(int(rows[i]))
+                        second.append(int(rows[j]))
+
+            if first:
+                rotations = self.motl.get_rotations()
+                cone, in_plane = geom.cone_inplane_distance(rotations[first], rotations[second], degrees=degrees)
+                cone = np.atleast_1d(np.asarray(cone, dtype=float))
+                in_plane = np.atleast_1d(np.asarray(in_plane, dtype=float))
+                if not degrees:
+                    cone = np.radians(cone)
+            else:
+                cone = in_plane = np.empty(0)
+
+            a, b = df.iloc[first], df.iloc[second]
+            has_index = self.subunit_index_column in df.columns
+            result = pd.DataFrame(
+                {
+                    "tomo_id": a[self.tomo_id_column].to_numpy(),
+                    "object_id": a[self.affiliation_column].to_numpy(),
+                    "subtomo_id_a": a[self.subtomo_id_column].to_numpy(),
+                    "subtomo_id_b": b[self.subtomo_id_column].to_numpy(),
+                    "subunit_index_a": a[self.subunit_index_column].to_numpy() if has_index else np.nan,
+                    "subunit_index_b": b[self.subunit_index_column].to_numpy() if has_index else np.nan,
+                    "cone_distance": cone,
+                    "in_plane_distance": in_plane,
+                }
+            )
+            result["element_label"] = _state.label if _state is not None else None
+            return result
+        finally:
+            self.motl = _orig_motl
+
+    @_pooled_over_complex
+    def get_angular_ranges(self, *, degrees: bool = True, label=None) -> pd.DataFrame:
+        """Return, per object, the range of the pairwise orientation differences.
+
+        Built from :meth:`get_subunit_pair_orientations`: the minimum and
+        maximum over each object's pairs of the cone distance and of the
+        in-plane distance.  An object with a single subunit has no pairs; it
+        is listed with ``n_pairs = 0`` and ``NaN`` ranges.
+
+        Parameters
+        ----------
+        degrees : bool, default=True
+            Return the ranges in degrees; ``False`` returns radians.
+        label : int or str, optional
+            State to measure (see :meth:`_resolve_state`); ``None`` uses the
+            current one.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per object.  Columns: ``tomo_id``, ``object_id``,
+            ``n_pairs``, ``cone_min``, ``cone_max``, ``in_plane_min``,
+            ``in_plane_max`` and ``element_label``.
+        """
+        pairs = self.get_subunit_pair_orientations(degrees=degrees, label=label)
+        _state = self._resolve_state(label)
+        motl = _state.motl if _state is not None else self.motl
+        objects = (
+            motl.df[[self.tomo_id_column, self.affiliation_column]]
+            .drop_duplicates()
+            .rename(columns={self.tomo_id_column: "tomo_id", self.affiliation_column: "object_id"})
+        )
+        ranges = (
+            pairs.groupby(["tomo_id", "object_id"])
+            .agg(
+                n_pairs=("cone_distance", "size"),
+                cone_min=("cone_distance", "min"),
+                cone_max=("cone_distance", "max"),
+                in_plane_min=("in_plane_distance", "min"),
+                in_plane_max=("in_plane_distance", "max"),
+            )
+            .reset_index()
+        )
+        result = objects.merge(ranges, on=["tomo_id", "object_id"], how="left")
+        result["n_pairs"] = result["n_pairs"].fillna(0).astype(int)
+        result = result.sort_values(["tomo_id", "object_id"]).reset_index(drop=True)
+        result["element_label"] = _state.label if _state is not None else None
+        return result
+
+
+# =============================================================================
+# SymmetricComplex — generic point-group symmetric multi-subunit complex
+# =============================================================================
+
+
+class SymmetricComplex(MultiSubunitComplex):
+    """Base class for point-group symmetric multi-subunit complexes.
+
+    A :class:`MultiSubunitComplex` whose subunits form a symmetric complex
+    (cyclic, dihedral, or Platonic).  The symmetry fixes ``group`` and
+    ``fold`` and, from them, the subunit count per object; the methods that
+    need only that count, and the parent and state machinery, are inherited
+    from :class:`MultiSubunitComplex`.
+
+    The symmetry adds one thing the base class does not have: an ideal
+    arrangement of the subunits exists whether or not a parent was given,
+    because the symmetry itself supplies it.  Each subclass supplies that
+    ideal: :class:`CnComplex` through the fitted ring behind
+    ``measure_elements(reference="fit")``.
+
+    Parameters
+    ----------
+    motl : MotlSource
+        Subunit particle list.
+    symmetry : Symmetry
+        Symmetry specifier, e.g. ``"C8"``, ``"D6"``, ``"T"``, ``"O"``,
+        ``"I"``, or a bare integer (interpreted as cyclic).
+    affiliation_column : MotlColumn, default='object_id'
+        Column that identifies which object each particle belongs to.
+    subunit_index_column : MotlColumn, default='geom1'
+        Column that subunit-indexing methods write indices into.
+    tomo_id_column : MotlColumn, default='tomo_id'
+        Column that identifies the tomogram.
+    subtomo_id_column : MotlColumn, default='subtomo_id'
+        Column that identifies each particle.
+    """
+
+    def __init__(
+        self,
+        motl: MotlSource,
+        symmetry: Symmetry,
+        *,
+        affiliation_column: MotlColumn = "object_id",
+        subunit_index_column: MotlColumn = "geom1",
+        tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
+    ) -> None:
+        self._setup(
+            motl,
+            symmetry,
+            affiliation_column=affiliation_column,
+            subunit_index_column=subunit_index_column,
+            tomo_id_column=tomo_id_column,
+            subtomo_id_column=subtomo_id_column,
+        )
+
+    def _setup(
+        self,
+        motl: MotlSource,
+        symmetry: Symmetry,
+        *,
+        affiliation_column: MotlColumn = "object_id",
+        subunit_index_column: MotlColumn = "geom1",
+        tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
+    ) -> None:
+        """Shared constructor body; called by :meth:`__init__` and subclass constructors.
+
+        Resolves ``group`` and ``fold`` from *symmetry* and passes the subunit
+        count they give to :meth:`MultiSubunitComplex._setup`.
+        """
+        self.group, self.fold = geom.as_symmetry(symmetry)
+        super()._setup(
+            motl,
+            _GROUP_ORDER[self.group](self.fold),
+            affiliation_column=affiliation_column,
+            subunit_index_column=subunit_index_column,
+            tomo_id_column=tomo_id_column,
+            subtomo_id_column=subtomo_id_column,
+        )
+
+    # ------------------------------------------------------------------
+    # Subunit indexing (dispatch hook — subclasses override)
+    # ------------------------------------------------------------------
+
+    def assign_subunit_index(self) -> None:
+        """Assign subunit indices into ``self.subunit_index_column``.
+
+        Subclasses must override this method with a symmetry-specific
+        implementation.
+
+        Raises
+        ------
+        NotImplementedError
+            Always; subclasses define subunit indexing.
+        """
+        raise NotImplementedError("subclasses define subunit indexing")
+
+    def merge_subunits(
+        self,
+        radius: float = 55,
+    ) -> None:
+        """Merge near-duplicate objects as :meth:`MultiSubunitComplex.merge_subunits` does, then re-index.
+
+        After the merge, subunit indices are recomputed for all objects via
+        :meth:`assign_subunit_index`.
+
+        Parameters
+        ----------
+        radius : float, default=55
+            Distance threshold in voxels.
+
+        Notes
+        -----
+        Modifies ``self.motl.df`` in place.
+        """
+        super().merge_subunits(radius)
+        self.assign_subunit_index()
+
 
 # =============================================================================
 # CnComplex — cyclic Cn ring structure
@@ -1572,7 +2540,7 @@ class CnComplex(SymmetricComplex):
     """Cyclic Cn-symmetric ring assembly.
 
     Extends :class:`SymmetricComplex` with methods specific to cyclic
-    symmetry: subunit ordering, affiliation clustering, occupancy analysis,
+    symmetry: subunit indexing, affiliation clustering, occupancy analysis,
     and diameter computation.
 
     Parameters
@@ -1584,10 +2552,12 @@ class CnComplex(SymmetricComplex):
         symmetries raise :class:`ValueError`.
     affiliation_column : MotlColumn, default='object_id'
         Column that identifies which object each particle belongs to.
-    order_column : MotlColumn, default='geom1'
-        Column that :meth:`assign_subunit_order` writes cyclic indices into.
+    subunit_index_column : MotlColumn, default='geom1'
+        Column that :meth:`assign_subunit_index` writes cyclic indices into.
     tomo_id_column : MotlColumn, default='tomo_id'
         Column that identifies the tomogram.
+    subtomo_id_column : MotlColumn, default='subtomo_id'
+        Column that identifies each particle.
     center_method : {'circle_fit', 'barycentric'}, default='circle_fit'
         Algorithm used by :meth:`get_centers_as_motl` and related helpers.
         ``'circle_fit'`` falls back to barycentric when the fit fails.
@@ -1604,8 +2574,9 @@ class CnComplex(SymmetricComplex):
         symmetry: Symmetry,
         *,
         affiliation_column: MotlColumn = "object_id",
-        order_column: MotlColumn = "geom1",
+        subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
         center_method: Literal["circle_fit", "barycentric"] = "circle_fit",
         pixel_size: float = 1.0,
     ) -> None:
@@ -1613,8 +2584,9 @@ class CnComplex(SymmetricComplex):
             motl,
             symmetry,
             affiliation_column=affiliation_column,
-            order_column=order_column,
+            subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
+            subtomo_id_column=subtomo_id_column,
         )
         if self.group != "C":
             raise ValueError(f"CnComplex requires cyclic Cn symmetry, got {symmetry!r}.")
@@ -1626,8 +2598,9 @@ class CnComplex(SymmetricComplex):
         """Initialise cyclic-ring attributes shared with :class:`DnComplex`.
 
         Sets ``self.n`` to the half-ring fold, ``self._ring_group_columns``
-        to ``[tomo_id_column, affiliation_column]``, and ``self._components``
-        to an empty dict.  Called from :meth:`CnComplex.__init__` and
+        to ``[tomo_id_column, affiliation_column]``, ``self._components``
+        to an empty dict, and the ring attributes to a plain ring: no
+        ``rings``, no ``_ring_column``, ``_rings_merged`` False.  Called from :meth:`CnComplex.__init__` and
         :meth:`DnComplex.__init__`.
         """
         self.n: int = self.fold
@@ -1636,16 +2609,23 @@ class CnComplex(SymmetricComplex):
             self.affiliation_column,
         ]
         self._components: dict[str, dict] = {}
-        # State-tracking machinery.
-        self._pixel_size: float = 1.0
-        self._parent_motl: cryomotl.Motl | None = None
-        self._parent_subunit_map: dict[int, int] = {}
+        # Rings: empty for a plain ring.  Each entry is a plain CnComplex of the same fold.
+        self._rings: list[CnComplex] = []
+        self._ring_column: MotlColumn | None = None
+        self._rings_merged: bool = False
+        # Construction parameters of the split, stored by from_parent.
         self._shift: np.ndarray | None = None
         self._n_for_split: int | None = None
         self._symmetry_orientation = None
-        self._original_subtomo_id_column: MotlColumn = "geom5"
-        self._original_object_id_column: MotlColumn = "geom4"
-        self._states: list[_SubunitState] = []
+
+    @property
+    def rings(self) -> list["CnComplex"]:
+        """The rings of the complex, each a plain :class:`CnComplex` of the same fold; empty for a plain ring."""
+        return self._rings
+
+    @rings.setter
+    def rings(self, value: list["CnComplex"]) -> None:
+        self._rings = list(value)
 
     def __repr__(self) -> str:
         ring_motls = getattr(self, "_ring_motls", None)
@@ -1706,7 +2686,7 @@ class CnComplex(SymmetricComplex):
         shift: ArrayLike,
         *,
         affiliation_column: MotlColumn = "object_id",
-        order_column: MotlColumn = "geom1",
+        subunit_index_column: MotlColumn = "geom1",
         original_subtomo_id_column: MotlColumn = "geom5",
         original_object_id_column: MotlColumn = "geom4",
         symmetry_orientation: "RotationLike | None" = None,
@@ -1735,7 +2715,7 @@ class CnComplex(SymmetricComplex):
             frame.  Passed verbatim to ``split_in_asymmetric_subunits``.
         affiliation_column :
             Column that groups the resulting subunits of one complex (grouping).
-        order_column :
+        subunit_index_column :
             Forwarded to ``split_in_asymmetric_subunits``.
         original_subtomo_id_column :
             Parent link column (default ``"geom5"``); forwarded to
@@ -1753,16 +2733,17 @@ class CnComplex(SymmetricComplex):
             f"C{int(n)}",
             shift,
             symmetry_orientation=symmetry_orientation,
-            order_column=order_column,
+            subunit_index_column=subunit_index_column,
             original_subtomo_id_column=original_subtomo_id_column,
             split_into_objects=True,
             original_object_id_column=original_object_id_column,
         )
+        _move_split_objects_to(subunit_motl, affiliation_column, original_object_id_column)
         obj = cls(
             subunit_motl,
             f"C{int(n)}",
             affiliation_column=affiliation_column,
-            order_column=order_column,
+            subunit_index_column=subunit_index_column,
             pixel_size=pixel_size,
         )
         obj._parent_motl = pm
@@ -1774,225 +2755,25 @@ class CnComplex(SymmetricComplex):
         return obj
 
     # ------------------------------------------------------------------
-    # State-machinery guards and helpers
+    # Derived initial state: the split of the parent
     # ------------------------------------------------------------------
 
-    def _resolve_state(self, label=None) -> "_SubunitState | None":
-        """Return the state to use for a state-dependent computation.
-
-        - label=None: returns the state with the highest position, or None
-          when no states have been added (use self.motl as-is).
-        - label given: returns the matching state, or raises KeyError listing
-          existing labels.
-        """
-        if not self._states:
-            if label is not None:
-                raise KeyError(
-                    f"Unknown state label {label!r}. No states have been added."
-                )
-            return None
-        if label is None:
-            return max(self._states, key=lambda s: s.position)
-        for s in self._states:
-            if s.label == label:
-                return s
-        existing = [s.label for s in sorted(self._states, key=lambda s: s.position)]
-        raise KeyError(f"Unknown state label {label!r}. Existing labels: {existing!r}.")
-
-    def _require_parent(self) -> None:
-        """Raise if no parent motl has been linked to this instance."""
-        if self._parent_motl is None:
-            raise RuntimeError(
-                "No parent motl linked.  Construct via CnComplex.from_parent() "
-                "or call add_parent() first."
-            )
-
-    def _check_pixel_size_pair(self, motl_pixel_size: float, who: str) -> None:
-        """Raise if the two pixel sizes disagree."""
-        if not np.isclose(float(self._pixel_size), float(motl_pixel_size)):
-            raise ValueError(
-                f"Pixel size mismatch: instance has {self._pixel_size}, "
-                f"{who} has {motl_pixel_size}."
-            )
-
-    # ------------------------------------------------------------------
-    # Parent link
-    # ------------------------------------------------------------------
-
-    def add_parent(
-        self,
-        parent_motl: MotlSource,
-        parent_id_column: MotlColumn,
-        *,
-        pixel_size: float | None = None,
-    ) -> None:
-        """Link a parent motl to a path-(a) constructed instance.
-
-        Builds the subunit→parent mapping keyed by subunit ``subtomo_id``
-        and reports how many subunits mapped and how many did not.  A
-        path-(a) construction stores no default for *parent_id_column*, so
-        it must be supplied explicitly here.
-
-        Parameters
-        ----------
-        parent_motl :
-            The unsplit complex motl.
-        parent_id_column :
-            Column in ``self.motl`` that holds the parent ``subtomo_id``
-            for each subunit.
-        pixel_size :
-            Pixel size declared by *parent_motl*.  ``None`` (default) uses
-            the instance pixel size without checking.  An explicit value is
-            validated against the instance pixel size and raises
-            :class:`ValueError` on mismatch.
-        """
-        if pixel_size is not None:
-            self._check_pixel_size_pair(pixel_size, "parent motl")
-        pm = cryomotl.Motl.load(parent_motl)
-        if parent_id_column not in self.motl.df.columns:
-            raise ValueError(
-                f"parent_id_column {parent_id_column!r} not found in subunit motl."
-            )
-        parent_ids = set(pm.df["subtomo_id"].values)
-        sub_df = self.motl.df[["subtomo_id", parent_id_column]]
-        valid_mask = (
-            sub_df[parent_id_column].notna()
-            & sub_df[parent_id_column].isin(parent_ids)
-        )
-        mapped_df = sub_df[valid_mask]
-        n_mapped = len(mapped_df)
-        n_unmapped = len(sub_df) - n_mapped
-        mapping: dict[int, int] = dict(zip(
-            mapped_df["subtomo_id"].astype(int).values,
-            mapped_df[parent_id_column].astype(int).values,
-        ))
-        self._parent_motl = pm
-        self._parent_subunit_map = mapping
-        print(f"add_parent: {n_mapped} subunit(s) mapped, {n_unmapped} did not map.")
-
-    # ------------------------------------------------------------------
-    # State collection
-    # ------------------------------------------------------------------
-
-    def add_subunit_state(
-        self,
-        motl: MotlSource,
-        position: int | None = None,
-        label: int | str | None = None,
-        *,
-        pixel_size: float | None = None,
-    ) -> None:
-        """Add a subunit motl as a named, ordered state.
-
-        Matching against the instance's base motl uses ``subtomo_id``
-        as the primary key with ``tomo_id`` as an additional guard when
-        both motls carry it.
-
-        Three counts are always printed:
-
-        * **matched** — subunits present in both the instance and the new motl.
-        * **in instance not in new motl** — subunits missing from the new motl.
-        * **in new motl not in instance** — extra subunits not in the instance.
-
-        When an occupied *position* is given the existing states at that
-        position and later are shifted up by one, and the full
-        ``label -> position`` table is printed before and after.
-
-        Parameters
-        ----------
-        motl :
-            Subunit motl for this state.
-        position :
-            Target position (0-based).  ``None`` appends.  An occupied
-            position inserts and shifts later states up by one.
-        label :
-            Stable identifier for this state.  Defaults to the position
-            it occupies at the moment of insertion and is never changed
-            afterwards.
-        pixel_size :
-            Pixel size declared by this state's motl.  ``None`` (default)
-            uses the instance pixel size without checking.  An explicit
-            value is validated against the instance pixel size and raises
-            :class:`ValueError` on mismatch.
-        """
-        if pixel_size is not None:
-            self._check_pixel_size_pair(pixel_size, "state motl")
-        m = cryomotl.Motl.load(motl)
-        matched, missing, extra = _match_counts(self.motl.df, m.df)
-        print(
-            f"add_subunit_state: {matched} matched, "
-            f"{missing} in instance not in new motl, "
-            f"{extra} in new motl not in instance."
-        )
-
-        n = len(self._states)
-        new_pos = n if position is None else int(position)
-        # Clamp out-of-range positions to the end.
-        if new_pos > n:
-            new_pos = n
-        if label is None:
-            label = new_pos
-
-        if new_pos < n:
-            # Insert: shift every state at or after new_pos up by one.
-            print("Before shift:")
-            for s in sorted(self._states, key=lambda x: x.position):
-                print(f"  {s.label!r} -> {s.position}")
-            for s in self._states:
-                if s.position >= new_pos:
-                    s.position += 1
-            self._states.append(_SubunitState(motl=m, position=new_pos, label=label))
-            self._states.sort(key=lambda x: x.position)
-            print("After shift:")
-            for s in self._states:
-                print(f"  {s.label!r} -> {s.position}")
-        else:
-            self._states.append(_SubunitState(motl=m, position=new_pos, label=label))
-
-    # ------------------------------------------------------------------
-    # Derived initial state (D4)
-    # ------------------------------------------------------------------
-
-    def derive_initial_state(
-        self,
-        *,
-        label: int | str = "derived",
-    ) -> None:
-        """Insert the parent-derived subunit state at position 0.
-
-        Reconstructs the split by calling
-        :meth:`~cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits`
-        with exactly the arguments stored at construction.  The result is
-        inserted at position 0, shifting all existing states.
-
-        Parameters
-        ----------
-        label :
-            Stable identifier for the inserted state.  Defaults to
-            ``"derived"``.  When the default is already taken by an
-            existing state the next free non-negative integer is used
-            instead.
-        """
-        self._require_parent()
-        existing_labels = {s.label for s in self._states}
-        if label in existing_labels:
-            i = 0
-            while i in existing_labels:
-                i += 1
-            label = i
-        derived_motl = self._parent_motl.split_in_asymmetric_subunits(
+    def _split_parent(self) -> "cryomotl.Motl":
+        """Re-run :meth:`~cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits` with the arguments stored by :meth:`from_parent`."""
+        derived = self._parent_motl.split_in_asymmetric_subunits(
             f"C{self._n_for_split}",
             self._shift,
             symmetry_orientation=self._symmetry_orientation,
-            order_column=self.order_column,
+            subunit_index_column=self.subunit_index_column,
             original_subtomo_id_column=self._original_subtomo_id_column,
             split_into_objects=True,
             original_object_id_column=self._original_object_id_column,
         )
-        self.add_subunit_state(derived_motl, position=0, label=label, pixel_size=self._pixel_size)
+        _move_split_objects_to(derived, self.affiliation_column, self._original_object_id_column)
+        return derived
 
     # ------------------------------------------------------------------
-    # Centre comparison (D5)
+    # Centre comparison
     # ------------------------------------------------------------------
 
     def get_centre_comparison(self) -> dict:
@@ -2030,7 +2811,7 @@ class CnComplex(SymmetricComplex):
             )
 
         results: dict = {}
-        for state in self._states:
+        for state in self._elements():
             state_records: list[dict] = []
             state_df = state.motl.df
 
@@ -2059,7 +2840,7 @@ class CnComplex(SymmetricComplex):
                     if len(parent_sids) > 0:
                         parent_sid = parent_sids[0]
                         parent_rows = self._parent_motl.df[
-                            self._parent_motl.df["subtomo_id"] == parent_sid
+                            self._parent_motl.df[self.subtomo_id_column] == parent_sid
                         ]
                         if len(parent_rows) > 0:
                             pr = parent_rows.iloc[0]
@@ -2091,118 +2872,7 @@ class CnComplex(SymmetricComplex):
         return results
 
     # ------------------------------------------------------------------
-    # Affiliation restoration (D6)
-    # ------------------------------------------------------------------
-
-    def restore_affiliation(self, state_label: int | str) -> None:
-        """Write affiliation columns from the base motl into the named state's motl.
-
-        Writes :attr:`order_column`, ``_original_subtomo_id_column``, and
-        ``_original_object_id_column`` — no other columns are touched.
-        Matching is on ``subtomo_id``.
-
-        Parameters
-        ----------
-        state_label :
-            Label of the target state.
-        """
-        self._require_parent()
-        state = next((s for s in self._states if s.label == state_label), None)
-        if state is None:
-            raise KeyError(f"No state with label {state_label!r}.")
-
-        write_cols = [
-            self.order_column,
-            self._original_subtomo_id_column,
-            self._original_object_id_column,
-        ]
-        base_df = self.motl.df
-        present_cols = [c for c in write_cols if c in base_df.columns]
-        ref = (
-            base_df[["subtomo_id"] + present_cols]
-            .drop_duplicates("subtomo_id")
-            .set_index("subtomo_id")
-        )
-
-        state_df = state.motl.df.copy()
-        matched_mask = state_df["subtomo_id"].isin(ref.index)
-        n_written = int(matched_mask.sum())
-        n_unmatched = len(state_df) - n_written
-
-        for col in present_cols:
-            vals = state_df.loc[matched_mask, "subtomo_id"].map(ref[col])
-            if col not in state_df.columns:
-                state_df[col] = 0.0
-            state_df.loc[matched_mask, col] = vals.values
-
-        state.motl.df = state_df
-        print(f"restore_affiliation: {n_written} row(s) written, {n_unmatched} unmatched.")
-
-    # ------------------------------------------------------------------
-    # Element dispatcher (S1b)
-    # ------------------------------------------------------------------
-
-    def per_element(self, method_name: str, *args, **kwargs):
-        """Dispatch *method_name* over each element in :attr:`_states`, tagging results with the element label.
-
-        When :attr:`_states` is empty, delegates directly to the instance method.
-        Otherwise walks the MRO past ``type(self)`` to find the base-class
-        implementation, temporarily swaps ``self.motl`` to each element's motl,
-        calls the base implementation, and tags the result with the element's
-        ``label`` in a column ``"element_label"``.  DataFrame results are
-        concatenated; Motl results are returned as a list.
-
-        Parameters
-        ----------
-        method_name : str
-            Name of the method to dispatch.
-        *args, **kwargs
-            Forwarded verbatim to the base-class implementation.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Concatenated per-element DataFrames, each stamped with
-            ``"element_label"``.
-        list
-            Per-element results when the base implementation returns a
-            non-DataFrame.
-        """
-        if not self._states:
-            return getattr(self, method_name)(*args, **kwargs)
-        base_fn = None
-        for _cls in type(self).__mro__[1:]:
-            if method_name in _cls.__dict__:
-                _fn = _cls.__dict__[method_name]
-                if callable(_fn):
-                    base_fn = _fn.__get__(self, type(self))
-                break
-        if base_fn is None:
-            raise AttributeError(
-                f"{type(self).__name__} has no base-class implementation of '{method_name}'"
-            )
-        orig_motl = self.motl
-        parts = []
-        try:
-            for _state in sorted(self._states, key=lambda s: s.position):
-                self.motl = _state.motl
-                result = base_fn(*args, **kwargs)
-                if isinstance(result, pd.DataFrame):
-                    result = result.copy()
-                    result["element_label"] = _state.label
-                elif isinstance(result, cryomotl.Motl):
-                    tagged = cryomotl.Motl(result.df.copy())
-                    tagged.df["element_label"] = _state.label
-                    result = tagged
-                parts.append(result)
-        finally:
-            self.motl = orig_motl
-        if parts and isinstance(parts[0], pd.DataFrame):
-            return pd.concat(parts, ignore_index=True)
-        return parts
-
-    # ------------------------------------------------------------------
-    # Cross-element measurement (S1c)
+    # Cross-element measurement: the fitted-ring frame
     # ------------------------------------------------------------------
 
     def measure_elements(
@@ -2265,216 +2935,536 @@ class CnComplex(SymmetricComplex):
                 The value of *reference* used, repeated on every row.
         """
         if reference == "parent":
-            self._require_parent()
-        elif reference != "fit":
+            return super().measure_elements(label_a, label_b, reference=reference)
+        if reference != "fit":
             raise ValueError(f"reference must be 'parent' or 'fit', got {reference!r}.")
+        return self._measure_states(label_a, label_b, reference, self._fit_frame)
 
-        state_a = next((s for s in self._states if s.label == label_a), None)
-        state_b = next((s for s in self._states if s.label == label_b), None)
-        if state_a is None:
-            raise KeyError(f"No element with label {label_a!r}.")
-        if state_b is None:
-            raise KeyError(f"No element with label {label_b!r}.")
+    def _parent_symmetry_axis(self) -> np.ndarray:
+        """The parent's z-axis, rotated by ``_symmetry_orientation`` when one was given."""
+        _axis_parent = np.array([0.0, 0.0, 1.0])
+        if self._symmetry_orientation is not None:
+            try:
+                _axis_parent = geom.as_rotation(self._symmetry_orientation).apply(_axis_parent)
+            except Exception:
+                pass
+        _axis_parent = geom.normalize_vector(_axis_parent)
+        return _axis_parent
 
-        # Reset indices so coords_*_all[i] aligns with df_*[i].
-        df_a = state_a.motl.df.reset_index(drop=True)
-        df_b = state_b.motl.df.reset_index(drop=True)
-        coords_a_all = state_a.motl.get_coordinates()   # (N_a, 3): x+shift_x …
-        coords_b_all = state_b.motl.get_coordinates()   # (N_b, 3)
-        use_tomo = "tomo_id" in df_a.columns and "tomo_id" in df_b.columns
-
-        if use_tomo:
-            indexed_a = df_a.set_index(["tomo_id", "subtomo_id"])
-            indexed_b = df_b.set_index(["tomo_id", "subtomo_id"])
-            a_key_to_pos = {
-                (float(df_a.at[i, "tomo_id"]), float(df_a.at[i, "subtomo_id"])): i
-                for i in range(len(df_a))
-            }
-            b_key_to_pos = {
-                (float(df_b.at[i, "tomo_id"]), float(df_b.at[i, "subtomo_id"])): i
-                for i in range(len(df_b))
-            }
-        else:
-            indexed_a = df_a.set_index("subtomo_id")
-            indexed_b = df_b.set_index("subtomo_id")
-            a_key_to_pos = {float(df_a.at[i, "subtomo_id"]): i for i in range(len(df_a))}
-            b_key_to_pos = {float(df_b.at[i, "subtomo_id"]): i for i in range(len(df_b))}
-
-        common_keys = indexed_a.index.intersection(indexed_b.index)
-        n_matched = len(common_keys)
-        n_only_a = len(indexed_a) - n_matched
-        n_only_b = len(indexed_b) - n_matched
-        print(
-            f"measure_elements: {n_matched} matched, "
-            f"{n_only_a} in {label_a!r} not in {label_b!r}, "
-            f"{n_only_b} in {label_b!r} not in {label_a!r}."
-        )
-
+    def _fit_frame(self, df_a: pd.DataFrame, use_tomo: bool, label_a):
+        """Frame function for ``reference='fit'``: positions relative to the Cn circle fit of state *a*, in world coordinates."""
         aff_col = self.affiliation_column
         tomo_col = self.tomo_id_column
-        orig_sid_col = self._original_subtomo_id_column
-
         # Per-group reference data for "fit" (keyed by (tomo_val | None, aff_val)).
         GroupKey = tuple
         group_data: dict[GroupKey, dict] = {}
-
-        # Per-particle parent data for "parent" (None when "fit").
-        _pm_coords: np.ndarray | None = None
-        _pm_angles: np.ndarray | None = None
-        _pm_sid_to_idx: dict[float, int] | None = None
-        _axis_parent: np.ndarray | None = None
-
-        if reference == "fit":
-            _group_cols = [tomo_col, aff_col] if use_tomo else [aff_col]
-            for _gkeys, _gdf in df_a.groupby(_group_cols):
-                if use_tomo:
-                    _tval, _aval = float(_gkeys[0]), float(_gkeys[1])
-                else:
-                    _tval, _aval = None, float(_gkeys)
-                _gm = cryomotl.Motl()
-                _gm.df = _gdf.reset_index(drop=True)
-                _coords_g = _gm.get_coordinates()
-                _fit_centre, _ = self._compute_object_center(_gm)
-                try:
-                    _, _, _fit_axis = geom.project_3d_points_on_2d_plane_normal_aligned(_coords_g)
-                    _fit_axis = geom.normalize_vector(_fit_axis)
-                except Exception:
-                    _fit_axis = np.array([0.0, 0.0, 1.0])
-                # Stabilise sign: orient axis to agree with mean particle z-axis.
-                _z_normals = geom.euler_angles_to_normals(
-                    _gdf[["phi", "theta", "psi"]].to_numpy(float)
-                )  # (N, 3) unit z-normals via geom
-                _mean_z = geom.barycenter(_z_normals)  # centroid of unit normals
-                if np.dot(_fit_axis, _mean_z) < 0:
-                    _fit_axis = -_fit_axis
-                group_data[(_tval, _aval)] = {"centre": _fit_centre, "axis": _fit_axis}
-
-        elif reference == "parent":
-            # Symmetry axis in parent frame (same for all particles).
-            _axis_parent = np.array([0.0, 0.0, 1.0])
-            if self._symmetry_orientation is not None:
-                try:
-                    _axis_parent = geom.as_rotation(self._symmetry_orientation).apply(_axis_parent)
-                except Exception:
-                    pass
-            _axis_parent = geom.normalize_vector(_axis_parent)
-
-            # Validate that each subunit carries the parent-id column.
-            if orig_sid_col not in df_a.columns:
-                raise RuntimeError(
-                    f"State motl for label {label_a!r} does not have the original "
-                    f"subtomo_id column {orig_sid_col!r}. "
-                    "Construct via CnComplex.from_parent() or call add_parent() first."
-                )
-
-            # Build per-particle parent lookup.
-            # get_coordinates() adds shifts; get_angles() returns (N, 3) ZXZ degrees.
-            _pm = self._parent_motl
-            _pm_df = _pm.df.reset_index(drop=True)
-            _pm_coords = _pm.get_coordinates()   # (N_pm, 3)
-            _pm_angles = _pm.get_angles()         # (N_pm, 3)
-            _pm_sid_to_idx = {
-                float(sid): i for i, sid in enumerate(_pm_df["subtomo_id"].to_numpy())
-            }
-
-        def _elevation(v: np.ndarray, ax: np.ndarray) -> float:
-            vlen = float(np.linalg.norm(v))
-            if vlen < 1e-15:
-                return float("nan")
-            v_ax = float(np.dot(v, ax))
-            v_perp_len = float(np.linalg.norm(v - v_ax * ax))
-            return float(np.degrees(np.arctan2(v_ax, v_perp_len)))
-
-        rows: list[dict] = []
-
-        for key in common_keys:
-            row_a = indexed_a.loc[key]
+        _group_cols = [tomo_col, aff_col] if use_tomo else [aff_col]
+        for _gkeys, _gdf in df_a.groupby(_group_cols):
             if use_tomo:
-                tomo_val, sid_val = float(key[0]), float(key[1])
+                _tval, _aval = float(_gkeys[0]), float(_gkeys[1])
             else:
-                tomo_val, sid_val = None, float(key)
+                _tval, _aval = None, float(_gkeys)
+            _gm = cryomotl.Motl()
+            _gm.df = _gdf.reset_index(drop=True)
+            _coords_g = _gm.get_coordinates()
+            _fit_centre, _ = self._compute_object_center(_gm)
+            try:
+                _, _, _fit_axis = geom.project_3d_points_on_2d_plane_normal_aligned(_coords_g)
+                _fit_axis = geom.normalize_vector(_fit_axis)
+            except Exception:
+                _fit_axis = np.array([0.0, 0.0, 1.0])
+            # Stabilise sign: orient axis to agree with mean particle z-axis.
+            _z_normals = geom.euler_angles_to_normals(
+                _gdf[["phi", "theta", "psi"]].to_numpy(float)
+            )  # (N, 3) unit z-normals via geom
+            _mean_z = geom.barycenter(_z_normals)  # centroid of unit normals
+            if np.dot(_fit_axis, _mean_z) < 0:
+                _fit_axis = -_fit_axis
+            group_data[(_tval, _aval)] = {"centre": _fit_centre, "axis": _fit_axis}
 
-            a_pos = a_key_to_pos[key]
-            b_pos = b_key_to_pos[key]
-            coords_a_world = coords_a_all[a_pos]  # (3,) via get_coordinates()
-            coords_b_world = coords_b_all[b_pos]  # (3,) via get_coordinates()
+        def frame(tomo_val, sid_val, row_a, coords_a_world, coords_b_world):
+            _aval = float(row_a[aff_col]) if aff_col in df_a.columns else 0.0
+            gdata = group_data.get((tomo_val, _aval), {})
+            c = gdata.get("centre", np.zeros(3))
+            axis = gdata.get("axis", np.array([0.0, 0.0, 1.0]))
+            vec_a = coords_a_world - c
+            vec_b = coords_b_world - c
+            return vec_a, vec_b, axis
 
-            if reference == "parent":
-                _psid = row_a[orig_sid_col]
-                if pd.isna(_psid):
-                    raise RuntimeError(
-                        f"Particle subtomo_id={sid_val} has no parent id in {orig_sid_col!r}."
-                    )
-                _pm_idx = _pm_sid_to_idx.get(float(_psid))  # type: ignore[union-attr]
-                if _pm_idx is None:
-                    raise RuntimeError(
-                        f"Parent particle subtomo_id={float(_psid)!r} not found "
-                        "in the registered parent motl."
-                    )
-                c = _pm_coords[_pm_idx]            # type: ignore[index]
-                parent_ang = _pm_angles[_pm_idx]   # type: ignore[index]
-                # Express position differences in the parent's frame.
-                # nnana.rotated_nn_coords applies the inverse ZXZ rotation per row.
-                centered_a = (coords_a_world - c).reshape(1, 3)
-                centered_b = (coords_b_world - c).reshape(1, 3)
-                ang_arr = parent_ang.reshape(1, 3)
-                vec_a = nnana.rotated_nn_coords(centered_a, ang_arr)[0]
-                vec_b = nnana.rotated_nn_coords(centered_b, ang_arr)[0]
-                axis = _axis_parent  # type: ignore[assignment]
-            else:
-                _aval = float(row_a[aff_col]) if aff_col in df_a.columns else 0.0
-                gdata = group_data.get((tomo_val, _aval), {})
-                c = gdata.get("centre", np.zeros(3))
-                axis = gdata.get("axis", np.array([0.0, 0.0, 1.0]))
-                vec_a = coords_a_world - c
-                vec_b = coords_b_world - c
+        return frame
 
-            len_a = float(np.linalg.norm(vec_a))
-            len_b = float(np.linalg.norm(vec_b))
+    # ------------------------------------------------------------------
+    # Rings: per-ring dispatch and between-ring measurements
+    # ------------------------------------------------------------------
 
-            if len_a > 1e-15 and len_b > 1e-15:
-                angle_ab = float(geom.vector_angular_distance(vec_a, vec_b))
-            else:
-                angle_ab = float("nan")
+    def per_ring(self, method_name: str, *args, **kwargs):
+        """Call *method_name* on each ring and tag every result with its 1-based ring number in :attr:`_ring_column`.
 
-            elev_a = _elevation(vec_a, axis)
-            elev_b = _elevation(vec_b, axis)
+        Each ring is a plain :class:`CnComplex`; the method runs on it.  When
+        the complex holds no rings, or its rings are already merged, the
+        method is called on ``self`` instead.
 
-            # angle_in_plane: signed angle from proj_a to proj_b about the axis.
-            proj_a = vec_a - np.dot(vec_a, axis) * axis
-            proj_b = vec_b - np.dot(vec_b, axis) * axis
-            if np.linalg.norm(proj_a) > 1e-15 and np.linalg.norm(proj_b) > 1e-15:
-                angle_in_plane = float(np.degrees(
-                    geom.vector_angular_distance_signed(proj_a, proj_b, axis)
-                ))
-            else:
-                angle_in_plane = float("nan")
+        Parameters
+        ----------
+        method_name : str
+            Name of the method to call.
+        *args, **kwargs
+            Forwarded to the method.
 
-            angle_out_of_plane = (
-                float("nan") if np.isnan(elev_a) or np.isnan(elev_b) else elev_b - elev_a
+        Returns
+        -------
+        pandas.DataFrame
+            Concatenated per-ring results with :attr:`_ring_column` appended;
+            an ``element_label`` column is dropped.
+        list
+            Per-ring results when the method does not return a DataFrame;
+            Motl results carry :attr:`_ring_column` as well.
+        """
+        if not self.rings or self._rings_merged:
+            return getattr(self, method_name)(*args, **kwargs)
+        ring_col = self._ring_column
+        parts = []
+        for ring_number, ring in enumerate(self.rings, start=1):
+            result = getattr(ring, method_name)(*args, **kwargs)
+            if isinstance(result, pd.DataFrame):
+                result = result.drop(columns=["element_label"], errors="ignore")
+                result[ring_col] = float(ring_number)
+            elif isinstance(result, cryomotl.Motl):
+                tagged = cryomotl.Motl(result.df.drop(columns=["element_label"], errors="ignore"))
+                tagged.df[ring_col] = float(ring_number)
+                result = tagged
+            parts.append(result)
+        if parts and isinstance(parts[0], pd.DataFrame):
+            return pd.concat(parts, ignore_index=True)
+        return parts
+
+    def _require_pooled(self, method_name: str) -> None:
+        """Raise when the complex holds two or more rings that are not merged.
+
+        Before a merge the rings do not share object ids, so a result for the
+        whole complex is not defined yet.
+        """
+        if len(self.rings) >= 2 and not self._rings_merged:
+            raise ValueError(
+                f"{method_name} requires a merged {type(self).__name__}: the rings do not share object ids yet. "
+                f"Call merge() first, or per_ring(\"{method_name}\") for one result per ring."
             )
 
-            diff = vec_b - vec_a
-            axis_component = float(np.dot(diff, axis))
-            plane_component = float(np.linalg.norm(diff - axis_component * axis))
+    def _elements(self) -> list[_SubunitState]:
+        """The rings, as elements labelled by their 0-based position, when the complex holds rings; else the states."""
+        if self.rings:
+            return [_SubunitState(motl=ring.motl, position=i, label=i) for i, ring in enumerate(self.rings)]
+        return super()._elements()
 
-            out_row: dict = {
-                "subtomo_id": sid_val,
-                "len_a": len_a,
-                "len_b": len_b,
-                "angle_ab": angle_ab,
-                "angle_in_plane": angle_in_plane,
-                "angle_out_of_plane": angle_out_of_plane,
-                "axis_component": axis_component,
-                "plane_component": plane_component,
-                "reference": reference,
-                "frame_element": label_a,
-            }
-            if tomo_val is not None:
-                out_row["tomo_id"] = tomo_val
-            rows.append(out_row)
+    def split_by_ring(self, result: pd.DataFrame) -> list[pd.DataFrame]:
+        """Split *result* into per-ring sub-DataFrames using :data:`_ring_column`.
+
+        Returns a list of length ``len(rings)``, one element per ring.
+        Each element contains only rows whose ``_ring_column`` value equals
+        that ring's index.  If *result* has no ring column (e.g. a plain ring
+        or a pre-dispatch call), the whole DataFrame is returned as a
+        one-element list.
+
+        This is the library-side of the send-to-motl splitting contract: the
+        caller maps each returned DataFrame to the corresponding source motl
+        pool entry.  No new matching logic is needed because the ring column
+        records the origin of every particle.
+        """
+        if self._ring_column not in result.columns:
+            return [result]
+        parts = []
+        for ring_idx in range(len(self.rings)):
+            mask = result[self._ring_column] == float(ring_idx + 1)
+            parts.append(result[mask].copy())
+        return parts
+
+    @gui_exposed(label="Ring spacing", group="Statistics", order=40, returns="dataframe")
+    def ring_spacing(self, *, pixel_size: float | None = None) -> pd.DataFrame:
+        """Inter-ring spacing per NPC pore, computed from the merged motl.
+
+        Between two rings the axis runs from the lower-numbered ring to the
+        higher-numbered one, for every class.  For a :class:`DnComplex` this
+        flipped the sign of the twist compared with its own earlier
+        implementation, which measured about the fixed split axis.
+
+        For every unordered pair of rings, computes the 3-D Euclidean distance
+        between the mean coordinates of the two ring centres for each pore and
+        scales by *pixel_size*.  Produces ``n*(n-1)/2`` columns for *n* rings.
+
+        Parameters
+        ----------
+        pixel_size : float, default=1.0
+            Ångström-per-voxel scale factor applied to the raw voxel distances.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per ``(tomo_id, object_id)``.  Columns:
+
+            ``tomo_id``, ``object_id``
+                Pore identifiers.
+            ``spacing_{r0}_{r1}``
+                Distance (Å when *pixel_size* given) between the centre of ring
+                *r0* and ring *r1*; one column per ring pair, including
+                non-adjacent pairs.  ``NaN`` when one or both ring centres are
+                absent for a pore.
+
+        Raises
+        ------
+        ValueError
+            If called before :meth:`merge`.
+        """
+        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+        if not self._rings_merged or len(self.rings) < 2:
+            raise ValueError(f"ring_spacing requires a merged {type(self).__name__} with at least two rings.")
+        df = self.motl.df
+        coord = self.motl.get_coordinates()
+        ring_col = self._ring_column
+        n_rings = len(self.rings)
+
+        centres: dict[tuple[float, float, float], np.ndarray] = {}
+        for (tomo_id, object_id, ring_idx), group in df.groupby(
+            [self.tomo_id_column, self.affiliation_column, ring_col]
+        ):
+            idx = group.index.to_numpy()
+            coords_grp = coord[idx, :]
+            centres[(float(tomo_id), float(object_id), float(ring_idx))] = (
+                coords_grp.mean(axis=0) if coords_grp.shape[0] > 0 else np.zeros(3)
+            )
+
+        pore_keys: list[tuple[float, float]] = sorted({(k[0], k[1]) for k in centres})
+        pairs = [tuple(sorted((a + 1, b + 1))) for a, b in mathutils.get_all_pairs(list(range(n_rings)))]
+        rows: list[dict] = []
+        for tomo_id, object_id in pore_keys:
+            row: dict = {self.tomo_id_column: tomo_id, self.affiliation_column: object_id}
+            for r0, r1 in pairs:
+                key0 = (tomo_id, object_id, float(r0))
+                key1 = (tomo_id, object_id, float(r1))
+                if key0 in centres and key1 in centres:
+                    dist = _ring_centre_spacing(centres[key0], centres[key1]) * ps
+                else:
+                    dist = float("nan")
+                row[f"spacing_{r0}_{r1}"] = dist
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    @gui_exposed(label="Inter-ring twist", group="Statistics", order=45, returns="dataframe")
+    def inter_ring_twist(self, *, degrees: bool = True) -> pd.DataFrame:
+        """Rotational twist between adjacent rings about the pore axis.
+
+        Between two rings the axis runs from the lower-numbered ring to the
+        higher-numbered one, for every class.  For a :class:`DnComplex` this
+        flipped the sign of the twist compared with its own earlier
+        implementation, which measured about the fixed split axis.
+
+        For each pore and every unordered ring pair, the pore axis is estimated
+        as the unit vector from ring *r0*'s centre to ring *r1*'s centre.
+        Produces ``n*(n-1)/2`` columns for *n* rings.  The rotational twist is the
+        signed n-fold circular-mean phase difference folded into ``[−π/n, π/n)``
+        (``[−180/n, 180/n)`` degrees); 0 means the rings are rotationally aligned.
+
+        Parameters
+        ----------
+        degrees : bool, default=True
+            Return twist in degrees when ``True``, radians when ``False``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per ``(tomo_id, object_id)``.  Columns:
+
+            ``tomo_id``, ``object_id``
+                Pore identifiers.
+            ``twist_{r0}_{r1}``
+                Rotational twist between ring *r0* and ring *r1*; one column per
+                ring pair, including non-adjacent pairs.  ``NaN`` when one or
+                both rings are absent or when ring centres coincide.
+
+        Raises
+        ------
+        ValueError
+            If called before :meth:`merge`.
+        """
+        if not self._rings_merged or len(self.rings) < 2:
+            raise ValueError(f"inter_ring_twist requires a merged {type(self).__name__} with at least two rings.")
+        df = self.motl.df
+        coord = self.motl.get_coordinates()
+        ring_col = self._ring_column
+        n_rings = len(self.rings)
+
+        ring_positions: dict[tuple[float, float, float], np.ndarray] = {}
+        for (tomo_id, object_id, ring_idx), group in df.groupby(
+            [self.tomo_id_column, self.affiliation_column, ring_col]
+        ):
+            idx = group.index.to_numpy()
+            ring_positions[(float(tomo_id), float(object_id), float(ring_idx))] = coord[idx, :]
+
+        pore_keys = sorted({(k[0], k[1]) for k in ring_positions})
+        pairs = [tuple(sorted((a + 1, b + 1))) for a, b in mathutils.get_all_pairs(list(range(n_rings)))]
+        rows: list[dict] = []
+        for tomo_id, object_id in pore_keys:
+            row: dict = {self.tomo_id_column: tomo_id, self.affiliation_column: object_id}
+            for r0, r1 in pairs:
+                key0 = (tomo_id, object_id, float(r0))
+                key1 = (tomo_id, object_id, float(r1))
+                if key0 in ring_positions and key1 in ring_positions:
+                    c0 = ring_positions[key0].mean(axis=0)
+                    c1 = ring_positions[key1].mean(axis=0)
+                    diff = c1 - c0
+                    norm_val = np.linalg.norm(diff)
+                    if norm_val < 1e-12:
+                        twist = float("nan")
+                    else:
+                        axis = diff / norm_val
+                        all_pts = np.concatenate([ring_positions[key0], ring_positions[key1]], axis=0)
+                        bary = all_pts.mean(axis=0)
+                        rel0 = ring_positions[key0] - bary
+                        rel1 = ring_positions[key1] - bary
+                        twist = _ring_centre_twist(rel0, rel1, self.n, axis, degrees=degrees)
+                else:
+                    twist = float("nan")
+                row[f"twist_{r0}_{r1}"] = twist
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    @gui_exposed(label="Subunit spacing", group="Statistics", order=50, returns="dataframe")
+    def get_subunit_spacing(
+        self,
+        *,
+        pixel_size: float = 1.0,
+        degrees: bool = True,
+        reference_ring: int | None = None,
+        include_flagged: bool = False,
+        flag_column: str = "geom5",
+    ) -> pd.DataFrame:
+        """Per-subunit spacing and twist between adjacent rings.
+
+        Between two rings the axis runs from the lower-numbered ring to the
+        higher-numbered one, for every class.  For a :class:`DnComplex` this
+        flipped the sign of the twist compared with its own earlier
+        implementation, which measured about the fixed split axis.
+
+        For each subunit index *k*, reports the Euclidean distance and
+        azimuthal twist between the corresponding subunit in each pair of
+        adjacent rings.  The per-pore summary numbers from
+        :meth:`ring_spacing` and :meth:`inter_ring_twist` remain available
+        as aggregate columns.
+
+        Ring centres are computed with :meth:`_compute_object_center`
+        (respects *center_method*).
+
+        Requires :meth:`merge` to have been called.
+
+        Parameters
+        ----------
+        pixel_size : float, default=1.0
+            Voxel size in physical units; distances are multiplied by this.
+        degrees : bool, default=True
+            Return twist angles in degrees when ``True``, radians otherwise.
+        reference_ring : int or None, default=None
+            Ring whose subunit indices define the iteration.  ``None`` uses
+            the first ring present in each pore.
+        include_flagged : bool, default=False
+            When ``False``, pores with *flag_column* == 1.0 are excluded from
+            the output.
+        flag_column : str, default ``'geom5'``
+            Column checked for the per-pore ambiguity flag.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per (pore, subunit).  Columns:
+
+            - ``tomo_id``, ``object_id``, ``subunit_index_column`` (subunit index)
+            - ``spacing_{r0}_{r1}`` — Euclidean distance (voxels × pixel_size)
+              between subunit *k* in ring *r0* and ring *r1* for each ring pair,
+              including non-adjacent pairs
+            - ``twist_{r0}_{r1}`` — signed azimuthal angle (degrees) of
+              subunit *k* in ring *r1* relative to its position in ring *r0*,
+              measured from the ring-pair axis; one column per ring pair
+        """
+        if not self._rings_merged or len(self.rings) < 2:
+            raise ValueError(f"get_subunit_spacing requires a merged {type(self).__name__} with at least two rings.")
+
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+        ring_col = self._ring_column
+        order_col = self.subunit_index_column
+        df = self.motl.df
+        if not include_flagged and flag_column in df.columns:
+            _flagged = set(
+                map(tuple, df.loc[df[flag_column] == 1.0, [tomo_col, aff_col]].values.tolist())
+            )
+            if _flagged:
+                df = df[~df[[tomo_col, aff_col]].apply(tuple, axis=1).isin(_flagged)]
+        coord = self.motl.get_coordinates()
+        n_rings = len(self.rings)
+        pairs = [tuple(sorted((a + 1, b + 1))) for a, b in mathutils.get_all_pairs(list(range(n_rings)))]
+
+        rows: list[dict] = []
+        for (tomo_id, object_id), pore_grp in df.groupby([tomo_col, aff_col]):
+            # Ring centres (respects center_method) and per-(ring, subunit index) position map
+            ring_centres: dict[float, np.ndarray] = {}
+            for ring_id, rg in pore_grp.groupby(ring_col):
+                ring_motl_tmp = cryomotl.Motl(rg.copy())
+                centre_tmp, _ = self._compute_object_center(ring_motl_tmp)
+                ring_centres[float(ring_id)] = centre_tmp
+
+            pos_map: dict[tuple[float, float], np.ndarray] = {}
+            for global_i, row_s in pore_grp.iterrows():
+                pos_map[(float(row_s[ring_col]), _ring_slot(row_s[order_col], self.n))] = coord[global_i]
+
+            # Subunit indices defined by reference_ring (default: first ring present)
+            _ref = (
+                float(reference_ring)
+                if reference_ring is not None
+                else float(sorted(pore_grp[ring_col].unique())[0])
+            )
+            all_k = sorted(pore_grp.loc[pore_grp[ring_col] == _ref, order_col].unique())
+
+            for k in all_k:
+                row: dict = {
+                    tomo_col: float(tomo_id),
+                    aff_col: float(object_id),
+                    order_col: float(k),
+                }
+                for r0, r1 in pairs:
+                    key0 = (float(r0), _ring_slot(k, self.n))
+                    key1 = (float(r1), _ring_slot(k, self.n))
+                    if key0 in pos_map and key1 in pos_map:
+                        p0, p1 = pos_map[key0], pos_map[key1]
+                        row[f"spacing_{r0}_{r1}"] = float(np.linalg.norm(p1 - p0)) * pixel_size
+                        # Azimuthal twist: angle of p1 relative to p0 around the pore axis
+                        c0 = ring_centres.get(float(r0), np.zeros(3))
+                        c1 = ring_centres.get(float(r1), np.zeros(3))
+                        axis = c1 - c0
+                        axis_norm = float(np.linalg.norm(axis))
+                        if axis_norm > 1e-10:
+                            axis = axis / axis_norm
+                            rel0 = p0 - c0
+                            rel1 = p1 - c1
+                            proj0 = rel0 - np.dot(rel0, axis) * axis
+                            proj1 = rel1 - np.dot(rel1, axis) * axis
+                            n0 = float(np.linalg.norm(proj0))
+                            n1 = float(np.linalg.norm(proj1))
+                            if n0 > 1e-10 and n1 > 1e-10:
+                                twist_rad = geom.vector_angular_distance_signed(proj0 / n0, proj1 / n1, axis)
+                                row[f"twist_{r0}_{r1}"] = float(np.degrees(twist_rad)) if degrees else float(twist_rad)
+                            else:
+                                row[f"twist_{r0}_{r1}"] = float("nan")
+                        else:
+                            row[f"twist_{r0}_{r1}"] = float("nan")
+                    else:
+                        row[f"spacing_{r0}_{r1}"] = float("nan")
+                        row[f"twist_{r0}_{r1}"] = float("nan")
+                rows.append(row)
 
         return pd.DataFrame(rows)
+
+    @gui_exposed(label="Subunit orientation", group="Statistics", order=51, returns="dataframe")
+    def get_subunit_orientation(
+        self,
+        *,
+        degrees: bool = True,
+        reference_ring: int | None = None,
+        include_flagged: bool = False,
+        flag_column: str = "geom5",
+    ) -> pd.DataFrame:
+        """Per-subunit orientation difference between ring pairs.
+
+        Between two rings the axis runs from the lower-numbered ring to the
+        higher-numbered one, for every class.  For a :class:`DnComplex` this
+        flipped the sign of the twist compared with its own earlier
+        implementation, which measured about the fixed split axis.
+
+        For each subunit index *k* matched across rings, reports the cone
+        (out-of-plane normal deviation) and in-plane (roll) differences between
+        each ring pair, via :func:`geom.cone_inplane_distance`.
+
+        Requires :meth:`merge` to have been called.
+
+        Parameters
+        ----------
+        degrees : bool, default=True
+            Return angles in degrees when ``True``, radians otherwise.
+        reference_ring : int or None, default=None
+            Ring whose subunit indices define the iteration.  ``None`` uses
+            the first ring present in each pore.
+        include_flagged : bool, default=False
+            When ``False``, pores with *flag_column* == 1.0 are excluded.
+        flag_column : str, default ``'geom5'``
+            Column checked for the per-pore ambiguity flag.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per (pore, subunit).  Columns:
+
+            - ``tomo_id``, ``affiliation_column``, ``subunit_index_column``
+            - ``cone_{r0}_{r1}`` — cone (normal) angular difference for ring
+              pair; ``NaN`` when the subunit is absent in either ring
+            - ``inplane_{r0}_{r1}`` — in-plane (roll) angular difference;
+              ``NaN`` when the subunit is absent in either ring
+        """
+        if not self._rings_merged or len(self.rings) < 2:
+            raise ValueError(
+                f"get_subunit_orientation requires a merged {type(self).__name__} with at least two rings."
+            )
+
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+        ring_col = self._ring_column
+        order_col = self.subunit_index_column
+        df = self.motl.df
+        if not include_flagged and flag_column in df.columns:
+            _flagged = set(
+                map(tuple, df.loc[df[flag_column] == 1.0, [tomo_col, aff_col]].values.tolist())
+            )
+            if _flagged:
+                df = df[~df[[tomo_col, aff_col]].apply(tuple, axis=1).isin(_flagged)]
+        all_angles = self.motl.get_angles()
+        n_rings = len(self.rings)
+        pairs = [
+            tuple(sorted((a + 1, b + 1)))
+            for a, b in mathutils.get_all_pairs(list(range(n_rings)))
+        ]
+
+        rows: list[dict] = []
+        for (tomo_id, object_id), pore_grp in df.groupby([tomo_col, aff_col]):
+            angles_map: dict[tuple[float, float], np.ndarray] = {}
+            for global_i, row_s in pore_grp.iterrows():
+                angles_map[(float(row_s[ring_col]), _ring_slot(row_s[order_col], self.n))] = all_angles[global_i]
+
+            _ref = (
+                float(reference_ring)
+                if reference_ring is not None
+                else float(sorted(pore_grp[ring_col].unique())[0])
+            )
+            all_k = sorted(pore_grp.loc[pore_grp[ring_col] == _ref, order_col].unique())
+
+            for k in all_k:
+                row: dict = {
+                    tomo_col: float(tomo_id),
+                    aff_col: float(object_id),
+                    order_col: float(k),
+                }
+                for r0, r1 in pairs:
+                    key0 = (float(r0), _ring_slot(k, self.n))
+                    key1 = (float(r1), _ring_slot(k, self.n))
+                    if key0 in angles_map and key1 in angles_map:
+                        cone_val, inplane_val = geom.cone_inplane_distance(
+                            angles_map[key0], angles_map[key1],
+                            degrees=degrees, cyclic_symmetry=1,
+                        )
+                        row[f"cone_{r0}_{r1}"] = float(np.asarray(cone_val).flat[0])
+                        row[f"inplane_{r0}_{r1}"] = float(np.asarray(inplane_val).flat[0])
+                    else:
+                        row[f"cone_{r0}_{r1}"] = float("nan")
+                        row[f"inplane_{r0}_{r1}"] = float("nan")
+                rows.append(row)
+
+        return pd.DataFrame(rows)
+
 
     # ------------------------------------------------------------------
     # Centre computation (circle-fit with barycentric fallback)
@@ -2572,6 +3562,7 @@ class CnComplex(SymmetricComplex):
         return center, radius
 
     @gui_exposed(label="Get centers as motl", group="Statistics", order=10, returns="motl")
+    @_pooled_over_complex
     def get_centers_as_motl(self) -> "cryomotl.Motl":
         """Return a Motl with one centre particle per object per tomogram.
 
@@ -2607,8 +3598,8 @@ class CnComplex(SymmetricComplex):
                     "x": pts[:, 0],
                     "y": pts[:, 1],
                     "z": pts[:, 2],
-                    "tomo_id": np.array(tomo_ids),
-                    "object_id": np.array(object_ids),
+                    self.tomo_id_column: np.array(tomo_ids),
+                    self.affiliation_column: np.array(object_ids),
                 }
             )
             out.renumber_particles()
@@ -2700,6 +3691,7 @@ class CnComplex(SymmetricComplex):
         finally:
             self.motl = _orig_motl
 
+    @_pooled_over_complex
     def ring_summary(self, *, pixel_size: float | None = None, label=None) -> pd.DataFrame:
         """One-row-per-ring summary of radius, occupancy, pore count, and subunit count.
 
@@ -2721,7 +3713,7 @@ class CnComplex(SymmetricComplex):
             complexes return a one-row frame with ``ring=1``.
             ``opposite_distance`` is the mean distance between diametrically
             opposite subunits across pores (``NaN`` when *n* is odd or the
-            order column is absent).
+            subunit index column is absent).
         """
         _state = self._resolve_state(label)
         _orig_motl = self.motl
@@ -2750,7 +3742,7 @@ class CnComplex(SymmetricComplex):
             # Pass resolved label so occupancy does not re-swap self.motl.
             occ_df = self.occupancy(label=_resolved_label)
 
-            order_col_rs = self.order_column
+            order_col_rs = self.subunit_index_column
             can_compute_opp = order_col_rs in self.motl.df.columns and self.n % 2 == 0
 
             rows: list[dict] = []
@@ -2795,22 +3787,24 @@ class CnComplex(SymmetricComplex):
         finally:
             self.motl = _orig_motl
 
-    def get_pore_frame_coords(
+    @_pooled_over_complex
+    def get_ring_frame_coords(
         self,
         *,
         rings: list[float] | None = None,
         label=None,
     ) -> pd.DataFrame:
-        """Per-subunit coordinates in each pore's reference frame, phase-aligned on order 1.
+        """Per-subunit coordinates in each ring's reference frame, phase-aligned on subunit index 1.
 
-        For each ring within a pore the centre and axis are computed identically to
+        For each ring within an object the centre and axis are computed identically to
         :meth:`NPC.get_subunit_stats` (via :meth:`_compute_object_center` and
         :func:`~cryocat.utils.geom.euler_angles_to_normals`).  Each subunit position
         is projected onto the plane perpendicular to the ring axis, giving in-plane
         Cartesian ``x``, ``y`` and polar ``r``, ``az`` coordinates.
 
-        Phase alignment is done per pore: the mean azimuth of order-1 subunits across
-        all rings in the pore is subtracted from every azimuth, placing order 1 at ≈ 0°.
+        Phase alignment is done per object: the mean azimuth of index-1 subunits across
+        all rings in the object is subtracted from every azimuth, placing index 1 at ≈ 0°.
+        A plain ring is the one-ring case.
         ``x`` and ``y`` are recomputed from ``r`` and the aligned ``az``.
 
         Parameters
@@ -2823,7 +3817,7 @@ class CnComplex(SymmetricComplex):
         -------
         pd.DataFrame
             One row per subunit with columns: ``tomo_id_column``, ``affiliation_column``,
-            ``order_column``, ``ring``, ``r`` (pixels × pixel_size), ``az`` (degrees),
+            ``subunit_index_column``, ``ring``, ``r`` (pixels × pixel_size), ``az`` (degrees),
             ``x`` (pixels × pixel_size), ``y`` (pixels × pixel_size).
         """
         _state = self._resolve_state(label)
@@ -2835,7 +3829,7 @@ class CnComplex(SymmetricComplex):
             aff_col = self.affiliation_column
             ring_col = getattr(self, "_ring_column", None)
             ps: float = getattr(self, "pixel_size", 1.0)
-            order_col = self.order_column
+            order_col = self.subunit_index_column
             group_cols = self._ring_group_columns
             has_ring_group = len(group_cols) > 2
 
@@ -2903,7 +3897,7 @@ class CnComplex(SymmetricComplex):
                         )
                     )
 
-                # Phase alignment: circular mean of order-1 azimuths across all rings
+                # Phase alignment: circular mean of index-1 azimuths across all rings
                 az_order1: list[float] = []
                 for rd in ring_data:
                     mask = rd["orders"] == 1.0
@@ -2963,7 +3957,7 @@ class CnComplex(SymmetricComplex):
         return (self.n - 2) * 180.0 / self.n
 
     # ------------------------------------------------------------------
-    # Cyclic subunit ordering
+    # Cyclic subunit indexing
     # ------------------------------------------------------------------
 
     def _cyclic_indices_for_object(
@@ -3054,14 +4048,14 @@ class CnComplex(SymmetricComplex):
 
         return s_idx, max_residual
 
-    @gui_exposed(label="Assign subunit order", group="Affiliation", order=30, returns="none")
-    def assign_subunit_order(self, ref_direction: np.ndarray | None = None) -> dict:
-        """Assign 1-based cyclic subunit indices into ``self.order_column``.
+    @gui_exposed(label="Assign subunit index", group="Affiliation", order=30, returns="none")
+    def assign_subunit_index(self, ref_direction: np.ndarray | None = None) -> dict:
+        """Assign 1-based cyclic subunit indices into ``self.subunit_index_column``.
 
         For every ring group (as defined by ``_ring_group_columns``): fits the
         angular grid to all particles and assigns each one the nearest grid
         position (1 … n), choosing the chirality that minimises duplicates then
-        residual.  Writes results into ``self.motl.df[self.order_column]``.
+        residual.  Writes results into ``self.motl.df[self.subunit_index_column]``.
 
         Parameters
         ----------
@@ -3088,16 +4082,17 @@ class CnComplex(SymmetricComplex):
         for keys, group in self.motl.df.groupby(self._ring_group_columns):
             om = cryomotl.Motl(group.reset_index(drop=True))
             s_idx, max_res = self._cyclic_indices_for_object(om, ref_direction=ref_direction)
-            self.motl.df.loc[group.index, self.order_column] = s_idx
+            self.motl.df.loc[group.index, self.subunit_index_column] = s_idx
             residuals[keys] = max_res
         return residuals
 
+    @_pooled_over_complex
     def check_for_duplicates(self, *, label=None) -> pd.DataFrame:
-        """Return ring groups whose ``order_column`` has a within-group duplicate.
+        """Return ring groups whose ``subunit_index_column`` has a within-group duplicate.
 
         Groups by the ring-group columns (``tomo_id``, ``affiliation_column``,
         and ``_ring_column`` when present) and collects every group where any
-        ``order_column`` value appears more than once.
+        ``subunit_index_column`` value appears more than once.
 
         Returns
         -------
@@ -3113,7 +4108,7 @@ class CnComplex(SymmetricComplex):
         try:
             group_cols = self._ring_group_columns
             has_ring = len(group_cols) > 2
-            order_col = self.order_column
+            order_col = self.subunit_index_column
             rows: list[dict] = []
             for keys, grp in self.motl.df.groupby(group_cols):
                 if grp[order_col].duplicated().any():
@@ -3129,6 +4124,7 @@ class CnComplex(SymmetricComplex):
         finally:
             self.motl = _orig_motl
 
+    @_pooled_over_complex
     def renumber_subunits(
         self,
         object_id: float | int,
@@ -3137,9 +4133,9 @@ class CnComplex(SymmetricComplex):
         tomo_id: float | int | None = None,
         flag_column: str = "geom5",
     ) -> None:
-        """Manually correct the subunit order for one object.
+        """Manually correct the subunit indices for one object.
 
-        Applies *mapping* to ``order_column`` values across all rings of the
+        Applies *mapping* to ``subunit_index_column`` values across all rings of the
         object, validates the result, then clears the ambiguity flag so the
         object re-enters the per-subunit analyses.
 
@@ -3148,7 +4144,7 @@ class CnComplex(SymmetricComplex):
         object_id : int or float
             Affiliation ID of the object to correct.
         mapping : dict or tuple of (old_values, new_values)
-            Maps old ``order_column`` value → new value.  Accept a ``dict``
+            Maps old ``subunit_index_column`` value → new value.  Accept a ``dict``
             ``{old: new, …}`` or a pair of equal-length sequences
             ``([old, …], [new, …])``.  Values not in the mapping are unchanged.
         tomo_id : int, float, or None, optional
@@ -3178,7 +4174,7 @@ class CnComplex(SymmetricComplex):
 
         aff_col = self.affiliation_column
         tomo_col = self.tomo_id_column
-        order_col = self.order_column
+        order_col = self.subunit_index_column
         df = self.motl.df
         obj_id_f = float(object_id)
 
@@ -3213,7 +4209,7 @@ class CnComplex(SymmetricComplex):
             if grp[order_col].duplicated().any():
                 dups = sorted(grp[order_col][grp[order_col].duplicated(keep=False)].unique().tolist())
                 raise ValueError(
-                    f"renumber_subunits: mapping creates duplicate order values "
+                    f"renumber_subunits: mapping creates duplicate subunit index values "
                     f"{dups!r} in one ring — choose a different mapping."
                 )
 
@@ -3256,19 +4252,19 @@ class CnComplex(SymmetricComplex):
         ``angle_ori_signed`` for callers that need directionality (e.g. to
         detect CW/CCW consistency across a ring).
 
-        Call :meth:`assign_subunit_order` before this method to populate
-        ``self.order_column``.
+        Call :meth:`assign_subunit_index` before this method to populate
+        ``self.subunit_index_column``.
 
         Parameters
         ----------
         gaps : {'holey', 'full'}, default='holey'
             Pairing mode.  ``'holey'`` pairs every present subunit with the
             next present one (by sorted position); ``'full'`` skips pairs
-            whose target index (order + 1 mod n) is absent from the ring.
+            whose target index (subunit index + 1 mod n) is absent from the ring.
         inward_axis : array-like of shape (3,) or None, default=None
             Local axis pointing toward the ring centre in the particle frame.
             ``None`` uses ``[-1, 0, 0]``, the convention in
-            :meth:`_compute_object_center` and :meth:`assign_subunit_order`.
+            :meth:`_compute_object_center` and :meth:`assign_subunit_index`.
         include_flagged : bool, default=False
             When ``False``, pores with *flag_column* == 1.0 are excluded from
             the output.
@@ -3304,9 +4300,9 @@ class CnComplex(SymmetricComplex):
         ValueError
             If ``affiliation_column`` is absent from ``self.motl.df``.
         ValueError
-            If ``order_column`` is absent from ``self.motl.df``.
+            If ``subunit_index_column`` is absent from ``self.motl.df``.
         ValueError
-            If a ring group has duplicate ``order_column`` values.
+            If a ring group has duplicate ``subunit_index_column`` values.
         """
         _state = self._resolve_state(label)
         _orig_motl = self.motl
@@ -3333,8 +4329,8 @@ class CnComplex(SymmetricComplex):
         _state: "_SubunitState | None" = None,
     ) -> pd.DataFrame:
         self._require_affiliation()
-        if self.order_column not in self.motl.df.columns:
-            raise ValueError(f"order_column {self.order_column!r} not in motl; " "call assign_subunit_order() first.")
+        if self.subunit_index_column not in self.motl.df.columns:
+            raise ValueError(f"subunit_index_column {self.subunit_index_column!r} not in motl; " "call assign_subunit_index() first.")
 
         ia = np.array([-1.0, 0.0, 0.0]) if inward_axis is None else np.asarray(inward_axis, dtype=float)
         norm = np.linalg.norm(ia)
@@ -3358,23 +4354,23 @@ class CnComplex(SymmetricComplex):
             if len(group) < 2:
                 continue
 
-            grp = group.sort_values(self.order_column)
-            order_vals = grp[self.order_column].to_numpy(dtype=float)
+            grp = group.sort_values(self.subunit_index_column)
+            order_vals = grp[self.subunit_index_column].to_numpy(dtype=float)
 
             u_vals, u_counts = np.unique(order_vals, return_counts=True)
             if np.any(u_counts > 1):
                 dupes = sorted(u_vals[u_counts > 1].tolist())
                 raise ValueError(
                     f"Tomo {tomo_id!r}, object {object_id!r}: duplicate "
-                    f"'{self.order_column}' values {dupes}. "
-                    "Ordered pairing is ambiguous with duplicate order values."
+                    f"'{self.subunit_index_column}' values {dupes}. "
+                    "Ordered pairing is ambiguous with duplicate subunit index values."
                 )
 
             coords = grp[["x", "y", "z"]].to_numpy(dtype=float) + grp[["shift_x", "shift_y", "shift_z"]].to_numpy(
                 dtype=float
             )
             angles_euler = grp[["phi", "theta", "psi"]].to_numpy(dtype=float)
-            subtomo_ids = grp["subtomo_id"].to_numpy(dtype=float)
+            subtomo_ids = grp[self.subtomo_id_column].to_numpy(dtype=float)
             n_present = len(grp)
 
             om = cryomotl.Motl(grp.reset_index(drop=True))
@@ -3459,6 +4455,7 @@ class CnComplex(SymmetricComplex):
     # Per-object evaluations
     # ------------------------------------------------------------------
 
+    @_pooled_over_complex
     def diameter(
         self,
         *,
@@ -3467,10 +4464,10 @@ class CnComplex(SymmetricComplex):
     ) -> tuple[pd.DataFrame, "cryomotl.Motl"]:
         """Compute the mean diameter for each object.
 
-        For even *n* with ``order_column`` present, opposite-subunit pairs
+        For even *n* with ``subunit_index_column`` present, opposite-subunit pairs
         ``(i, i + n//2)`` are matched (1-based, matching
-        :meth:`assign_subunit_order`'s convention).  For odd *n* or when
-        ``order_column`` is absent, the diameter is derived from the
+        :meth:`assign_subunit_index`'s convention).  For odd *n* or when
+        ``subunit_index_column`` is absent, the diameter is derived from the
         circumradius (``2 × circumradius × pixel_size``).
 
         Parameters
@@ -3499,20 +4496,20 @@ class CnComplex(SymmetricComplex):
         -----
         UserWarning
             When the circumradius fallback is used (odd *n*, missing
-            ``order_column``, or even *n* but no pairs could be matched).
+            ``subunit_index_column``, or even *n* but no pairs could be matched).
         """
         self._require_affiliation()
 
         motl_out = cryomotl.Motl(self.motl.df.copy())
         motl_out.df.reset_index(drop=True, inplace=True)
 
-        has_order = self.order_column in motl_out.df.columns
+        has_order = self.subunit_index_column in motl_out.df.columns
         even_n = self.n % 2 == 0
         use_pairs = even_n and has_order
 
         if not has_order and even_n:
             warnings.warn(
-                f"{type(self).__name__}.diameter: order column {self.order_column!r} not in motl; "
+                f"{type(self).__name__}.diameter: subunit index column {self.subunit_index_column!r} not in motl; "
                 "diameter derived from 2 × circumradius for all objects.",
                 stacklevel=2,
             )
@@ -3535,7 +4532,7 @@ class CnComplex(SymmetricComplex):
             n_pairs: int
 
             if use_pairs:
-                o2c = {float(group.loc[gi, self.order_column]): coord[gi] for gi in grp_idx}
+                o2c = {float(group.loc[gi, self.subunit_index_column]): coord[gi] for gi in grp_idx}
                 opp_dists = _opposite_distances(o2c, self.n)
                 valid = [d for d in opp_dists.values() if not np.isnan(d)]
                 if valid:
@@ -3609,7 +4606,7 @@ class CnComplex(SymmetricComplex):
             ``mean_angle_pos``, ``std_angle_pos``, ``var_angle_pos``
                 Mean, standard deviation, and variance of the per-position
                 positional central angle (degrees).  Present and non-``NaN``
-                only when :meth:`assign_subunit_order` has been called and
+                only when :meth:`assign_subunit_index` has been called and
                 the ring has ≥ 2 subunits.
             ``mean_angle_ori``, ``std_angle_ori``, ``var_angle_ori``
                 Same statistics for the orientational central angle.
@@ -3663,7 +4660,10 @@ class CnComplex(SymmetricComplex):
             )
         geo_df = pd.DataFrame(center_rows)
 
-        result = occ_df.merge(geo_df, on=["tomo_id", "object_id"], how="outer")
+        # The occupancy and circumference tables both carry element_label; keep one.
+        result = occ_df.drop(columns=["element_label"], errors="ignore").merge(
+            geo_df, on=["tomo_id", "object_id"], how="outer"
+        )
         result = result.merge(circ_df, on=["tomo_id", "object_id"], how="left")
         result = result.merge(
             diam_df[["tomo_id", "object_id", "mean_diameter", "n_pairs"]],
@@ -3671,7 +4671,7 @@ class CnComplex(SymmetricComplex):
             how="left",
         )
 
-        # Central-angle statistics — only when subunit order has been assigned
+        # Central-angle statistics — only when subunit indices have been assigned
         _angle_stat_cols = [
             "mean_angle_pos",
             "std_angle_pos",
@@ -3681,7 +4681,7 @@ class CnComplex(SymmetricComplex):
             "var_angle_ori",
             "n_angle_pairs",
         ]
-        order_col = self.order_column
+        order_col = self.subunit_index_column
         if order_col in self.motl.df.columns and self.motl.df[order_col].gt(0).any():
             ang_df = self._central_angles_impl(_state=_state)
             if len(ang_df) > 0:
@@ -3710,19 +4710,35 @@ class CnComplex(SymmetricComplex):
     # Extra components (non-ring particles, e.g. NR basket)
     # ------------------------------------------------------------------
 
+    def _reference_ring(self, reference_ring: int) -> tuple["cryomotl.Motl", pd.DataFrame]:
+        """The motl that holds ring *reference_ring* (1-based) and that ring's rows of it.
+
+        Rings merged into one motl (a merged ``NPC``, a split ``DnComplex``):
+        ``self.motl`` and its rows with ``_ring_column == reference_ring``.
+        Rings not merged yet: the ring object's own motl,
+        ``self.rings[reference_ring - 1].motl``, and all its rows.  A plain
+        ring: ``self.motl`` and all its rows.
+        """
+        if self._rings_merged and self._ring_column is not None:
+            return self.motl, self.motl.df[self.motl.df[self._ring_column] == float(reference_ring)]
+        if self.rings:
+            ring_motl = self.rings[reference_ring - 1].motl
+            return ring_motl, ring_motl.df
+        return self.motl, self.motl.df
+
     def add_component(
         self,
         motl=None,
         name: str = "basket",
         *,
         assign_affiliation: bool = False,
-        assign_su_order: bool = False,
-        copy_su_order: bool = False,
-        reference_ring: int = 0,
+        assign_subunit_index: bool = False,
+        copy_subunit_index: bool = False,
+        reference_ring: int = 1,
         affiliation_max_distance: float | None = None,
-        order_max_distance: float | None = None,
+        subunit_index_max_distance: float | None = None,
     ) -> None:
-        """Register a non-ring component and optionally affiliate and order it.
+        """Register a non-ring component and optionally affiliate and index it.
 
         The component is stored in ``self._components[name]`` and never added
         to ``self._ring_motls``, so it is invisible to all ring-fitting, merge,
@@ -3742,30 +4758,34 @@ class CnComplex(SymmetricComplex):
             When ``True``, run NN-based affiliation against the reference ring
             within each ``tomo_id``, overwriting any existing values.
             When ``False``, the affiliation column is left untouched.
-        assign_su_order : bool, default False
+        assign_subunit_index : bool, default False
             When ``True``, run chain ordering, overwriting any existing values.
-            Mutually exclusive with ``copy_su_order``.
-        copy_su_order : bool, default False
-            When ``True``, copy ``order_column`` from the nearest reference-ring
+            Mutually exclusive with ``copy_subunit_index``.
+        copy_subunit_index : bool, default False
+            When ``True``, copy ``subunit_index_column`` from the nearest reference-ring
             particle within the same ``(tomo_id, affiliation_column)`` pore.
             Requires affiliation to be set (either pre-existing or via
             ``assign_affiliation=True``).  Mutually exclusive with
-            ``assign_su_order``.
-        reference_ring : int, default 0
-            0-based ring index used as the affiliation/copy reference.  For
-            NPC: 0=CR, 1=IR, 2=NR, 3=gp210.  A warning is printed (once per
-            call) when the default (0) is used and affiliation NN or copy is
-            performed.
+            ``assign_subunit_index``.
+        reference_ring : int, default 1
+            1-based ring number used as the affiliation/copy reference, as in
+            every ring column and :meth:`per_ring` tag.  For NPC: 1=CR, 2=IR,
+            3=NR, 4=gp210.  A plain ring has only ring 1.  The ring is that
+            ring's rows of the merged motl once the rings share one motl
+            (after :meth:`NPC.merge`), and that ring's own motl before
+            (see :meth:`_reference_ring`).  A warning is printed
+            (once per call) when the default (1) is used and affiliation NN or
+            copy is performed.
         affiliation_max_distance : float or None
             Maximum voxel distance for affiliation NN assignment.  Required
             when ``assign_affiliation=True``.
-        order_max_distance : float or None
-            Absolute chain-link cutoff (voxels) for ordering or copying.
-            Required when ``assign_su_order=True`` or ``copy_su_order=True``.
+        subunit_index_max_distance : float or None
+            Absolute chain-link cutoff (voxels) for indexing or copying.
+            Required when ``assign_subunit_index=True`` or ``copy_subunit_index=True``.
         """
-        if assign_su_order and copy_su_order:
+        if assign_subunit_index and copy_subunit_index:
             raise ValueError(
-                "add_component: assign_su_order and copy_su_order are mutually exclusive."
+                "add_component: assign_subunit_index and copy_subunit_index are mutually exclusive."
             )
         if motl is None:
             raise ValueError("add_component: motl must not be None — nothing to add.")
@@ -3776,17 +4796,18 @@ class CnComplex(SymmetricComplex):
         comp.df.reset_index(drop=True, inplace=True)
 
         aff_col = self.affiliation_column
-        order_col = self.order_column
+        order_col = self.subunit_index_column
         tomo_col = self.tomo_id_column
 
-        _warned_ref_ring = False
+        n_rings = max(len(self.rings), 1)
+        if not 1 <= int(reference_ring) <= n_rings:
+            raise ValueError(
+                f"add_component: reference_ring must be between 1 and {n_rings} "
+                f"(the rings of this {type(self).__name__}), got {reference_ring!r}."
+            )
 
-        def _ref_df():
-            rings_merged = getattr(self, "_rings_merged", False)
-            ring_col = getattr(self, "_ring_column", None)
-            if rings_merged and ring_col is not None:
-                return self.motl.df[self.motl.df[ring_col] == float(reference_ring + 1)]
-            return self.motl.df
+        _warned_ref_ring = False
+        ref_motl, ref_df = self._reference_ring(reference_ring)
 
         # ---- Affiliation -----------------------------------------------
         if assign_affiliation:
@@ -3794,22 +4815,21 @@ class CnComplex(SymmetricComplex):
                 raise ValueError(
                     "add_component: assign_affiliation=True requires affiliation_max_distance."
                 )
-            ref_df = _ref_df()
             if ref_df.empty:
                 raise ValueError(
                     f"add_component: reference ring {reference_ring} has no particles. "
                     "Call merge() first or choose a different reference_ring."
                 )
-            if reference_ring == 0:
+            if reference_ring == 1:
                 print(
-                    "add_component: no reference_ring specified; using ring 0 (the first ring). "
+                    "add_component: no reference_ring specified; using ring 1 (the first ring). "
                     "Set reference_ring= to suppress this warning."
                 )
                 _warned_ref_ring = True
             if aff_col not in comp.df.columns:
                 comp.df[aff_col] = np.nan
             all_comp_coords = comp.get_coordinates()
-            all_ref_coords = self.motl.get_coordinates()
+            all_ref_coords = ref_motl.get_coordinates()
             for tomo_id, comp_tomo_df in comp.df.groupby(tomo_col):
                 ref_tomo_df = ref_df[ref_df[tomo_col] == tomo_id]
                 if ref_tomo_df.empty:
@@ -3831,16 +4851,16 @@ class CnComplex(SymmetricComplex):
                         f"affiliation_max_distance={affiliation_max_distance} — left unaffiliated (NaN)."
                     )
 
-        # ---- Order -----------------------------------------------------
-        if assign_su_order:
-            if order_max_distance is None:
+        # ---- Subunit index -----------------------------------------------
+        if assign_subunit_index:
+            if subunit_index_max_distance is None:
                 raise ValueError(
-                    "add_component: assign_su_order=True requires order_max_distance."
+                    "add_component: assign_subunit_index=True requires subunit_index_max_distance."
                 )
             if order_col not in comp.df.columns:
                 comp.df[order_col] = 0.0
             n = self.n_subunits
-            _chain_fn = getattr(self, "_chain_order_for_ring_object", None)
+            _chain_fn = getattr(self, "_chain_index_for_ring_object", None)
             for (_t, _o), grp_df in comp.df.groupby([tomo_col, aff_col]):
                 pos = grp_df.index.to_numpy()
                 if len(pos) < 2:
@@ -3856,7 +4876,7 @@ class CnComplex(SymmetricComplex):
                     d_mat = np.linalg.norm(coords[:, None, :] - coords[None, :, :], axis=-1)
                     np.fill_diagonal(d_mat, np.inf)
                     s_ring = float(np.median(d_mat.min(axis=1)))
-                    factor = order_max_distance / max(s_ring, 1e-6)
+                    factor = subunit_index_max_distance / max(s_ring, 1e-6)
                     order_arr, _ = _chain_fn(
                         obj_motl,
                         entry_shift_vec=ev,
@@ -3870,22 +4890,21 @@ class CnComplex(SymmetricComplex):
                     order_arr = np.array(s_idx, dtype=float)
                 comp.df.iloc[pos, comp.df.columns.get_loc(order_col)] = order_arr
 
-        elif copy_su_order:
+        elif copy_subunit_index:
             if aff_col not in comp.df.columns or comp.df[aff_col].isna().all():
                 raise ValueError(
-                    f"add_component: copy_su_order=True requires '{aff_col}' to be set. "
+                    f"add_component: copy_subunit_index=True requires '{aff_col}' to be set. "
                     "Run with assign_affiliation=True first, or ensure the column is populated."
                 )
-            ref_df = _ref_df()
-            if reference_ring == 0 and not _warned_ref_ring:
+            if reference_ring == 1 and not _warned_ref_ring:
                 print(
-                    "add_component: no reference_ring specified; using ring 0 (the first ring). "
+                    "add_component: no reference_ring specified; using ring 1 (the first ring). "
                     "Set reference_ring= to suppress this warning."
                 )
             if order_col not in comp.df.columns:
                 comp.df[order_col] = 0.0
             all_comp_coords = comp.get_coordinates()
-            all_ref_coords = self.motl.get_coordinates()
+            all_ref_coords = ref_motl.get_coordinates()
             for (tomo_id, pore_id), comp_pore_df in comp.df.groupby([tomo_col, aff_col]):
                 ref_pore_df = ref_df[
                     (ref_df[tomo_col] == tomo_id) & (ref_df[aff_col] == pore_id)
@@ -3909,16 +4928,7 @@ class CnComplex(SymmetricComplex):
         if aff_col in comp.df.columns:
             n_affiliated = int(comp.df[aff_col].notna().sum())
             n_unaffiliated = n_total - n_affiliated
-            ring_col = getattr(self, "_ring_column", None)
-            rings_merged = getattr(self, "_rings_merged", False)
-            if rings_merged and ring_col is not None:
-                ref_aff_vals = set(
-                    self.motl.df.loc[
-                        self.motl.df[ring_col] == float(reference_ring + 1), aff_col
-                    ].dropna()
-                )
-            else:
-                ref_aff_vals = set(self.motl.df[aff_col].dropna())
+            ref_aff_vals = set(ref_df[aff_col].dropna())
             comp_aff_vals = set(comp.df[aff_col].dropna())
             subset_flag = comp_aff_vals <= ref_aff_vals
             print(
@@ -3955,7 +4965,7 @@ class CnComplex(SymmetricComplex):
             Return angles in degrees when ``True``, radians otherwise.
         gaps : ``'full'`` or ``'holey'``, default ``'full'``
             Passed to :meth:`nnana.NearestNeighbors.ordered_pairs`.  Ignored
-            when the component has no ``order_column``.
+            when the component has no ``subunit_index_column``.
 
         Returns
         -------
@@ -3963,12 +4973,12 @@ class CnComplex(SymmetricComplex):
             One row per component particle.  Columns: ``tomo_id``,
             ``affiliation_column``, ``subtomo_id``, ``radius``,
             ``axial_offset``, ``distance_to_centre``, ``tilt_angle``.
-            ``order_column``, ``central_angle_prev``, ``central_angle_next``,
+            ``subunit_index_column``, ``central_angle_prev``, ``central_angle_next``,
             ``interior_angle``, ``cone_to_ref`` and ``inplane_to_ref`` are added
-            when the component carries an ``order_column``. ``cone_to_ref`` and
+            when the component carries an ``subunit_index_column``. ``cone_to_ref`` and
             ``inplane_to_ref`` are the cone and in-plane angular distances
             between the particle's orientation and the reference-ring particle
-            with the same order value (``NaN`` if there is none).
+            with the same subunit index (``NaN`` if there is none).
         """
         _state = self._resolve_state(label)
         _orig_motl = self.motl
@@ -4000,16 +5010,11 @@ class CnComplex(SymmetricComplex):
         reference_ring = comp_entry["reference_ring"]
 
         aff_col = self.affiliation_column
-        order_col = self.order_column
+        order_col = self.subunit_index_column
         tomo_col = self.tomo_id_column
         ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
 
-        rings_merged = getattr(self, "_rings_merged", False)
-        ring_col = getattr(self, "_ring_column", None)
-        if rings_merged and ring_col is not None:
-            ref_df = self.motl.df[self.motl.df[ring_col] == float(reference_ring + 1)]
-        else:
-            ref_df = self.motl.df
+        _, ref_df = self._reference_ring(reference_ring)
 
         all_comp_coords = comp.get_coordinates()
         has_order = order_col in comp.df.columns
@@ -4026,7 +5031,7 @@ class CnComplex(SymmetricComplex):
                     row: dict = {
                         tomo_col: float(tomo_id),
                         aff_col: float(pore_id),
-                        "subtomo_id": float(row_s["subtomo_id"]),
+                        "subtomo_id": float(row_s[self.subtomo_id_column]),
                         "radius": float("nan"),
                         "axial_offset": float("nan"),
                         "distance_to_centre": float("nan"),
@@ -4074,7 +5079,7 @@ class CnComplex(SymmetricComplex):
                     ring_size=self.n_subunits,
                     gaps=gaps,
                 )
-                sids = comp_pore_df["subtomo_id"].to_numpy()
+                sids = comp_pore_df[self.subtomo_id_column].to_numpy()
                 sid_to_local = {float(s): i for i, s in enumerate(sids)}
                 for _, pr in op.df.iterrows():
                     qi = sid_to_local.get(float(pr["qp_subtomo_id"]))
@@ -4098,7 +5103,7 @@ class CnComplex(SymmetricComplex):
                 row = {
                     tomo_col: float(tomo_id),
                     aff_col: float(pore_id),
-                    "subtomo_id": float(row_s["subtomo_id"]),
+                    "subtomo_id": float(row_s[self.subtomo_id_column]),
                     "radius": radius,
                     "axial_offset": axial_offset,
                     "distance_to_centre": dist3d,
@@ -4178,27 +5183,27 @@ class CnComplex(SymmetricComplex):
 # =============================================================================
 
 
-def _ring_centre_spacing(
-    c0: np.ndarray,
-    c1: np.ndarray,
-    *,
-    axis: np.ndarray | None = None,
-) -> float:
-    """Spacing between two ring centres.
+def _ring_slot(subunit_index: float, n: int) -> float:
+    """Position of a subunit within its ring: its index modulo the fold, ``(index - 1) % n + 1``.
+
+    Subunits of two rings are paired when their slots agree.  Indices below 1
+    (unassigned) are returned as they are.
+    """
+    k = float(subunit_index)
+    if k < 1:
+        return k
+    return float((int(round(k)) - 1) % int(n) + 1)
+
+
+def _ring_centre_spacing(c0: np.ndarray, c1: np.ndarray) -> float:
+    """Euclidean distance between two ring centres.
 
     Parameters
     ----------
     c0, c1 : np.ndarray, shape (3,)
         Mean positions of the two ring centres.
-    axis : np.ndarray, shape (3,), optional
-        Unit vector.  When given, returns ``|dot(c1 − c0, axis)|`` (axial
-        projection, used by DnComplex).  When absent, returns the Euclidean
-        distance (used by NPC).
     """
-    diff = c1 - c0
-    if axis is not None:
-        return float(abs(np.dot(diff, axis)))
-    return float(np.linalg.norm(diff))
+    return float(np.linalg.norm(c1 - c0))
 
 
 def _ring_centre_twist(
@@ -4257,9 +5262,20 @@ def _ring_centre_twist(
 class DnComplex(CnComplex):
     """Dihedral Dn-symmetric structure modelled as two stacked Cn rings.
 
-    Extends :class:`CnComplex` with ring-splitting, ring-aware subunit
-    ordering (1 … n for the top ring, n+1 … 2n for the bottom ring), and
-    inter-ring metrics (axial spacing, rotational twist).
+    Extends :class:`CnComplex` with ring-splitting and ring-aware subunit
+    indexing (1 … n for the top ring, n+1 … 2n for the bottom ring).  After
+    :meth:`split_rings` the two rings are held in :attr:`rings` and the
+    between-ring metrics (:meth:`ring_spacing`, :meth:`inter_ring_twist`,
+    :meth:`get_subunit_spacing`, :meth:`get_subunit_orientation`) are the
+    ones inherited from :class:`CnComplex`.  They measure what is there: the
+    two rings have opposite normals, and nothing corrects for that.
+
+    Between two rings the axis runs from the lower-numbered ring to the
+    higher-numbered one, here from ring 1 (top) to ring 2 (bottom).  This
+    flipped the sign of the twist compared with the earlier
+    ``DnComplex.inter_ring_twist``, which measured about the fixed split axis
+    pointing from ring 2 to ring 1, and spacing is now the distance between
+    the ring centres rather than its projection on that axis.
 
     Parameters
     ----------
@@ -4270,10 +5286,12 @@ class DnComplex(CnComplex):
         and treated as Dn).  Non-dihedral symmetries raise :class:`ValueError`.
     affiliation_column : MotlColumn, default='object_id'
         Column that identifies which object each particle belongs to.
-    order_column : MotlColumn, default='geom1'
-        Column that :meth:`assign_subunit_order` writes subunit indices into.
+    subunit_index_column : MotlColumn, default='geom1'
+        Column that :meth:`assign_subunit_index` writes subunit indices into.
     tomo_id_column : MotlColumn, default='tomo_id'
         Column that identifies the tomogram.
+    subtomo_id_column : MotlColumn, default='subtomo_id'
+        Column that identifies each particle.
     center_method : {'circle_fit', 'barycentric'}, default='circle_fit'
         Algorithm used by centre-computation helpers.
 
@@ -4288,10 +5306,10 @@ class DnComplex(CnComplex):
     (inherited from :class:`CnComplex` via :meth:`_cyclic_setup`) equals
     ``fold`` — the per-ring subunit count.
 
-    Ring 0 is the ring whose subunits have a *higher* mean axial coordinate
-    along ``_split_axis`` (the "top" ring).  Ring 1 is the "bottom" ring.
-    After :meth:`assign_subunit_order`, ring 0 subunits receive indices
-    1 … n and ring 1 subunits receive indices n+1 … 2n.
+    Ring 1 is the ring whose subunits have a *higher* mean axial coordinate
+    along ``_split_axis`` (the "top" ring).  Ring 2 is the "bottom" ring.
+    After :meth:`assign_subunit_index`, ring 1 subunits receive indices
+    1 … n and ring 2 subunits receive indices n+1 … 2n.
     """
 
     def __init__(
@@ -4300,16 +5318,18 @@ class DnComplex(CnComplex):
         symmetry: Symmetry,
         *,
         affiliation_column: MotlColumn = "object_id",
-        order_column: MotlColumn = "geom1",
+        subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
         center_method: Literal["circle_fit", "barycentric"] = "circle_fit",
     ) -> None:
         self._setup(
             motl,
             symmetry,
             affiliation_column=affiliation_column,
-            order_column=order_column,
+            subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
+            subtomo_id_column=subtomo_id_column,
         )
         if self.group != "D":
             raise ValueError(f"DnComplex requires dihedral Dn symmetry, got {symmetry!r}.")
@@ -4330,21 +5350,24 @@ class DnComplex(CnComplex):
         ring_column: MotlColumn = "geom5",
         axis: ArrayLike = (0.0, 0.0, 1.0),
     ) -> "cryomotl.Motl":
-        """Partition subunits into two axial rings and label them 0 / 1.
+        """Partition subunits into two axial rings and label them 1 / 2.
 
         For each object, projects every subunit's position relative to the
         object barycentre along *axis*.  Subunits with a non-negative
-        projection (higher axial coordinate) are labelled ring 0; those
-        with a negative projection are labelled ring 1.
+        projection (higher axial coordinate) are labelled ring 1; those
+        with a negative projection are labelled ring 2.
 
-        The result is written into ``motl.df[ring_column]`` and
+        The result is written into ``motl.df[ring_column]``,
         ``self._ring_group_columns`` is updated to
-        ``[tomo_id_column, affiliation_column, ring_column]``.
+        ``[tomo_id_column, affiliation_column, ring_column]``; from then on
+        :attr:`rings` returns the two rings, built from ``self.motl``.  Both
+        rings come from one motl and share its object ids, so
+        ``_rings_merged`` is ``True`` afterwards.
 
         Parameters
         ----------
         ring_column : MotlColumn, default='geom5'
-            Column to write ring labels (0 or 1) into.
+            Column to write ring labels (1 or 2) into.
         axis : array-like of shape (3,), default=(0, 0, 1)
             Splitting axis.  Need not be normalised.
 
@@ -4366,7 +5389,7 @@ class DnComplex(CnComplex):
             coords_grp = coord[grp_idx, :]
             bary = geom.barycenter(coords_grp) if coords_grp.shape[0] > 0 else np.zeros(3)
             projections = (coords_grp - bary) @ axis_arr
-            ring_labels[grp_idx] = np.where(projections >= 0, 0.0, 1.0)
+            ring_labels[grp_idx] = np.where(projections >= 0, 1.0, 2.0)
 
         self.motl.df[ring_column] = ring_labels
 
@@ -4376,136 +5399,56 @@ class DnComplex(CnComplex):
             ring_column,
         ]
         self._rings_split = True
+        self._rings_merged = True
         return self.motl
 
+    @property
+    def rings(self) -> list[CnComplex]:
+        """The two rings, built from ``self.motl`` on every access; empty before :meth:`split_rings`.
+
+        Ring 1 and ring 2 are plain :class:`CnComplex` objects holding a copy
+        of that ring's rows.  ``self.motl`` is the only source: edits to it
+        reach the rings the next time they are asked for, and edits to a
+        returned ring do not reach ``self.motl``.
+        """
+        if not self._rings_split:
+            return []
+        return [
+            CnComplex(
+                cryomotl.Motl(self.motl.df[self.motl.df[self._ring_column] == float(r)].reset_index(drop=True)),
+                f"C{self.n}",
+                affiliation_column=self.affiliation_column,
+                subunit_index_column=self.subunit_index_column,
+                tomo_id_column=self.tomo_id_column,
+                subtomo_id_column=self.subtomo_id_column,
+                center_method=self.center_method,
+            )
+            for r in (1, 2)
+        ]
+
     # ------------------------------------------------------------------
-    # Subunit ordering (ring-aware)
+    # Subunit indexing (ring-aware)
     # ------------------------------------------------------------------
 
-    @gui_exposed(label="Assign subunit order", group="Affiliation", order=30, returns="none")
-    def assign_subunit_order(self) -> None:
+    @gui_exposed(label="Assign subunit index", group="Affiliation", order=30, returns="none")
+    def assign_subunit_index(self) -> None:
         """Assign 1-based subunit indices across both rings.
 
         Calls :meth:`split_rings` when the ring column is absent from
-        ``self.motl.df``.  Then delegates per-ring cyclic ordering to
-        :meth:`CnComplex.assign_subunit_order` (indices 1 … n within
-        each ring).  Finally offsets ring 1 indices by ``self.n`` so that
-        the full range is 1 … 2n (ring 0 first, ring 1 second).
+        ``self.motl.df``.  Then delegates per-ring cyclic indexing to
+        :meth:`CnComplex.assign_subunit_index` (indices 1 … n within
+        each ring).  Finally offsets ring 2 indices by ``self.n`` so that
+        the full range is 1 … 2n (ring 1 first, ring 2 second).
 
         Modifies ``self.motl.df`` in place.
         """
         if not self._rings_split:
             self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
 
-        super().assign_subunit_order()
+        super().assign_subunit_index()
 
-        ring1_mask = self.motl.df[self._ring_column] == 1.0
-        self.motl.df.loc[ring1_mask, self.order_column] = self.motl.df.loc[ring1_mask, self.order_column] + self.n
-
-    # ------------------------------------------------------------------
-    # Inter-ring metrics
-    # ------------------------------------------------------------------
-
-    @gui_exposed(label="Ring spacing", group="Statistics", order=40, returns="dataframe")
-    def ring_spacing(self, *, pixel_size: float | None = None) -> pd.DataFrame:
-        """Axial distance between the two rings for each object.
-
-        Thin wrapper over :func:`_ring_centre_spacing` that passes the dihedral
-        axis, preserving the axial-projection behaviour.  Auto-splits the rings
-        on first call if :meth:`split_rings` has not been called explicitly.
-
-        Parameters
-        ----------
-        pixel_size : float or None, default None
-            Ångström-per-voxel scale factor.  When ``None``, uses
-            ``self.pixel_size`` (defaulting to ``1.0`` when unset).
-
-        Returns
-        -------
-        pandas.DataFrame
-            Columns ``tomo_id``, ``object_id``, ``ring_spacing``.
-        """
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
-        if not self._rings_split:
-            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
-
-        coord = self.motl.get_coordinates()
-        rows: list[dict] = []
-
-        for (tomo_id, object_id), group in self.motl.df.groupby([self.tomo_id_column, self.affiliation_column]):
-            mask0 = (group[self._ring_column] == 0.0).to_numpy()
-            mask1 = (group[self._ring_column] == 1.0).to_numpy()
-            grp_idx = group.index.to_numpy()
-            coords_grp = coord[grp_idx, :]
-
-            if not mask0.any() or not mask1.any():
-                spacing = float("nan")
-            else:
-                c0 = np.mean(coords_grp[mask0, :], axis=0)
-                c1 = np.mean(coords_grp[mask1, :], axis=0)
-                spacing = _ring_centre_spacing(c0, c1, axis=self._split_axis) * ps
-
-            rows.append(
-                {
-                    "tomo_id": float(tomo_id),
-                    "object_id": float(object_id),
-                    "ring_spacing": spacing,
-                }
-            )
-
-        return pd.DataFrame(rows)
-
-    @gui_exposed(label="Inter-ring twist", group="Statistics", order=45, returns="dataframe")
-    def inter_ring_twist(self, *, degrees: bool = True) -> pd.DataFrame:
-        """Rotational twist between the two rings for each object.
-
-        Thin wrapper over :func:`_ring_centre_twist` that passes the dihedral
-        axis, preserving the n-fold circular-mean phase computation.  Auto-splits
-        the rings on first call if :meth:`split_rings` has not been called explicitly.
-
-        Returns the signed n-fold phase difference in ``[−180/n, 180/n)``
-        degrees (0 = rotational alignment).  An eclipsed arrangement gives
-        ``0``; a perfectly staggered arrangement (offset by exactly 180°/n)
-        lies at the fold boundary and returns ``−180/n``.
-
-        Parameters
-        ----------
-        degrees : bool, default=True
-            Return twist in degrees when ``True``, radians when ``False``.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Columns ``tomo_id``, ``object_id``, ``inter_ring_twist``.
-        """
-        if not self._rings_split:
-            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
-
-        coord = self.motl.get_coordinates()
-        rows: list[dict] = []
-
-        for (tomo_id, object_id), group in self.motl.df.groupby([self.tomo_id_column, self.affiliation_column]):
-            mask0 = (group[self._ring_column] == 0.0).to_numpy()
-            mask1 = (group[self._ring_column] == 1.0).to_numpy()
-            grp_idx = group.index.to_numpy()
-            coords_grp = coord[grp_idx, :]
-            bary = geom.barycenter(coords_grp) if coords_grp.shape[0] > 0 else np.zeros(3)
-            rel = coords_grp - bary
-
-            if not mask0.any() or not mask1.any():
-                twist = float("nan")
-            else:
-                twist = _ring_centre_twist(rel[mask0, :], rel[mask1, :], self.n, self._split_axis, degrees=degrees)
-
-            rows.append(
-                {
-                    "tomo_id": float(tomo_id),
-                    "object_id": float(object_id),
-                    "inter_ring_twist": twist,
-                }
-            )
-
-        return pd.DataFrame(rows)
+        ring2_mask = self.motl.df[self._ring_column] == 2.0
+        self.motl.df.loc[ring2_mask, self.subunit_index_column] = self.motl.df.loc[ring2_mask, self.subunit_index_column] + self.n
 
     # ------------------------------------------------------------------
     # Per-object statistics
@@ -4538,10 +5481,12 @@ class DnComplex(CnComplex):
                 Object barycentre (voxels).
             ``radius``
                 Mean circumradius across both rings (voxels).
-            ``ring_spacing``
-                Axial distance between rings (scaled by *pixel_size*).
-            ``inter_ring_twist``
-                Rotational twist between rings (degrees).
+            ``spacing_1_2``
+                Distance between the two ring centres (scaled by
+                *pixel_size*), from :meth:`ring_spacing`.
+            ``twist_1_2``
+                Rotational twist between the rings (degrees), from
+                :meth:`inter_ring_twist`.
             ``circumference``
                 Mean per-ring circumference (scaled by *pixel_size*).
             ``mean_diameter``, ``n_pairs``
@@ -4554,6 +5499,8 @@ class DnComplex(CnComplex):
         """
         self._require_affiliation()
         ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+        if not self._rings_split:
+            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
 
         occ_df = self.occupancy()
         spacing_df = self.ring_spacing(pixel_size=ps)
@@ -4604,7 +5551,7 @@ class DnComplex(CnComplex):
 class NPC(CnComplex):
     """NPC-specific extensions of :class:`CnComplex`.
 
-    Inherits all single-ring methods (centre computation, subunit ordering,
+    Inherits all single-ring methods (centre computation, subunit indexing,
     and object merging) from :class:`CnComplex`.
     The methods below are NPC-specific: orientation unification,
     multi-ring assembly, and opposite-subunit diameter analysis.
@@ -4619,8 +5566,6 @@ class NPC(CnComplex):
        and reconcile IR orientations.  One-way irreversible.
     """
 
-    _ring_column: MotlColumn = "geom3"
-
     _DISPATCH_PER_RING: frozenset[str] = frozenset(
         {
             # Inherited from SymmetricComplex
@@ -4631,7 +5576,7 @@ class NPC(CnComplex):
             "create_affiliation",
             # Inherited from CnComplex
             "circumference",
-            "assign_subunit_order",
+            "assign_subunit_index",
             "central_angles",
             # NPC override
             "get_object_stats",
@@ -4645,8 +5590,9 @@ class NPC(CnComplex):
         *,
         radius: float | None = None,
         affiliation_column: MotlColumn = "object_id",
-        order_column: MotlColumn = "geom1",
+        subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
         center_method: Literal["circle_fit", "barycentric"] = "circle_fit",
         ring_column: MotlColumn = "geom3",
         pixel_size: float = 1.0,
@@ -4658,104 +5604,54 @@ class NPC(CnComplex):
             loaded[0],
             "C8",
             affiliation_column=affiliation_column,
-            order_column=order_column,
+            subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
+            subtomo_id_column=subtomo_id_column,
             center_method=center_method,
         )
         self.pixel_size: float = float(pixel_size)
         self.radius: float | None = radius
-        self._ring_column: MotlColumn = ring_column
-        # Ring motls are stored in _states (inherited from CnComplex._cyclic_setup).
-        for _i, _m in enumerate(loaded):
-            self._states.append(_SubunitState(motl=_m, position=_i, label=_i))
-        self._rings_merged: bool = len(loaded) == 1
-        self._per_ring_active: bool = False
+        self._ring_column = ring_column
+        self.rings = [
+            CnComplex(
+                m,
+                "C8",
+                affiliation_column=affiliation_column,
+                subunit_index_column=subunit_index_column,
+                tomo_id_column=tomo_id_column,
+                subtomo_id_column=subtomo_id_column,
+                center_method=center_method,
+            )
+            for m in loaded
+        ]
+        self._rings_merged = len(self.rings) == 1
         self._last_alignment: dict = {}
         self._store_sid_column: str | None = None
-        # Sync self.motl to ring 0 so in-place methods stay visible through _states[0].
-        self.motl = self._states[0].motl
+        # Sync self.motl to ring 0 so in-place methods stay visible through rings[0].
+        self.motl = self.rings[0].motl
 
     @property
     def _ring_motls(self) -> list[cryomotl.Motl]:
-        """Ring motls in position order, backed by :attr:`_states`."""
-        return [s.motl for s in sorted(self._states, key=lambda s: s.position)]
+        """Ring motls in input order, backed by :attr:`rings`."""
+        return [ring.motl for ring in self.rings]
 
     # ------------------------------------------------------------------
     # State resolution override
     # ------------------------------------------------------------------
 
     def _resolve_state(self, label=None) -> "_SubunitState | None":
-        # NPC stores ring motls in _states (label == ring index, 0-based).
+        # The elements of an NPC are its rings (label == ring index, 0-based).
         # label=None means "all rings" → use self.motl (merged motl) directly.
         # label=<ring_label> → select that ring's motl.
         if label is None:
             return None
-        for s in self._states:
-            if s.label == label:
-                return s
-        existing = [s.label for s in sorted(self._states, key=lambda s: s.position)]
+        for element in self._elements():
+            if element.label == label:
+                return element
+        existing = [element.label for element in self._elements()]
         raise KeyError(
             f"Unknown ring label {label!r}. Existing ring labels: {existing!r}."
         )
-
-    # ------------------------------------------------------------------
-    # Multi-ring dispatch
-    # ------------------------------------------------------------------
-
-    def per_ring(self, method_name: str, *args, **kwargs):
-        """Dispatch *method_name* per ring, tagging results with :attr:`_ring_column` (1-based).
-
-        Thin wrapper around :meth:`CnComplex.per_element` that sets the per-ring
-        active guard, then translates the ``"element_label"`` column emitted by
-        ``per_element`` to ``_ring_column`` with 1-based ring indices (element
-        label 0 → 1.0, label 1 → 2.0, …).
-
-        When rings are already merged, delegates directly to the instance method.
-
-        Parameters
-        ----------
-        method_name : str
-            Name of the method to dispatch.
-        *args, **kwargs
-            Forwarded to the base-class implementation.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Concatenated results with ``_ring_column`` instead of
-            ``"element_label"``.
-        list
-            Per-ring results when the base implementation returns a
-            non-DataFrame.
-
-        Notes
-        -----
-        ``_per_ring_active`` is ``True`` throughout the dispatch loop so that
-        NPC overrides of :meth:`occupancy` and :meth:`get_object_stats` skip
-        re-dispatch when called from inside :meth:`per_element`.
-        """
-        if self._rings_merged:
-            return getattr(self, method_name)(*args, **kwargs)
-        ring_col = self._ring_column
-        self._per_ring_active = True
-        try:
-            result = super().per_element(method_name, *args, **kwargs)
-        finally:
-            self._per_ring_active = False
-        # Translate element_label (0-based) → ring_col (1-based)
-        if isinstance(result, pd.DataFrame):
-            result = result.copy()
-            result[ring_col] = result["element_label"].apply(lambda x: float(int(x)) + 1.0)
-            result = result.drop(columns=["element_label"])
-        elif isinstance(result, list):
-            for _item in result:
-                if isinstance(_item, pd.DataFrame):
-                    _item[ring_col] = _item["element_label"].apply(lambda x: float(int(x)) + 1.0)
-                    _item.drop(columns=["element_label"], inplace=True, errors="ignore")
-                elif isinstance(_item, cryomotl.Motl):
-                    _item.df[ring_col] = _item.df["element_label"].apply(lambda x: float(int(x)) + 1.0)
-                    _item.df.drop(columns=["element_label"], inplace=True, errors="ignore")
-        return result
 
     # ------------------------------------------------------------------
     # Overrides that respect ring column after merge
@@ -4764,18 +5660,16 @@ class NPC(CnComplex):
     def occupancy(self, *, label=None) -> pd.DataFrame:
         """Per-object (per-ring when merged) subunit occupancy.
 
-        Overrides :meth:`SymmetricComplex.occupancy` to group by
+        Overrides :meth:`MultiSubunitComplex.occupancy` to group by
         ``_ring_group_columns`` so that, after :meth:`merge`, each
         ``(tomo_id, object_id, ring)`` group is reported separately.
 
-        Pre-merge direct calls dispatch via :meth:`per_ring`; calls from inside
-        :meth:`per_ring` (``_per_ring_active=True``) run this body directly on
-        the current ``self.motl``.
+        Pre-merge calls run on each ring through :meth:`per_ring`.
         """
-        if not self._rings_merged and not self._per_ring_active:
+        if not self._rings_merged:
             return self.per_ring("occupancy")
         self._require_affiliation()
-        has_order = self.order_column in self.motl.df.columns
+        has_order = self.subunit_index_column in self.motl.df.columns
         rows: list[dict] = []
         all_expected = set(range(1, self.n_subunits + 1))
         for keys, group in self.motl.df.groupby(self._ring_group_columns):
@@ -4783,7 +5677,7 @@ class NPC(CnComplex):
             object_id = keys[1]
             n_present = len(group)
             if has_order:
-                present = set(int(v) for v in group[self.order_column].dropna())
+                present = set(int(v) for v in group[self.subunit_index_column].dropna())
                 missing: list[int] | None = sorted(all_expected - present)
             else:
                 missing = None
@@ -4813,7 +5707,7 @@ class NPC(CnComplex):
         on ``(tomo_id, object_id)``.
         """
         ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
-        if not self._rings_merged and not self._per_ring_active:
+        if not self._rings_merged:
             return self.per_ring("get_object_stats", pixel_size=ps)
         self._require_affiliation()
 
@@ -4866,8 +5760,8 @@ class NPC(CnComplex):
                 result = result.merge(twist_df, on=[tomo_col, aff_col], how="left")
         return result
 
-    @gui_exposed(label="Assign subunit order", group="Affiliation", order=30, returns="motl")
-    def assign_subunit_order(
+    @gui_exposed(label="Assign subunit index", group="Affiliation", order=30, returns="motl")
+    def assign_subunit_index(
         self,
         ref_direction: np.ndarray | None = None,
         flag_column: str = "geom5",
@@ -4882,17 +5776,17 @@ class NPC(CnComplex):
 
         For each ring in ``self._ring_motls``, groups particles by
         ``(tomo_id_column, affiliation_column)`` and calls
-        :meth:`_chain_order_for_ring_object`.  The cross-ring alignment step
-        is deferred to :meth:`_finalize_subunit_order` (called by
+        :meth:`_chain_index_for_ring_object`.  The cross-ring alignment step
+        is deferred to :meth:`_finalize_subunit_index` (called by
         :meth:`merge`).
 
         Parameters
         ----------
         ref_direction : numpy.ndarray or None
             Forwarded to the pooled-azimuth fallback inside
-            :meth:`_chain_order_for_ring_object`.
+            :meth:`_chain_index_for_ring_object`.
         flag_column : str, default ``'geom5'``
-            Column written with ``1.0`` for objects whose ordering used the
+            Column written with ``1.0`` for objects whose indexing used the
             fallback or involved multiple chains.  Created in each ring motl
             if absent.
         ambiguity_tol : float or None
@@ -4921,7 +5815,7 @@ class NPC(CnComplex):
         Returns
         -------
         cryomotl.Motl
-            Combined motl of all rings with ``order_column``,
+            Combined motl of all rings with ``subunit_index_column``,
             ``_ring_column``, and *flag_column* populated.
         """
         if not self._ring_motls:
@@ -4930,7 +5824,7 @@ class NPC(CnComplex):
         n = self.n_subunits
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
-        order_col = self.order_column
+        order_col = self.subunit_index_column
 
         if ambiguity_tol is None:
             ambiguity_tol = self.central_angle / 4.0
@@ -4959,14 +5853,14 @@ class NPC(CnComplex):
                     R = radius if radius is not None else self.radius
                     if R is None:
                         raise ValueError(
-                            "NPC.assign_subunit_order: ring radius unknown — "
+                            "NPC.assign_subunit_index: ring radius unknown — "
                             "pass radius= or set NPC(..., radius=...)"
                         )
                     delta_vox = float(R) * np.sin(np.pi / n)
                     ev = [0.0, -delta_vox, 0.0]
                     xv = [0.0, +delta_vox, 0.0]
 
-                order_arr, flagged = self._chain_order_for_ring_object(
+                order_arr, flagged = self._chain_index_for_ring_object(
                     obj_motl,
                     entry_shift_vec=ev,
                     exit_shift_vec=xv,
@@ -4976,7 +5870,7 @@ class NPC(CnComplex):
                 )
 
                 order_arr_raw = order_arr
-                order_arr, deduped = self._dedupe_ring_order(order_arr_raw, n)
+                order_arr, deduped = self._dedupe_ring_index(order_arr_raw, n)
                 if deduped:
                     flagged = True
 
@@ -4992,7 +5886,7 @@ class NPC(CnComplex):
         return cryomotl.Motl(pd.concat(frames, ignore_index=True))
 
     @staticmethod
-    def _dedupe_ring_order(order_arr: np.ndarray, n: int) -> tuple[np.ndarray, bool]:
+    def _dedupe_ring_index(order_arr: np.ndarray, n: int) -> tuple[np.ndarray, bool]:
         """Replace later duplicates in *order_arr* with unique sentinel values ≥ n+1.
 
         Walk positionally: keep the first occurrence of each value unchanged;
@@ -5002,7 +5896,7 @@ class NPC(CnComplex):
         Parameters
         ----------
         order_arr : np.ndarray
-            1-D float array of subunit order values for one ring.
+            1-D float array of subunit index values for one ring.
         n : int
             Ring size (valid slots are 1..n).  Sentinels start at n+1.
 
@@ -5033,7 +5927,7 @@ class NPC(CnComplex):
                 changed = True
         return new_arr, changed
 
-    def _chain_order_for_ring_object(
+    def _chain_index_for_ring_object(
         self,
         object_motl: "cryomotl.Motl",
         *,
@@ -5043,7 +5937,7 @@ class NPC(CnComplex):
         ambiguity_tol: float,
         ref_direction: np.ndarray | None,
     ) -> tuple[np.ndarray, bool]:
-        """Assign 1-based order for one ring-object via chain tracing.
+        """Assign 1-based subunit indices for one ring-object via chain tracing.
 
         Chain scratch columns live only on throwaway motls and are never
         written to the real motl.
@@ -5110,13 +6004,13 @@ class NPC(CnComplex):
             return _fallback()
 
         # --- Align traced result back to object_motl via subtomo_id ---
-        traced.df.sort_values("subtomo_id", inplace=True)
+        traced.df.sort_values(self.subtomo_id_column, inplace=True)
         traced.df.reset_index(drop=True, inplace=True)
-        sid_to_orig = {float(s): i for i, s in enumerate(object_motl.df["subtomo_id"].values)}
+        sid_to_orig = {float(s): i for i, s in enumerate(object_motl.df[self.subtomo_id_column].values)}
 
         chain_ids = traced.df["__cid__"].values
         chain_pos_vals = traced.df["__cpos__"].values
-        traced_sids = traced.df["subtomo_id"].values
+        traced_sids = traced.df[self.subtomo_id_column].values
 
         # Check for usable chains (size > 1)
         chain_sizes: dict[int, int] = {}
@@ -5229,12 +6123,12 @@ class NPC(CnComplex):
 
         return order_final, True  # multi-chain always flagged
 
-    def _finalize_subunit_order(
+    def _finalize_subunit_index(
         self,
         flag_column: str = "geom5",
         ambiguity_tol: float | None = None,
     ) -> None:
-        """Align subunit order across rings by 3D nearest-neighbour matching.
+        """Align subunit indices across rings by 3D nearest-neighbour matching.
 
         Called at the end of :meth:`merge`.  For each merged pore, selects the
         most-populated ring whose existing subunit numbers form a contiguous
@@ -5242,7 +6136,7 @@ class NPC(CnComplex):
         numbers by matching each of its particles to the nearest reference
         particle via :func:`scipy.optimize.linear_sum_assignment`.
 
-        The within-ring ordering assigned by :meth:`assign_subunit_order` is
+        The within-ring indexing assigned by :meth:`assign_subunit_index` is
         preserved; only the global label offset (and chirality) is adjusted.
 
         Parameters
@@ -5262,7 +6156,7 @@ class NPC(CnComplex):
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
         ring_col = self._ring_column
-        order_col = self.order_column
+        order_col = self.subunit_index_column
 
         self.motl.df[flag_column] = 0.0
 
@@ -5304,7 +6198,7 @@ class NPC(CnComplex):
             if len(ring_keys_present) < 2:
                 continue
 
-            # Per-ring data: local indices into pore_rows, 3D coords, order numbers.
+            # Per-ring data: local indices into pore_rows, 3D coords, subunit indices.
             ring_data: dict[float, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
             for rk in ring_keys_present:
                 local_j = np.where(pore_ring_vals == rk)[0]
@@ -5345,7 +6239,7 @@ class NPC(CnComplex):
                 ring_rows = pore_rows[local_j]
                 self.motl.df.iloc[ring_rows, order_col_loc] = new_numbers
 
-                final_order, deduped = self._dedupe_ring_order(new_numbers, n)
+                final_order, deduped = self._dedupe_ring_index(new_numbers, n)
                 if deduped:
                     self.motl.df.iloc[ring_rows, order_col_loc] = final_order
                     self.motl.df.iloc[ring_rows, flag_col_loc] = 1.0
@@ -5390,6 +6284,9 @@ class NPC(CnComplex):
         exit_mask: MapSource | None = None,
         tomo_id_column: "MotlColumn" = "tomo_id",
         affiliation_column: "MotlColumn" = "object_id",
+        subunit_index_column: "MotlColumn" = "geom2",
+        step_dist_col: "MotlColumn" = "geom4",
+        sort_traced: bool = True,
     ) -> "cryomotl.Motl":
         """Cluster NPC subunit particles into rings.
 
@@ -5450,13 +6347,25 @@ class NPC(CnComplex):
         affiliation_column : str, default='object_id'
             Column holding the ring/object identifier used during sorting and
             merging.
+        subunit_index_column : MotlColumn, default='geom2'
+            Column written with the 1-based within-ring subunit index, by the
+            chain tracing and again by the merge for rings that were merged.
+        step_dist_col : MotlColumn, default='geom4'
+            Column written with the distance from each subunit to the next one
+            in its traced chain.
+        sort_traced : bool, default=True
+            Sort the traced motl by *tomo_id_column*, *affiliation_column* and
+            *subunit_index_column* before its chain annotations are copied onto
+            the input motl.  ``False`` skips the sort.
 
         Returns
         -------
         Motl
-            Motl with *affiliation_column* identifying each ring,
-            ``geom1`` holding ring occupancy, and ``geom2`` the within-ring
-            subunit index.
+            Motl with *affiliation_column* identifying each ring and
+            *subunit_index_column* the within-ring subunit index, and
+            *step_dist_col* the step distance from the tracing.  ``geom1`` is
+            the input's.  The subunit count per ring is reported by
+            :meth:`occupancy`.
 
         Raises
         ------
@@ -5498,9 +6407,13 @@ class NPC(CnComplex):
             motl_exit,
             max_distance=max_trace_distance,
             min_distance=min_trace_distance,
+            column_name=tomo_id_column,
+            chain_id_col=affiliation_column,
+            order_id_col=subunit_index_column,
+            step_dist_col=step_dist_col,
         )
-        chain.traced_motl.df.sort_values([tomo_id_column, affiliation_column, "geom2"], inplace=True)
-        chain.get_occupancy()
+        if sort_traced:
+            chain.traced_motl.df.sort_values([tomo_id_column, affiliation_column, subunit_index_column], inplace=True)
         motl = chain.add_traced_info(motl)
 
         motl = NPC._merge_by_radius(
@@ -5508,6 +6421,7 @@ class NPC(CnComplex):
             npc_radius,
             tomo_id_column=tomo_id_column,
             affiliation_column=affiliation_column,
+            subunit_index_column=subunit_index_column,
         )
         return motl
 
@@ -5522,6 +6436,8 @@ class NPC(CnComplex):
         ring_index: int = 0,
         *,
         reference: "cryomotl.Motl | None" = None,
+        order_id_col: MotlColumn = "geom2",
+        step_dist_col: MotlColumn = "geom4",
     ) -> None:
         """Flip orientations so that neighbouring subunits point consistently.
 
@@ -5535,7 +6451,7 @@ class NPC(CnComplex):
         rotation (``srot.from_euler("zxz", [0,180,0])``) whenever the cone
         angle (``geom.cone_distance``) between successive subunits exceeds 90°.
         Updates ``self.motl`` in place, and when multiple ring motls are held,
-        also updates ``self._ring_motls[ring_index]``.
+        also updates ``self.rings[ring_index].motl``.
 
         Parameters
         ----------
@@ -5551,6 +6467,12 @@ class NPC(CnComplex):
             When provided, each particle is compared against the per-object
             mean z-normal of *reference* rather than against its chain
             neighbours.
+        order_id_col : MotlColumn, default='geom2'
+            Column that receives the within-chain position index from the
+            tracing.  Ignored when *reference* is given.
+        step_dist_col : MotlColumn, default='geom4'
+            Column that receives the step distance from the tracing.  Ignored
+            when *reference* is given.
 
         Raises
         ------
@@ -5582,8 +6504,8 @@ class NPC(CnComplex):
             column_name=self.tomo_id_column,
             output_motl=None,
             store_idx1=self.affiliation_column,
-            store_idx2="geom2",
-            store_dist="geom4",
+            store_idx2=order_id_col,
+            store_dist=step_dist_col,
         )
 
         rot_180 = srot.from_euler("zxz", angles=[0, 180, 0], degrees=True)
@@ -5591,7 +6513,7 @@ class NPC(CnComplex):
         for t in traced_motl.get_unique_values(self.tomo_id_column):
             tm = traced_motl.get_motl_subset(column_values=[t], column_name=self.tomo_id_column, reset_index=True)
             rotations = tm.get_rotations()
-            for i in np.arange(1, tm.df["geom2"].max(), dtype=int):
+            for i in np.arange(1, tm.df[order_id_col].max(), dtype=int):
                 cone_angle = geom.cone_distance(rotations[i - 1], rotations[i])
                 if cone_angle > 90.0:
                     rotations[i] = rotations[i] * rot_180
@@ -5600,10 +6522,10 @@ class NPC(CnComplex):
             tm.fill({"angles": angles})
             traced_motl.df.loc[traced_motl.df[self.tomo_id_column] == t, :] = tm.df.values
 
-        self.motl = cryomotl.Motl(traced_motl.df.sort_values(by="subtomo_id"))
+        self.motl = cryomotl.Motl(traced_motl.df.sort_values(by=self.subtomo_id_column))
 
         if not self._rings_merged:
-            self._states[ring_index].motl = self.motl
+            self.rings[ring_index].motl = self.motl
             if ring_index != 0:
                 self.motl = orig_self_motl
 
@@ -5703,7 +6625,7 @@ class NPC(CnComplex):
         Parameters
         ----------
         npc_radius : float
-            Ring radius in voxels.  Forwarded to :meth:`get_centers_as_motl`.
+            Ring radius in voxels.  Forwarded to :meth:`compute_centers`.
         ring_order : list of int or None
             Permutation of ``range(len(rings))``.  Index 0 = CR, index 1 = IR,
             index 2 = NR.  Defaults to input order.
@@ -5726,11 +6648,11 @@ class NPC(CnComplex):
         if self._rings_merged:
             return self.motl
         for _ring_idx, _rm in enumerate(self._ring_motls):
-            if (_rm.df[self.order_column] == 0).all():
+            if (_rm.df[self.subunit_index_column] == 0).all():
                 raise ValueError(
-                    f"Ring {_ring_idx} has no subunit ordering "
-                    f"('{self.order_column}' is all zeros) — "
-                    f"call assign_subunit_order on ring {_ring_idx} before merging."
+                    f"Ring {_ring_idx} has no subunit index "
+                    f"('{self.subunit_index_column}' is all zeros) — "
+                    f"call assign_subunit_index on ring {_ring_idx} before merging."
                 )
         if ring_order is None:
             ring_order = list(range(len(self._ring_motls)))
@@ -5756,8 +6678,8 @@ class NPC(CnComplex):
                 tm2 = ordered[j].get_motl_subset(column_values=[t], column_name=tomo_col, reset_index=True)
                 if tm2.df.shape[0] == 0:
                     continue
-                centers1 = NPC.get_centers_as_motl(tm1, radius=_R, tomo_id_column=tomo_col, affiliation_column=aff_col)
-                centers2 = NPC.get_centers_as_motl(tm2, radius=_R, tomo_id_column=tomo_col, affiliation_column=aff_col)
+                centers1 = NPC.compute_centers(tm1, radius=_R, tomo_id_column=tomo_col, affiliation_column=aff_col)
+                centers2 = NPC.compute_centers(tm2, radius=_R, tomo_id_column=tomo_col, affiliation_column=aff_col)
                 _, obj1_idx, distances, _ = nnana.find_nn_indices(
                     centers2.get_coordinates(),
                     centers1.get_coordinates(),
@@ -5783,22 +6705,22 @@ class NPC(CnComplex):
         # Step 4: merge into single motl, update state
         merged_df = pd.concat([rm.df for rm in ordered], ignore_index=True)
         if store_sid_column is not None:
-            merged_df[store_sid_column] = merged_df["subtomo_id"].copy()
+            merged_df[store_sid_column] = merged_df[self.subtomo_id_column].copy()
         self.motl = cryomotl.Motl(merged_df)
         self._rings_merged = True
         self._store_sid_column = store_sid_column
         self._ring_group_columns = [self.tomo_id_column, self.affiliation_column, self._ring_column]
         if store_sid_column is not None:
             self.motl.renumber_particles()
-        self._finalize_subunit_order()
+        self._finalize_subunit_index()
         return self.motl
 
     def update_ring_motls(self, flag_column: str = "geom5", update_object_id: bool = False) -> None:
-        """Propagate corrected subunit order from the merged motl back to _ring_motls.
+        """Propagate corrected subunit indices from the merged motl back to _ring_motls.
 
         After manual corrections to the merged motl (e.g. fixing flagged pores
         with :meth:`renumber_subunits`), call this to sync the updated
-        ``order_column`` values back into each source ring motl so they can be
+        ``subunit_index_column`` values back into each source ring motl so they can be
         written out.  Uses the original ``subtomo_id`` values stored in
         ``_store_sid_column`` during :meth:`merge` to match each merged row to
         its source ring motl row.
@@ -5826,7 +6748,7 @@ class NPC(CnComplex):
             )
 
         sid_col = self._store_sid_column
-        order_col = self.order_column
+        order_col = self.subunit_index_column
         ring_col = self._ring_column
         merged = self.motl.df
         aff_col = self.affiliation_column
@@ -5834,16 +6756,16 @@ class NPC(CnComplex):
         for i, rm in enumerate(self._ring_motls):
             ring_df = merged[merged[ring_col] == float(i + 1)]
             order_map = ring_df.set_index(sid_col)[order_col].to_dict()
-            rm.df[order_col] = rm.df["subtomo_id"].map(order_map).fillna(rm.df[order_col])
+            rm.df[order_col] = rm.df[self.subtomo_id_column].map(order_map).fillna(rm.df[order_col])
             if update_object_id:
                 aff_map = ring_df.set_index(sid_col)[aff_col].to_dict()
-                rm.df[aff_col] = rm.df["subtomo_id"].map(aff_map).fillna(rm.df[aff_col])
+                rm.df[aff_col] = rm.df[self.subtomo_id_column].map(aff_map).fillna(rm.df[aff_col])
 
             if flag_column in merged.columns:
                 if flag_column not in rm.df.columns:
                     rm.df[flag_column] = 0.0
                 flag_map = ring_df.set_index(sid_col)[flag_column].to_dict()
-                rm.df[flag_column] = rm.df["subtomo_id"].map(flag_map).fillna(rm.df[flag_column])
+                rm.df[flag_column] = rm.df[self.subtomo_id_column].map(flag_map).fillna(rm.df[flag_column])
 
     def write_ring_motls(self, path_prefix: str, suffix: str = ".em") -> None:
         """Write each ring motl to ``{path_prefix}{ring_index}{suffix}``.
@@ -5859,200 +6781,39 @@ class NPC(CnComplex):
         for i, rm in enumerate(self._ring_motls):
             rm.write_out(f"{path_prefix}{i}{suffix}")
 
-    def split_by_ring(self, result: pd.DataFrame) -> list[pd.DataFrame]:
-        """Split *result* into per-ring sub-DataFrames using :data:`_ring_column`.
-
-        Returns a list of length ``len(_ring_motls)``, one element per ring.
-        Each element contains only rows whose ``_ring_column`` value equals
-        that ring's index.  If *result* has no ring column (e.g. single-ring
-        NPC or a pre-dispatch call), the whole DataFrame is returned as a
-        one-element list.
-
-        This is the library-side of the send-to-motl splitting contract: the
-        caller maps each returned DataFrame to the corresponding source motl
-        pool entry.  No new matching logic is needed because the ring column
-        records the origin of every particle.
-        """
-        if self._ring_column not in result.columns:
-            return [result]
-        parts = []
-        for ring_idx in range(len(self._ring_motls)):
-            mask = result[self._ring_column] == float(ring_idx + 1)
-            parts.append(result[mask].copy())
-        return parts
-
-    @gui_exposed(label="Ring spacing", group="Statistics", order=40, returns="dataframe")
-    def ring_spacing(self, *, pixel_size: float | None = None) -> pd.DataFrame:
-        """Inter-ring spacing per NPC pore, computed from the merged motl.
-
-        For every unordered pair of rings, computes the 3-D Euclidean distance
-        between the mean coordinates of the two ring centres for each pore and
-        scales by *pixel_size*.  Produces ``n*(n-1)/2`` columns for *n* rings.
-
-        Parameters
-        ----------
-        pixel_size : float, default=1.0
-            Ångström-per-voxel scale factor applied to the raw voxel distances.
-
-        Returns
-        -------
-        pandas.DataFrame
-            One row per ``(tomo_id, object_id)``.  Columns:
-
-            ``tomo_id``, ``object_id``
-                Pore identifiers.
-            ``spacing_{r0}_{r1}``
-                Distance (Å when *pixel_size* given) between the centre of ring
-                *r0* and ring *r1*; one column per ring pair, including
-                non-adjacent pairs.  ``NaN`` when one or both ring centres are
-                absent for a pore.
-
-        Raises
-        ------
-        ValueError
-            If called before :meth:`merge`.
-        """
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
-        if not self._rings_merged:
-            raise ValueError("ring_spacing requires a merged NPC — call merge() first.")
-        df = self.motl.df
-        coord = self.motl.get_coordinates()
-        ring_col = self._ring_column
-        n_rings = len(self._ring_motls)
-
-        centres: dict[tuple[float, float, float], np.ndarray] = {}
-        for (tomo_id, object_id, ring_idx), group in df.groupby(
-            [self.tomo_id_column, self.affiliation_column, ring_col]
-        ):
-            idx = group.index.to_numpy()
-            coords_grp = coord[idx, :]
-            centres[(float(tomo_id), float(object_id), float(ring_idx))] = (
-                coords_grp.mean(axis=0) if coords_grp.shape[0] > 0 else np.zeros(3)
-            )
-
-        pore_keys: list[tuple[float, float]] = sorted({(k[0], k[1]) for k in centres})
-        pairs = [tuple(sorted((a + 1, b + 1))) for a, b in mathutils.get_all_pairs(list(range(n_rings)))]
-        rows: list[dict] = []
-        for tomo_id, object_id in pore_keys:
-            row: dict = {self.tomo_id_column: tomo_id, self.affiliation_column: object_id}
-            for r0, r1 in pairs:
-                key0 = (tomo_id, object_id, float(r0))
-                key1 = (tomo_id, object_id, float(r1))
-                if key0 in centres and key1 in centres:
-                    dist = _ring_centre_spacing(centres[key0], centres[key1]) * ps
-                else:
-                    dist = float("nan")
-                row[f"spacing_{r0}_{r1}"] = dist
-            rows.append(row)
-        return pd.DataFrame(rows)
-
-    @gui_exposed(label="Inter-ring twist", group="Statistics", order=45, returns="dataframe")
-    def inter_ring_twist(self, *, degrees: bool = True) -> pd.DataFrame:
-        """Rotational twist between adjacent rings about the pore axis.
-
-        For each pore and every unordered ring pair, the pore axis is estimated
-        as the unit vector from ring *r0*'s centre to ring *r1*'s centre.
-        Produces ``n*(n-1)/2`` columns for *n* rings.  The rotational twist is the
-        signed n-fold circular-mean phase difference folded into ``[−π/n, π/n)``
-        (``[−180/n, 180/n)`` degrees); 0 means the rings are rotationally aligned.
-
-        Parameters
-        ----------
-        degrees : bool, default=True
-            Return twist in degrees when ``True``, radians when ``False``.
-
-        Returns
-        -------
-        pandas.DataFrame
-            One row per ``(tomo_id, object_id)``.  Columns:
-
-            ``tomo_id``, ``object_id``
-                Pore identifiers.
-            ``twist_{r0}_{r1}``
-                Rotational twist between ring *r0* and ring *r1*; one column per
-                ring pair, including non-adjacent pairs.  ``NaN`` when one or
-                both rings are absent or when ring centres coincide.
-
-        Raises
-        ------
-        ValueError
-            If called before :meth:`merge`.
-        """
-        if not self._rings_merged:
-            raise ValueError("inter_ring_twist requires a merged NPC — call merge() first.")
-        df = self.motl.df
-        coord = self.motl.get_coordinates()
-        ring_col = self._ring_column
-        n_rings = len(self._ring_motls)
-
-        ring_positions: dict[tuple[float, float, float], np.ndarray] = {}
-        for (tomo_id, object_id, ring_idx), group in df.groupby(
-            [self.tomo_id_column, self.affiliation_column, ring_col]
-        ):
-            idx = group.index.to_numpy()
-            ring_positions[(float(tomo_id), float(object_id), float(ring_idx))] = coord[idx, :]
-
-        pore_keys = sorted({(k[0], k[1]) for k in ring_positions})
-        pairs = [tuple(sorted((a + 1, b + 1))) for a, b in mathutils.get_all_pairs(list(range(n_rings)))]
-        rows: list[dict] = []
-        for tomo_id, object_id in pore_keys:
-            row: dict = {self.tomo_id_column: tomo_id, self.affiliation_column: object_id}
-            for r0, r1 in pairs:
-                key0 = (tomo_id, object_id, float(r0))
-                key1 = (tomo_id, object_id, float(r1))
-                if key0 in ring_positions and key1 in ring_positions:
-                    c0 = ring_positions[key0].mean(axis=0)
-                    c1 = ring_positions[key1].mean(axis=0)
-                    diff = c1 - c0
-                    norm_val = np.linalg.norm(diff)
-                    if norm_val < 1e-12:
-                        twist = float("nan")
-                    else:
-                        axis = diff / norm_val
-                        all_pts = np.concatenate([ring_positions[key0], ring_positions[key1]], axis=0)
-                        bary = all_pts.mean(axis=0)
-                        rel0 = ring_positions[key0] - bary
-                        rel1 = ring_positions[key1] - bary
-                        twist = _ring_centre_twist(rel0, rel1, self.n, axis, degrees=degrees)
-                else:
-                    twist = float("nan")
-                row[f"twist_{r0}_{r1}"] = twist
-            rows.append(row)
-        return pd.DataFrame(rows)
-
     def flagged_pores(self, flag_column: str = "geom5") -> pd.DataFrame:
         """Return a summary of pores whose *flag_column* is set to 1.0.
 
         Each row of the returned :class:`~pandas.DataFrame` corresponds to
-        one (tomo_id, object_id, ring) group.  The ``order_sequence`` column
-        contains the sorted list of :attr:`order_column` values assigned to
+        one (tomo_id, object_id, ring) group.  The ``subunit_index_sequence`` column
+        contains the sorted list of :attr:`subunit_index_column` values assigned to
         subunits in that ring, making it easy to spot missing or duplicated
         slots.
 
         Parameters
         ----------
         flag_column : str, default ``'geom5'``
-            Column written by :meth:`assign_subunit_order` /
-            :meth:`_finalize_subunit_order` to mark ambiguous pores.
+            Column written by :meth:`assign_subunit_index` /
+            :meth:`_finalize_subunit_index` to mark ambiguous pores.
 
         Returns
         -------
         pandas.DataFrame
-            Columns: ``tomo_id``, ``object_id``, ``ring``, ``order_sequence``.
+            Columns: ``tomo_id``, ``object_id``, ``ring``, ``subunit_index_sequence``.
             Empty when no pores are flagged.
         """
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
         ring_col = self._ring_column
-        order_col = self.order_column
+        order_col = self.subunit_index_column
         df = self.motl.df
 
         if flag_column not in df.columns:
-            return pd.DataFrame(columns=["tomo_id", "object_id", "ring", "order_sequence"])
+            return pd.DataFrame(columns=["tomo_id", "object_id", "ring", "subunit_index_sequence"])
 
         flagged_mask = df[flag_column] == 1.0
         if not flagged_mask.any():
-            return pd.DataFrame(columns=["tomo_id", "object_id", "ring", "order_sequence"])
+            return pd.DataFrame(columns=["tomo_id", "object_id", "ring", "subunit_index_sequence"])
 
         rows: list[dict] = []
         for (tomo_id, object_id, ring), grp in df[flagged_mask].groupby(
@@ -6063,237 +6824,9 @@ class NPC(CnComplex):
                     "tomo_id": tomo_id,
                     "object_id": object_id,
                     "ring": ring,
-                    "order_sequence": sorted(grp[order_col].tolist()),
+                    "subunit_index_sequence": sorted(grp[order_col].tolist()),
                 }
             )
-        return pd.DataFrame(rows)
-
-    @gui_exposed(label="Subunit spacing", group="Statistics", order=50, returns="dataframe")
-    def get_subunit_spacing(
-        self,
-        *,
-        pixel_size: float = 1.0,
-        degrees: bool = True,
-        reference_ring: int | None = None,
-        include_flagged: bool = False,
-        flag_column: str = "geom5",
-    ) -> pd.DataFrame:
-        """Per-subunit spacing and twist between adjacent rings.
-
-        For each subunit order *k*, reports the Euclidean distance and
-        azimuthal twist between the corresponding subunit in each pair of
-        adjacent rings.  The per-pore summary numbers from
-        :meth:`ring_spacing` and :meth:`inter_ring_twist` remain available
-        as aggregate columns.
-
-        Ring centres are computed with :meth:`_compute_object_center`
-        (respects *center_method*).
-
-        Requires :meth:`merge` to have been called.
-
-        Parameters
-        ----------
-        pixel_size : float, default=1.0
-            Voxel size in physical units; distances are multiplied by this.
-        degrees : bool, default=True
-            Return twist angles in degrees when ``True``, radians otherwise.
-        reference_ring : int or None, default=None
-            Ring whose subunit order defines the iteration.  ``None`` uses
-            the first ring present in each pore.
-        include_flagged : bool, default=False
-            When ``False``, pores with *flag_column* == 1.0 are excluded from
-            the output.
-        flag_column : str, default ``'geom5'``
-            Column checked for the per-pore ambiguity flag.
-
-        Returns
-        -------
-        pandas.DataFrame
-            One row per (pore, subunit).  Columns:
-
-            - ``tomo_id``, ``object_id``, ``order_column`` (subunit index)
-            - ``spacing_{r0}_{r1}`` — Euclidean distance (voxels × pixel_size)
-              between subunit *k* in ring *r0* and ring *r1* for each ring pair,
-              including non-adjacent pairs
-            - ``twist_{r0}_{r1}`` — signed azimuthal angle (degrees) of
-              subunit *k* in ring *r1* relative to its position in ring *r0*,
-              measured from the ring-pair axis; one column per ring pair
-        """
-        if not self._rings_merged:
-            raise ValueError("get_subunit_spacing requires a merged NPC — call merge() first.")
-
-        tomo_col = self.tomo_id_column
-        aff_col = self.affiliation_column
-        ring_col = self._ring_column
-        order_col = self.order_column
-        df = self.motl.df
-        if not include_flagged and flag_column in df.columns:
-            _flagged = set(
-                map(tuple, df.loc[df[flag_column] == 1.0, [tomo_col, aff_col]].values.tolist())
-            )
-            if _flagged:
-                df = df[~df[[tomo_col, aff_col]].apply(tuple, axis=1).isin(_flagged)]
-        coord = self.motl.get_coordinates()
-        n_rings = len(self._ring_motls)
-        pairs = [tuple(sorted((a + 1, b + 1))) for a, b in mathutils.get_all_pairs(list(range(n_rings)))]
-
-        rows: list[dict] = []
-        for (tomo_id, object_id), pore_grp in df.groupby([tomo_col, aff_col]):
-            # Ring centres (respects center_method) and per-(ring, order) position map
-            ring_centres: dict[float, np.ndarray] = {}
-            for ring_id, rg in pore_grp.groupby(ring_col):
-                ring_motl_tmp = cryomotl.Motl(rg.copy())
-                centre_tmp, _ = self._compute_object_center(ring_motl_tmp)
-                ring_centres[float(ring_id)] = centre_tmp
-
-            pos_map: dict[tuple[float, float], np.ndarray] = {}
-            for global_i, row_s in pore_grp.iterrows():
-                pos_map[(float(row_s[ring_col]), float(row_s[order_col]))] = coord[global_i]
-
-            # Subunit orders defined by reference_ring (default: first ring present)
-            _ref = (
-                float(reference_ring)
-                if reference_ring is not None
-                else float(sorted(pore_grp[ring_col].unique())[0])
-            )
-            all_k = sorted(pore_grp.loc[pore_grp[ring_col] == _ref, order_col].unique())
-
-            for k in all_k:
-                row: dict = {
-                    tomo_col: float(tomo_id),
-                    aff_col: float(object_id),
-                    order_col: float(k),
-                }
-                for r0, r1 in pairs:
-                    key0 = (float(r0), float(k))
-                    key1 = (float(r1), float(k))
-                    if key0 in pos_map and key1 in pos_map:
-                        p0, p1 = pos_map[key0], pos_map[key1]
-                        row[f"spacing_{r0}_{r1}"] = float(np.linalg.norm(p1 - p0)) * pixel_size
-                        # Azimuthal twist: angle of p1 relative to p0 around the pore axis
-                        c0 = ring_centres.get(float(r0), np.zeros(3))
-                        c1 = ring_centres.get(float(r1), np.zeros(3))
-                        axis = c1 - c0
-                        axis_norm = float(np.linalg.norm(axis))
-                        if axis_norm > 1e-10:
-                            axis = axis / axis_norm
-                            rel0 = p0 - c0
-                            rel1 = p1 - c1
-                            proj0 = rel0 - np.dot(rel0, axis) * axis
-                            proj1 = rel1 - np.dot(rel1, axis) * axis
-                            n0 = float(np.linalg.norm(proj0))
-                            n1 = float(np.linalg.norm(proj1))
-                            if n0 > 1e-10 and n1 > 1e-10:
-                                twist_rad = geom.vector_angular_distance_signed(proj0 / n0, proj1 / n1, axis)
-                                row[f"twist_{r0}_{r1}"] = float(np.degrees(twist_rad)) if degrees else float(twist_rad)
-                            else:
-                                row[f"twist_{r0}_{r1}"] = float("nan")
-                        else:
-                            row[f"twist_{r0}_{r1}"] = float("nan")
-                    else:
-                        row[f"spacing_{r0}_{r1}"] = float("nan")
-                        row[f"twist_{r0}_{r1}"] = float("nan")
-                rows.append(row)
-
-        return pd.DataFrame(rows)
-
-    @gui_exposed(label="Subunit orientation", group="Statistics", order=51, returns="dataframe")
-    def get_subunit_orientation(
-        self,
-        *,
-        degrees: bool = True,
-        reference_ring: int | None = None,
-        include_flagged: bool = False,
-        flag_column: str = "geom5",
-    ) -> pd.DataFrame:
-        """Per-subunit orientation difference between ring pairs.
-
-        For each subunit order *k* matched across rings, reports the cone
-        (out-of-plane normal deviation) and in-plane (roll) differences between
-        each ring pair, via :func:`geom.cone_inplane_distance`.
-
-        Requires :meth:`merge` to have been called.
-
-        Parameters
-        ----------
-        degrees : bool, default=True
-            Return angles in degrees when ``True``, radians otherwise.
-        reference_ring : int or None, default=None
-            Ring whose subunit order defines the iteration.  ``None`` uses
-            the first ring present in each pore.
-        include_flagged : bool, default=False
-            When ``False``, pores with *flag_column* == 1.0 are excluded.
-        flag_column : str, default ``'geom5'``
-            Column checked for the per-pore ambiguity flag.
-
-        Returns
-        -------
-        pandas.DataFrame
-            One row per (pore, subunit).  Columns:
-
-            - ``tomo_id``, ``affiliation_column``, ``order_column``
-            - ``cone_{r0}_{r1}`` — cone (normal) angular difference for ring
-              pair; ``NaN`` when the subunit is absent in either ring
-            - ``inplane_{r0}_{r1}`` — in-plane (roll) angular difference;
-              ``NaN`` when the subunit is absent in either ring
-        """
-        if not self._rings_merged:
-            raise ValueError(
-                "get_subunit_orientation requires a merged NPC — call merge() first."
-            )
-
-        tomo_col = self.tomo_id_column
-        aff_col = self.affiliation_column
-        ring_col = self._ring_column
-        order_col = self.order_column
-        df = self.motl.df
-        if not include_flagged and flag_column in df.columns:
-            _flagged = set(
-                map(tuple, df.loc[df[flag_column] == 1.0, [tomo_col, aff_col]].values.tolist())
-            )
-            if _flagged:
-                df = df[~df[[tomo_col, aff_col]].apply(tuple, axis=1).isin(_flagged)]
-        all_angles = self.motl.get_angles()
-        n_rings = len(self._ring_motls)
-        pairs = [
-            tuple(sorted((a + 1, b + 1)))
-            for a, b in mathutils.get_all_pairs(list(range(n_rings)))
-        ]
-
-        rows: list[dict] = []
-        for (tomo_id, object_id), pore_grp in df.groupby([tomo_col, aff_col]):
-            angles_map: dict[tuple[float, float], np.ndarray] = {}
-            for global_i, row_s in pore_grp.iterrows():
-                angles_map[(float(row_s[ring_col]), float(row_s[order_col]))] = all_angles[global_i]
-
-            _ref = (
-                float(reference_ring)
-                if reference_ring is not None
-                else float(sorted(pore_grp[ring_col].unique())[0])
-            )
-            all_k = sorted(pore_grp.loc[pore_grp[ring_col] == _ref, order_col].unique())
-
-            for k in all_k:
-                row: dict = {
-                    tomo_col: float(tomo_id),
-                    aff_col: float(object_id),
-                    order_col: float(k),
-                }
-                for r0, r1 in pairs:
-                    key0 = (float(r0), float(k))
-                    key1 = (float(r1), float(k))
-                    if key0 in angles_map and key1 in angles_map:
-                        cone_val, inplane_val = geom.cone_inplane_distance(
-                            angles_map[key0], angles_map[key1],
-                            degrees=degrees, cyclic_symmetry=1,
-                        )
-                        row[f"cone_{r0}_{r1}"] = float(np.asarray(cone_val).flat[0])
-                        row[f"inplane_{r0}_{r1}"] = float(np.asarray(inplane_val).flat[0])
-                    else:
-                        row[f"cone_{r0}_{r1}"] = float("nan")
-                        row[f"inplane_{r0}_{r1}"] = float("nan")
-                rows.append(row)
-
         return pd.DataFrame(rows)
 
     @gui_exposed(label="Subunit stats", group="Statistics", order=55, returns="dataframe")
@@ -6311,7 +6844,7 @@ class NPC(CnComplex):
         Computes local geometry for every particle in the NPC motl.
         Prev/next neighbours within each ring are found with
         :meth:`nnana.NearestNeighbors.ordered_pairs` (circular topology),
-        which respects the assigned subunit order rather than distance.
+        which respects the assigned subunit indices rather than distance.
         Ring centres use :meth:`_compute_object_center` (respects
         *center_method*).  Z-normals use :func:`geom.euler_angles_to_normals`.
 
@@ -6321,19 +6854,19 @@ class NPC(CnComplex):
             One row per particle.  Columns:
 
             - ``tomo_id``, ``object_id``, ring_column (post-merge),
-              ``order_column``, ``subtomo_id``
+              ``subunit_index_column``, ``subtomo_id``
             - ``distance_to_centre`` — distance from particle to ring
               centre (voxels × *pixel_size*)
             - ``opposite_distance`` — 3-D Euclidean distance between
               diametrically opposite subunits (same ``object_id``/ring,
-              orders differing by ``n // 2``); ``NaN`` when ``n`` is odd
+              indices differing by ``n // 2``); ``NaN`` when ``n`` is odd
               or the opposite subunit is absent
             - ``tilt_angle`` — angle (°) between particle z-normal and
               ring mean normal
             - ``central_angle_prev``, ``central_angle_next`` — unsigned
               angle (°) at ring centre between this particle and each
-              order-adjacent neighbour; ``NaN`` when the required
-              order-adjacent slot is absent and *gaps* is ``'full'``
+              index-adjacent neighbour; ``NaN`` when the required
+              index-adjacent slot is absent and *gaps* is ``'full'``
             - ``interior_angle`` — unsigned vertex angle (°) at this particle:
               the angle between the two edge vectors meeting at this vertex,
               in [0°, 180°], direction-independent.  ``NaN`` when either
@@ -6360,14 +6893,14 @@ class NPC(CnComplex):
         gaps : ``'full'`` or ``'holey'``, default ``'full'``
             Passed directly to :meth:`nnana.NearestNeighbors.ordered_pairs`.
 
-            ``'full'`` — a subunit pairs only with the subunit whose order
-            value is exactly order ± 1 (circular).  If that slot is absent
+            ``'full'`` — a subunit pairs only with the subunit whose subunit
+            index is exactly its own ± 1 (circular).  If that slot is absent
             (milling-truncated edge, internal gap), there is no neighbour on
             that side and the corresponding ``central_angle_*`` and
             ``interior_angle`` are ``NaN``.
 
             ``'holey'`` — a subunit pairs with the previous/next *present*
-            subunit by order, skipping over absent slots.  Every subunit in
+            subunit by subunit index, skipping over absent slots.  Every subunit in
             a ring with ≥ 2 present members gets both neighbours, so no
             gap-``NaN`` arises; the angle across a skipped gap reflects the
             actual spacing, not the ideal 45°.
@@ -6380,7 +6913,7 @@ class NPC(CnComplex):
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
         ring_col = self._ring_column
-        order_col = self.order_column
+        order_col = self.subunit_index_column
         df = self.motl.df
         if not include_flagged and flag_column in df.columns:
             _flagged = set(
@@ -6414,7 +6947,7 @@ class NPC(CnComplex):
             n_norm = float(np.linalg.norm(mean_normal))
             mean_normal = mean_normal / n_norm if n_norm > 1e-10 else mean_normal
 
-            # Prev/next by order within ring (topology-aware, respects missing subunits)
+            # Prev/next by subunit index within ring (topology-aware, respects missing subunits)
             n_pts = len(idx)
             next_local_map: dict[int, int] = {}
             prev_local_map: dict[int, int] = {}
@@ -6427,7 +6960,7 @@ class NPC(CnComplex):
                     ring_size=self.n,
                     gaps=gaps_arg,
                 )
-                sids = ring_grp["subtomo_id"].to_numpy()
+                sids = ring_grp[self.subtomo_id_column].to_numpy()
                 sid_to_local = {float(s): i for i, s in enumerate(sids)}
                 for _, pr in op.df.iterrows():
                     qi = sid_to_local.get(float(pr["qp_subtomo_id"]))
@@ -6496,7 +7029,7 @@ class NPC(CnComplex):
                     tomo_col: float(tomo_id),
                     aff_col: float(object_id),
                     order_col: float(row_s[order_col]),
-                    "subtomo_id": float(row_s["subtomo_id"]),
+                    "subtomo_id": float(row_s[self.subtomo_id_column]),
                     "distance_to_centre": dist,
                     "opposite_distance": opp_dist,
                     "tilt_angle": tilt,
@@ -6533,10 +7066,10 @@ class NPC(CnComplex):
         Cross-ring coherence columns are added per pore; they are ``NaN`` for pores
         with only one ring present:
 
-        * ``coherence_corr`` — mean pairwise Spearman of the per-order
+        * ``coherence_corr`` — mean pairwise Spearman of the per-index
           ``central_angle_next`` vectors across rings.
-        * ``argmax_agreement`` — fraction of rings whose widest-gap order equals the
-          most common widest-gap order across the pore's rings.
+        * ``argmax_agreement`` — fraction of rings whose widest-gap subunit index equals the
+          most common widest-gap subunit index across the pore's rings.
 
         Parameters
         ----------
@@ -6560,7 +7093,7 @@ class NPC(CnComplex):
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
         ring_col = getattr(self, "_ring_column", None)
-        order_col = self.order_column
+        order_col = self.subunit_index_column
 
         full_n = self.n
         nominal = 360.0 / full_n
@@ -6923,25 +7456,30 @@ class NPC(CnComplex):
         *,
         tomo_id_column: "MotlColumn" = "tomo_id",
         affiliation_column: "MotlColumn" = "object_id",
+        subunit_index_column: "MotlColumn" = "geom2",
     ) -> "cryomotl.Motl":
         """Merge NPC chains whose radius-shift centres are within *npc_radius*.
 
         Restores the original ``NPC.merge_subunits`` behaviour: centre
         estimation uses :meth:`_center_by_radius_shift` so that even single-
         particle chains correctly converge to the ring centre, enabling robust
-        merging.  Sets ``geom1`` to the merged group count and recomputes
-        ``geom2`` (subunit index) for any rings that were actually merged.
+        merging.  Writes only *affiliation_column* and, for the rings that were
+        actually merged, the subunit index in *subunit_index_column*.  The
+        subunit count per ring is reported by :meth:`occupancy`.
 
         Parameters
         ----------
         motl : cryomotl.Motl
-            Chain-traced motl with *affiliation_column* and ``geom2`` populated.
+            Chain-traced motl with *affiliation_column* and
+            *subunit_index_column* populated.
         npc_radius : float
             Distance threshold for merging (voxels).
         tomo_id_column : str, default='tomo_id'
             Column holding the tomogram identifier.
         affiliation_column : str, default='object_id'
             Column holding the ring/object identifier.
+        subunit_index_column : MotlColumn, default='geom2'
+            Column holding the 1-based within-ring subunit index.
 
         Returns
         -------
@@ -6962,16 +7500,21 @@ class NPC(CnComplex):
             centers_motl = cryomotl.Motl()
             if central_points:
                 ca = np.vstack(central_points)
-                centers_motl.fill({
-                    "x": ca[:, 0], "y": ca[:, 1], "z": ca[:, 2],
-                    tomo_id_column: t, affiliation_column: obj_ids,
-                })
+                centers_motl.fill(
+                    {
+                        "x": ca[:, 0],
+                        "y": ca[:, 1],
+                        "z": ca[:, 2],
+                        tomo_id_column: t,
+                        affiliation_column: obj_ids,
+                    }
+                )
                 centers_motl.renumber_particles()
             centers_motl.df.fillna(0.0, inplace=True)
 
             changed_objects: list[float] = []
             if centers_motl.df.shape[0] > 1:
-                center_stats = nnana.get_nn_stats(centers_motl, centers_motl)
+                center_stats = nnana.get_nn_stats(centers_motl, centers_motl, column_name=tomo_id_column)
                 if any(center_stats["distance"] <= npc_radius):
                     center_idx, nn_idx_list = nnana.get_nn_within_distance(centers_motl, npc_radius)
                     for i, pos in enumerate(center_idx):
@@ -6981,19 +7524,16 @@ class NPC(CnComplex):
                             o_id2 = centers_motl.df.loc[centers_motl.df.index[j], affiliation_column]
                             tm.df.loc[tm.df[affiliation_column] == o_id2, affiliation_column] = o_id1
 
-            tm.df["geom1"] = tm.df.groupby(affiliation_column)[affiliation_column].transform("count")
             for o in changed_objects:
                 om = tm.get_motl_subset(column_values=o, column_name=affiliation_column, reset_index=True)
                 s_idx = NPC._assign_subunit_index(om, npc_radius)
-                tm.df.loc[tm.df[affiliation_column] == o, "geom2"] = s_idx
+                tm.df.loc[tm.df[affiliation_column] == o, subunit_index_column] = s_idx
 
             tm.df[affiliation_column] = tm.df[affiliation_column].rank(method="dense").astype(int)
-            motl.df.loc[motl.df[tomo_id_column] == t, [affiliation_column, "geom1", "geom2"]] = tm.df[
-                [affiliation_column, "geom1", "geom2"]
-            ].values
+            written = [affiliation_column, subunit_index_column]
+            motl.df.loc[motl.df[tomo_id_column] == t, written] = tm.df[written].values
 
         motl.df.reset_index(inplace=True, drop=True)
-        motl.df["geom1"] = motl.df.groupby([tomo_id_column, affiliation_column])[affiliation_column].transform("count")
         motl.df[affiliation_column] = motl.df[affiliation_column].rank(method="dense").astype(int)
         return motl
 
@@ -7006,11 +7546,12 @@ class NPC(CnComplex):
         symmetry: int = 8,
         tomo_id_column: "MotlColumn" = "tomo_id",
         affiliation_column: "MotlColumn" = "object_id",
+        subunit_index_column: "MotlColumn" = "geom2",
     ) -> tuple[pd.DataFrame, "cryomotl.Motl"]:
         """Compute the mean NPC diameter per ring using opposite-subunit pairs.
 
         Matches subunit pairs ``(i, i + symmetry//2)`` using the 1-based
-        index stored in ``geom2``.  Objects with no matching opposite pair
+        index stored in *subunit_index_column*.  Objects with no matching opposite pair
         are omitted from the summary and receive ``NaN`` in *store_column*.
         Unlike :meth:`CnComplex.diameter`, no circumradius fallback is
         applied.
@@ -7019,8 +7560,8 @@ class NPC(CnComplex):
         ----------
         input_motl : MotlSource
             Particle list with NPC subunits.  Requires *affiliation_column*
-            for ring affiliation and ``geom2`` for the 1-based subunit order
-            within each ring.
+            for ring affiliation and *subunit_index_column* for the 1-based
+            subunit index within each ring.
         pixel_size : float, default=1.0
             Ångström-per-voxel scale factor applied to all distances.
         store_column : MotlColumn, default='geom4'
@@ -7033,6 +7574,8 @@ class NPC(CnComplex):
             Column holding the tomogram identifier.
         affiliation_column : str, default='object_id'
             Column holding the ring/object identifier.
+        subunit_index_column : MotlColumn, default='geom2'
+            Column holding the 1-based within-ring subunit index.
 
         Returns
         -------
@@ -7059,8 +7602,8 @@ class NPC(CnComplex):
             pair_rows: list[list[int]] = []
             for i in range(1, half + 1):
                 j = i + half
-                mask_i = group["geom2"] == i
-                mask_j = group["geom2"] == j
+                mask_i = group[subunit_index_column] == i
+                mask_j = group[subunit_index_column] == j
                 if mask_i.any() and mask_j.any():
                     pair_rows.append(
                         [
@@ -7091,7 +7634,7 @@ class NPC(CnComplex):
         return summary_df, motl_out
 
     @staticmethod
-    def get_centers_as_motl(
+    def compute_centers(
         tomo_motl: MotlSource,
         *,
         tomo_id: float | None = None,
@@ -7129,7 +7672,7 @@ class NPC(CnComplex):
         """
         if radius is None:
             raise ValueError(
-                "NPC.get_centers_as_motl: radius is required — pass radius="
+                "NPC.compute_centers: radius is required — pass radius="
             )
         motl = cryomotl.Motl.load(tomo_motl)
         centers: list[np.ndarray] = []
@@ -7181,7 +7724,7 @@ class NPC(CnComplex):
         input_motls : list of MotlSource
             At least two ring-motls to merge.
         npc_radius : float
-            Ring radius in voxels, forwarded to :meth:`get_centers_as_motl`.
+            Ring radius in voxels, forwarded to :meth:`compute_centers`.
         distance_threshold : float, default=40
             Maximum centre-to-centre distance (voxels) for two rings from
             different motls to be considered the same NPC.
@@ -7229,8 +7772,12 @@ class NPC(CnComplex):
                 tm1 = ring_motls[i[0]].get_motl_subset(column_values=[t], column_name=tomo_id_column, reset_index=True)
                 tm2 = ring_motls[i[1]].get_motl_subset(column_values=[t], column_name=tomo_id_column, reset_index=True)
                 if tm2.df.shape[0] > 0:
-                    centers1 = NPC.get_centers_as_motl(tm1, radius=npc_radius)
-                    centers2 = NPC.get_centers_as_motl(tm2, radius=npc_radius)
+                    centers1 = NPC.compute_centers(
+                        tm1, radius=npc_radius, tomo_id_column=tomo_id_column, affiliation_column=affiliation_column
+                    )
+                    centers2 = NPC.compute_centers(
+                        tm2, radius=npc_radius, tomo_id_column=tomo_id_column, affiliation_column=affiliation_column
+                    )
 
                     _, obj1_idx, distances, _ = nnana.find_nn_indices(
                         centers2.get_coordinates(),
@@ -7260,14 +7807,14 @@ class NPC(CnComplex):
 def _npc_per_ring_wrapper(method_name: str):
     """Build a routing wrapper for one entry in ``NPC._DISPATCH_PER_RING``.
 
-    Pre-merge direct calls (``_rings_merged=False`` and ``_per_ring_active=False``)
-    are routed through :meth:`NPC.per_ring`.  All other calls (post-merge, or
-    calls from inside an active per_ring dispatch) fall through to the base-class
-    implementation via ``super(NPC, self)``.
+    Pre-merge calls (``_rings_merged=False``) are routed through
+    :meth:`CnComplex.per_ring`, which runs the method on each ring object.
+    Post-merge calls fall through to the base-class implementation via
+    ``super(NPC, self)``.
     """
 
     def _method(self, *args, **kwargs):
-        if not self._rings_merged and not self._per_ring_active:
+        if not self._rings_merged:
             return self.per_ring(method_name, *args, **kwargs)
         return getattr(super(NPC, self), method_name)(*args, **kwargs)
 
@@ -7276,7 +7823,7 @@ def _npc_per_ring_wrapper(method_name: str):
     return _method
 
 
-for _name in NPC._DISPATCH_PER_RING - {"occupancy", "get_object_stats", "assign_subunit_order"}:
+for _name in NPC._DISPATCH_PER_RING - {"occupancy", "get_object_stats", "assign_subunit_index"}:
     # Skip static/class methods — they don't dispatch on self.motl
     if not isinstance(NPC.__dict__.get(_name), (staticmethod, classmethod)):
         setattr(NPC, _name, _npc_per_ring_wrapper(_name))
@@ -7339,7 +7886,7 @@ class BlockDefinition:
         site's vector.
     fold : int or None, default=None
         Cyclic symmetry order.  When set, must equal :attr:`n_sites`.  Used
-        by :meth:`PleomorphicSurface.get_sites_as_motl` to delegate to
+        by :meth:`ContactGraph.get_sites_as_motl` to delegate to
         :meth:`~cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits` so
         that the returned positions also carry per-symmetry-copy orientations.
         Set automatically by :meth:`cyclic`; ``None`` for non-cyclic
@@ -7511,15 +8058,16 @@ class BlockDefinition:
 
 
 # =============================================================================
-# PleomorphicSurface for discrete surfaces (Mesh and OrientedPointCloud)
+# PleomorphicAssembly for discrete surfaces (Mesh and OrientedPointCloud)
 # =============================================================================
 
 
 class BlockLayer:
     """Block layer bundling blocks motl, block definition, column names, and scale.
 
-    Validates inputs once; pass the result to :class:`PleomorphicSurface` as
-    ``block_layer=``.  Use :meth:`PleomorphicSurface.from_blocks` instead of
+    Validates inputs once; pass the result to :class:`PleomorphicAssembly` or
+    :class:`ParametricAssembly` as ``block_layer=``.  Use
+    :meth:`ContactGraph.from_blocks` (on either class) instead of
     constructing :class:`BlockLayer` directly unless you already have a
     :class:`BlockDefinition`.
 
@@ -7531,7 +8079,7 @@ class BlockLayer:
     block_definition : BlockDefinition or dict[float, BlockDefinition]
         Geometry for one block type, or a mapping from block-type float values
         to per-type definitions.
-    block_type_column : MotlColumn, default="class"
+    block_type_column : MotlColumn, default="geom1"
         Column in *blocks* that identifies the block class when
         *block_definition* is a dict.
     block_id_column : MotlColumn, default="geom3"
@@ -7544,22 +8092,31 @@ class BlockLayer:
         Column written with the 1-based site index.
     site_type_column : MotlColumn, default="geom2"
         Column written with the integer site-type code.
-    assembly_id_column : MotlColumn, default="geom4"
-        Column written with the assembly (connected-component) id in the faces
-        motl produced by :meth:`~PleomorphicSurface.get_faces_as_motl`.
-    face_id_column : MotlColumn, default="geom5"
+    face_id_column : MotlColumn, default="geom4"
         Column written with the face id in both the faces motl
-        (:meth:`~PleomorphicSurface.get_faces_as_motl`) and the missing-block
-        motl (:meth:`~PleomorphicSurface.get_missing_block_motl`).
-    face_size_column : MotlColumn, default="score"
+        (:meth:`~PleomorphicAssembly.get_faces_as_motl`) and the missing-block
+        motl (:meth:`~PleomorphicAssembly.get_missing_block_motl`).
+    face_size_column : MotlColumn, default="geom5"
         Column written with the face size (vertex count) in the faces motl.
-    source_block_count_column : MotlColumn, default="subtomo_mean"
+    source_block_count_column : MotlColumn, default="geom2"
         Column written with the number of distinct source blocks in the gaps
-        motl (:meth:`~PleomorphicSurface.get_gaps_as_motl`).
+        motl (:meth:`~PleomorphicAssembly.get_gaps_as_motl`).
     pixel_size : float, default=1.0
         Ångström-per-voxel scale factor.
     tomo_id_column : MotlColumn, default="tomo_id"
         Column identifying the tomogram each block belongs to.
+    subtomo_id_column : MotlColumn, default="subtomo_id"
+        Column identifying each block; its values must be unique.
+    class_column : MotlColumn, default="class"
+        Column holding the class label of each block, carried to the face,
+        face-vertex and inferred-block motls.
+    origin_column : MotlColumn, default="geom5"
+        Column that tags each block's origin: 1 real, 2 inferred by
+        :meth:`~PleomorphicAssembly.infer_missing_blocks`, 3 recovered by
+        :meth:`~PleomorphicAssembly.recover_orientations`.
+    source_id_column : MotlColumn, default="geom4"
+        Column that :meth:`~PleomorphicAssembly.adopt_recovered` writes with
+        the id a recovered block had in its candidate motl.
     bonding_tolerance : float or None, default=None
         Half-width (voxels) of the acceptance window around the nominal
         centre-to-centre bonding distance ``2 × |site_shift|``.  ``None``
@@ -7573,14 +8130,9 @@ class BlockLayer:
         spacing check.  ``None`` derives to ``0.125 × (360 / n)`` at call
         time (giving 15° for C3, 7.5° for C6, 1.15° for C39).  Raises
         ``ValueError`` if the resolved value is ``>= 0.5 × (360 / n)``.
-    merge_tolerance : float or None, default=None
-        Half-width (voxels) used as the default merge distance in
-        :meth:`~PleomorphicSurface.infer_missing_blocks` when
-        *merge_distance* is ``None``.  ``None`` derives to
-        ``0.5 × |site_shift|``.
     clean_distance : float or None, default=None
         Default clean distance (voxels) for
-        :meth:`~PleomorphicSurface.infer_missing_blocks`.  ``None``
+        :meth:`~PleomorphicAssembly.infer_missing_blocks`.  ``None``
         derives to ``0.4 × |site_shift|`` at call time.
 
     Raises
@@ -7601,24 +8153,26 @@ class BlockLayer:
         affiliation_column: MotlColumn = "object_id",
         site_index_column: MotlColumn = "geom1",
         site_type_column: MotlColumn = "geom2",
-        assembly_id_column: MotlColumn = "geom4",
         face_id_column: MotlColumn = "geom4",
         face_size_column: MotlColumn = "geom5",
         source_block_count_column: MotlColumn = "geom2",
         pixel_size: float = 1.0,
         tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
+        class_column: MotlColumn = "class",
+        origin_column: MotlColumn = "geom5",
+        source_id_column: MotlColumn = "geom4",
         max_cycle_length: int = 25,
         bonding_tolerance: float | None = None,
         tip_tolerance: float | None = None,
         angle_tolerance: float | None = None,
-        merge_tolerance: float | None = None,
         clean_distance: float | None = None,
     ) -> None:
         if block_definition is None:
             raise ValueError("block_definition is required.")
         loaded = cryomotl.Motl.load(blocks)
-        if loaded.df["subtomo_id"].duplicated().any():
-            raise ValueError("subtomo_id must be unique in the blocks motl.")
+        if loaded.df[subtomo_id_column].duplicated().any():
+            raise ValueError(f"{subtomo_id_column} must be unique in the blocks motl.")
         if isinstance(block_definition, dict):
             cls_vals = set(loaded.df[block_type_column].unique())
             missing = cls_vals - set(block_definition.keys())
@@ -7634,17 +8188,19 @@ class BlockLayer:
         self.affiliation_column: MotlColumn = affiliation_column
         self.site_index_column: MotlColumn = site_index_column
         self.site_type_column: MotlColumn = site_type_column
-        self.assembly_id_column: MotlColumn = assembly_id_column
         self.face_id_column: MotlColumn = face_id_column
         self.face_size_column: MotlColumn = face_size_column
         self.source_block_count_column: MotlColumn = source_block_count_column
         self.pixel_size: float = float(pixel_size)
         self.tomo_id_column: MotlColumn = tomo_id_column
+        self.subtomo_id_column: MotlColumn = subtomo_id_column
+        self.class_column: MotlColumn = class_column
+        self.origin_column: MotlColumn = origin_column
+        self.source_id_column: MotlColumn = source_id_column
         self.max_cycle_length: int = int(max_cycle_length)
         self.bonding_tolerance: float | None = float(bonding_tolerance) if bonding_tolerance is not None else None
         self.tip_tolerance: float | None = float(tip_tolerance) if tip_tolerance is not None else None
         self.angle_tolerance: float | None = float(angle_tolerance) if angle_tolerance is not None else None
-        self.merge_tolerance: float | None = float(merge_tolerance) if merge_tolerance is not None else None
         self.clean_distance: float | None = float(clean_distance) if clean_distance is not None else None
 
         defs_list = list(block_definition.values()) if isinstance(block_definition, dict) else [block_definition]
@@ -7656,298 +8212,106 @@ class BlockLayer:
                 self._allowed_pairs.add(frozenset({a, b}))
 
 
-class PleomorphicSurface:
-    """Pleomorphic lattice assembly: an envelope layer and/or a block layer.
+class ContactGraph:
+    """Block layer and its contact graph: site matching, patches, faces and their statistics.
 
-    The two layers are independent.
+    The one implementation of the block layer (:meth:`from_blocks`,
+    :meth:`_init_block_layer`), of the graph :meth:`connect` builds, of its
+    ``scope='all'`` rebuild after blocks are inferred, and of the statistics
+    read from it.  A class carrying a block layer subclasses it and calls
+    :meth:`_init_block_layer` from its ``__init__``, which accepts
+    ``block_layer=`` as a keyword; :class:`PleomorphicAssembly` and
+    :class:`ParametricAssembly` do so.
 
-    * **Envelope layer** (``_surface``): a :class:`Mesh` or
-      :class:`OrientedPointCloud` representing the outer surface.  Access it
-      via :attr:`surface`; check its presence with :attr:`has_envelope`.
-    * **Block layer** (``blocks``): a :class:`~cryocat.core.cryomotl.Motl`
-      together with a :class:`BlockDefinition` (or dict thereof) describing the
-      building-block geometry.  Access it via :attr:`blocks`; check its
-      presence with :attr:`has_blocks`.
+    :meth:`_init_block_layer` sets these attributes.
 
-    Either layer can be absent, but at least one is required.
-
-    **Blocks-only example** (no envelope, using the plain-parameter builder)::
-
-        ps = PleomorphicSurface.from_blocks(
-            motl, symmetry="C3", site_length=9.0, site_elevation=-10.0
-        )
-        ps.connect(max_distance=4.0)
-        mesh = ps.envelope_from_faces()
-        ps.surface = mesh          # attach the envelope for polarity queries
-
-    For the GUI entry point see :meth:`from_blocks`.  For direct construction
-    see :meth:`__init__`.
+    * Block layer (:attr:`_BLOCK_LAYER_FIELDS`): ``blocks``,
+      ``block_definition``, the column names, ``_block_pixel_size``,
+      ``max_cycle_length``, the tolerances, ``site_type_codes`` and
+      ``_allowed_pairs``.
+    * Graph state (:attr:`_GRAPH_STATE_FIELDS`), written by :meth:`connect`:
+      ``_site_table``, ``_faces``, ``_max_distance``, ``_face_method``,
+      ``_added`` and ``_all_state``.
     """
 
-    def __init__(
-        self,
-        surface: Mesh | OrientedPointCloud | "PleomorphicSurface" | None = None,
-        *,
-        block_layer: "BlockLayer | None" = None,
-    ) -> None:
-        """Create a :class:`PleomorphicSurface`.
+    _BLOCK_LAYER_FIELDS: tuple[tuple[str, str], ...] = (
+        ("blocks", "blocks"),
+        ("block_definition", "block_definition"),
+        ("block_type_column", "block_type_column"),
+        ("block_id_column", "block_id_column"),
+        ("site_index_column", "site_index_column"),
+        ("site_type_column", "site_type_column"),
+        ("face_id_column", "face_id_column"),
+        ("face_size_column", "face_size_column"),
+        ("source_block_count_column", "source_block_count_column"),
+        ("_block_pixel_size", "pixel_size"),
+        ("tomo_id_column", "tomo_id_column"),
+        ("affiliation_column", "affiliation_column"),
+        ("subtomo_id_column", "subtomo_id_column"),
+        ("class_column", "class_column"),
+        ("_origin_column", "origin_column"),
+        ("_source_id_column", "source_id_column"),
+        ("site_type_codes", "site_type_codes"),
+        ("_allowed_pairs", "_allowed_pairs"),
+        ("max_cycle_length", "max_cycle_length"),
+        ("bonding_tolerance", "bonding_tolerance"),
+        ("tip_tolerance", "tip_tolerance"),
+        ("angle_tolerance", "angle_tolerance"),
+        ("clean_distance", "clean_distance"),
+    )
+    """Block-layer fields as ``(assembly attribute, BlockLayer attribute)`` pairs."""
 
-        Parameters
-        ----------
-        surface : Mesh, OrientedPointCloud, PleomorphicSurface, or None
-            Envelope surface.  When a :class:`PleomorphicSurface` is passed,
-            its ``_surface`` is extracted; if *block_layer* is also ``None``,
-            the block layer is copied from it as well.  ``None`` means no
-            envelope.
-        block_layer : BlockLayer or None, default=None
-            Pre-built block layer carrying the blocks motl, block definition,
-            column names, and scale factor.  Use :meth:`from_blocks` to
-            construct one without building a :class:`BlockLayer` directly.
+    _GRAPH_STATE_FIELDS: tuple[str, ...] = (
+        "_site_table", "_faces", "_max_distance", "_face_method", "_added", "_all_state",
+    )
+    """Contact-graph state written by :meth:`connect`."""
 
-        Raises
-        ------
-        TypeError
-            If neither *surface* nor *block_layer* is provided, or if
-            *surface* has an unsupported type.
+    def _init_block_layer(self, source: "BlockLayer | ContactGraph | None") -> None:
+        """Set the block layer from *source*, or to its defaults when it is ``None``.
 
-        Notes
-        -----
-        Envelope operations that return a new object (e.g. ``crop``,
-        ``extract_region``, ``convex_hull``, ``oversample``, and
-        ``apply_vertex_mask`` / ``flip_normals`` / ``refine_normals`` /
-        ``remove_nonfinite_vertices`` with ``inplace=False``) return an
-        envelope-only :class:`PleomorphicSurface`; the block layer is not
-        carried.  :meth:`envelope_from_faces` returns a bare
-        :class:`~cryocat.core.surface.Mesh` built from the block layer;
-        attach it with ``ps.surface = mesh``.
+        The block-layer fields are always deep-copied, so this object never
+        shares data with *source*: methods that rewrite the blocks motl
+        (e.g. ``unify_polarity``) leave a :class:`BlockLayer` passed in
+        unchanged.  When *source* is another assembly, the graph state is
+        copied with them; otherwise the graph state starts empty.
         """
-        self._surface: Mesh | OrientedPointCloud | None = None
-        # --- Block layer defaults ---
         self.blocks: cryomotl.Motl | None = None
         self.block_definition: BlockDefinition | dict[float, BlockDefinition] | None = None
         self.block_type_column: MotlColumn = "geom1"
         self.block_id_column: MotlColumn = "geom3"
         self.site_index_column: MotlColumn = "geom1"
         self.site_type_column: MotlColumn = "geom2"
-        self.assembly_id_column: MotlColumn = "geom4"
         self.face_id_column: MotlColumn = "geom4"
         self.face_size_column: MotlColumn = "geom5"
         self.source_block_count_column: MotlColumn = "geom2"
         self._block_pixel_size: float = 1.0
         self.tomo_id_column: MotlColumn = "tomo_id"
         self.affiliation_column: MotlColumn = "object_id"
-        self._site_table: pd.DataFrame | None = None
-        self._faces: list[dict] | None = None
+        self.subtomo_id_column: MotlColumn = "subtomo_id"
+        self.class_column: MotlColumn = "class"
         self.site_type_codes: dict[str, int] = {}
         self._allowed_pairs: set[frozenset] = set()
-        self._symmetry: str | None = None
-        self._symmetry_column: MotlColumn | None = None
-        self._site_shift: np.ndarray | None = None
-        self._max_distance: float | None = None
-        self._origin_column: MotlColumn = "geom5"
-        self._source_id_column: MotlColumn = "geom4"
-        self._added: cryomotl.Motl | None = None
-        self._all_state: dict | None = None
-        self._face_method: str = "cycle_basis"
         self.max_cycle_length: int = 25
         self.bonding_tolerance: float | None = None
         self.tip_tolerance: float | None = None
         self.angle_tolerance: float | None = None
-        self.merge_tolerance: float | None = None
         self.clean_distance: float | None = None
-        self._envelopes: dict[tuple[float, float], "Mesh"] | None = None
-        self._envelope_scope: str | None = None
-        self._block_class: float = 1.0
-        self._block_class_non_unique: bool = False
-
-        # --- Envelope ---
-        if isinstance(surface, PleomorphicSurface):
-            self._surface = surface._surface
-            if block_layer is None:
-                self.blocks = copy.deepcopy(surface.blocks)
-                self.block_definition = copy.deepcopy(surface.block_definition)
-                self.block_type_column = surface.block_type_column
-                self.block_id_column = surface.block_id_column
-                self.site_index_column = surface.site_index_column
-                self.site_type_column = surface.site_type_column
-                self.assembly_id_column = surface.assembly_id_column
-                self.face_id_column = surface.face_id_column
-                self.face_size_column = surface.face_size_column
-                self.source_block_count_column = surface.source_block_count_column
-                self._block_pixel_size = surface._block_pixel_size
-                self.tomo_id_column = surface.tomo_id_column
-                self.affiliation_column = surface.affiliation_column
-                self._site_table = copy.deepcopy(surface._site_table)
-                self._faces = copy.deepcopy(surface._faces)
-                self.site_type_codes = copy.deepcopy(surface.site_type_codes)
-                self._allowed_pairs = copy.deepcopy(surface._allowed_pairs)
-                self._symmetry = surface._symmetry
-                self._symmetry_column = surface._symmetry_column
-                self._site_shift = copy.deepcopy(surface._site_shift)
-                self._max_distance = surface._max_distance
-                self._origin_column = surface._origin_column
-                self._source_id_column = surface._source_id_column
-                self._added = copy.deepcopy(surface._added)
-                self._all_state = copy.deepcopy(surface._all_state)
-                self._face_method = surface._face_method
-                self.max_cycle_length = surface.max_cycle_length
-                self.bonding_tolerance = surface.bonding_tolerance
-                self.tip_tolerance = surface.tip_tolerance
-                self.angle_tolerance = surface.angle_tolerance
-                self.merge_tolerance = surface.merge_tolerance
-                self.clean_distance = surface.clean_distance
-                self._envelopes = copy.deepcopy(surface._envelopes)
-                self._envelope_scope = surface._envelope_scope
-                self._block_class = surface._block_class
-                self._block_class_non_unique = surface._block_class_non_unique
-        elif surface is not None:
-            if not isinstance(surface, (Mesh, OrientedPointCloud)):
-                raise TypeError(
-                    f"Unsupported surface type: {type(surface)}. "
-                    "Must be Mesh, OrientedPointCloud, or PleomorphicSurface."
-                )
-            self._surface = surface
-
-        if self._surface is None and self.blocks is None and block_layer is None:
-            raise TypeError(
-                "PleomorphicSurface requires at least a surface " "(Mesh or OrientedPointCloud) or a block_layer."
-            )
-
-        # --- Block layer ---
-        if block_layer is not None:
-            self.blocks = block_layer.blocks
-            self.block_definition = block_layer.block_definition
-            self.block_type_column = block_layer.block_type_column
-            self.block_id_column = block_layer.block_id_column
-            self.site_index_column = block_layer.site_index_column
-            self.site_type_column = block_layer.site_type_column
-            self.assembly_id_column = block_layer.assembly_id_column
-            self.face_id_column = block_layer.face_id_column
-            self.face_size_column = block_layer.face_size_column
-            self.source_block_count_column = block_layer.source_block_count_column
-            self._block_pixel_size = block_layer.pixel_size
-            self.tomo_id_column = block_layer.tomo_id_column
-            self.affiliation_column = block_layer.affiliation_column
-            self.site_type_codes = block_layer.site_type_codes
-            self._allowed_pairs = block_layer._allowed_pairs
-            self.max_cycle_length = block_layer.max_cycle_length
-            self.bonding_tolerance = block_layer.bonding_tolerance
-            self.tip_tolerance = block_layer.tip_tolerance
-            self.angle_tolerance = block_layer.angle_tolerance
-            self.merge_tolerance = block_layer.merge_tolerance
-            self.clean_distance = block_layer.clean_distance
-            surf_ps = getattr(self._surface, "pixel_size", None)
-            if surf_ps is not None:
-                surf_scalar = float(np.mean(np.asarray(surf_ps, dtype=float)))
-                if abs(self._block_pixel_size - surf_scalar) > 1e-9:
-                    import warnings as _warn
-
-                    _warn.warn(
-                        f"block_layer.pixel_size ({self._block_pixel_size}) differs from "
-                        f"surface pixel_size ({surf_scalar}). "
-                        f"Block-layer computations use {self._block_pixel_size}; "
-                        f"surface measurements use the mesh's own scale.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-
-        self._compute_block_class()
-
-    def _compute_block_class(self) -> None:
-        """Set ``_block_class`` and ``_block_class_non_unique`` from the blocks motl.
-
-        ``_block_class`` is the single non-zero class value (or 1 as fallback
-        when the motl is absent or all entries have class=0).
-        ``_block_class_non_unique`` is True when two or more distinct non-zero
-        class values are present; functions that build new motls from specific
-        block subsets then look up the class from the participating blocks
-        directly and print a note.
-        """
-        if self.blocks is None or len(self.blocks.df) == 0:
-            self._block_class = 1.0
-            self._block_class_non_unique = False
+        self._origin_column: MotlColumn = "geom5"
+        self._source_id_column: MotlColumn = "geom4"
+        self._site_table: pd.DataFrame | None = None
+        self._faces: list[dict] | None = None
+        self._max_distance: float | None = None
+        self._face_method: str = "cycle_basis"
+        self._added: cryomotl.Motl | None = None
+        self._all_state: dict | None = None
+        if source is None:
             return
-        cls_col = self.blocks.df["class"].astype(float) if "class" in self.blocks.df.columns else None
-        if cls_col is None:
-            self._block_class = 1.0
-            self._block_class_non_unique = False
-            return
-        non_zero = cls_col[cls_col != 0.0].unique()
-        if len(non_zero) == 0:
-            self._block_class = 1.0
-            self._block_class_non_unique = False
-        elif len(non_zero) == 1:
-            self._block_class = float(non_zero[0])
-            self._block_class_non_unique = False
-        else:
-            mode_cls = float(Counter(cls_col[cls_col != 0.0].values.tolist()).most_common(1)[0][0])
-            self._block_class = mode_cls
-            self._block_class_non_unique = True
-
-    @property
-    def block_pixel_size(self) -> float:
-        """Ångström-per-voxel scale factor for block-layer computations.
-
-        Block-layer methods (contact distances, face centroids, site
-        annotations) multiply voxel-space coordinates by this value.  It never
-        overwrites the mesh's own scale; surface measurements use
-        ``self.surface.pixel_size`` directly.
-        """
-        return self._block_pixel_size
-
-    @property
-    def pixel_size(self) -> float:
-        """Ångström-per-voxel scale for block-layer computations.
-
-        Alias for :attr:`block_pixel_size`.  The mesh's own scale is
-        stored on the :class:`~cryocat.core.surface.Mesh` object and is
-        never overwritten by this value.
-        """
-        return self._block_pixel_size
-
-    @pixel_size.setter
-    def pixel_size(self, value: float) -> None:
-        self._block_pixel_size = float(value)
-
-    @property
-    def surface(self) -> Mesh | OrientedPointCloud:
-        """The wrapped :class:`Mesh` or :class:`OrientedPointCloud`.
-
-        Raises
-        ------
-        ValueError
-            If this instance has no envelope (was created with blocks only).
-        """
-        if self._surface is None:
-            raise ValueError(
-                "PleomorphicSurface has no envelope (Mesh/OrientedPointCloud). "
-                "Check has_envelope before accessing .surface."
-            )
-        return self._surface
-
-    @surface.setter
-    def surface(self, value: Mesh | OrientedPointCloud | None) -> None:
-        self._surface = value
-
-    @property
-    def has_envelope(self) -> bool:
-        """True when an envelope surface (Mesh or OrientedPointCloud) is present."""
-        return self._surface is not None
-
-    @property
-    def has_blocks(self) -> bool:
-        """True when a block layer is present."""
-        return self.blocks is not None
-
-    @property
-    def has_envelopes(self) -> bool:
-        """True when per-object envelopes have been built."""
-        return self._envelopes is not None and len(self._envelopes) > 0
-
-    @property
-    def envelopes(self) -> "dict[tuple[float, float], Mesh] | None":
-        """Per-object mesh envelopes keyed by ``(tomo_id, assembly_id)``, or ``None``."""
-        return self._envelopes
+        from_assembly = isinstance(source, ContactGraph)
+        for attr, layer_attr in self._BLOCK_LAYER_FIELDS:
+            setattr(self, attr, copy.deepcopy(getattr(source, attr if from_assembly else layer_attr)))
+        if from_assembly:
+            for attr in self._GRAPH_STATE_FIELDS:
+                setattr(self, attr, copy.deepcopy(getattr(source, attr)))
 
     @classmethod
     def from_blocks(
@@ -7960,15 +8324,14 @@ class PleomorphicSurface:
         affiliation_column: MotlColumn = "object_id",
         pixel_size: float = 1.0,
         tomo_id_column: MotlColumn = "tomo_id",
-    ) -> "PleomorphicSurface":
-        """Build a :class:`PleomorphicSurface` from a block motl without
-        constructing a :class:`BlockDefinition` directly.
+    ) -> Self:
+        """Build the assembly from a block motl without constructing a :class:`BlockDefinition` directly.
 
         This is the GUI entry point and the preferred programmatic path.
-        Builds a :class:`BlockLayer` internally and passes it to
-        :meth:`__init__`.  Example::
+        Builds a :class:`BlockLayer` internally and passes it to the class's
+        ``__init__`` as ``block_layer=``.  Example::
 
-            PleomorphicSurface.from_blocks("trimers.em", symmetry="C3", site_shift=[-5, 0, 0])
+            PleomorphicAssembly.from_blocks("trimers.em", symmetry="C3", site_shift=[-5, 0, 0])
 
         For a single symmetry (``symmetry_column=None``), one
         :meth:`BlockDefinition.cyclic` definition is created with *symmetry*
@@ -7981,8 +8344,11 @@ class PleomorphicSurface:
         :meth:`BlockDefinition.cyclic` definition is created per unique fold,
         using the shared *site_shift*.
 
-        The result has no envelope layer; use :meth:`envelope_from_faces` after
-        :meth:`connect` if one is needed.
+        The result has no surface: no envelope on a
+        :class:`PleomorphicAssembly` (use
+        :meth:`~PleomorphicAssembly.envelope_from_faces` after :meth:`connect`
+        if one is needed), no analytic surfaces on a
+        :class:`ParametricAssembly`.
 
         Parameters
         ----------
@@ -8003,14 +8369,14 @@ class PleomorphicSurface:
             Column whose value identifies which assembly each block belongs to.
             Blocks with different values are never connected by :meth:`connect`.
         pixel_size : float, default=1.0
-            Pixel size passed to :class:`PleomorphicSurface`.
+            Pixel size of the block layer.
         tomo_id_column : MotlColumn, default="tomo_id"
             Column identifying the tomogram each block belongs to.
 
         Returns
         -------
-        PleomorphicSurface
-            A blocks-only surface (no envelope).
+        PleomorphicAssembly or ParametricAssembly
+            An instance of the class it is called on, carrying blocks only.
 
         Raises
         ------
@@ -8021,17 +8387,19 @@ class PleomorphicSurface:
         -----
         *blocks* is loaded with :func:`~cryocat.core.cryomotl.Motl.load`,
         which copies a :class:`~cryocat.core.cryomotl.Motl` instance; the
-        input is never modified.  :meth:`unify_polarity`,
-        :meth:`store_block_stats` and :meth:`store_block_stat` change only
-        this object's copy (angles, or the requested columns; row order and
-        index are kept).  Use :meth:`get_blocks_as_motl` to obtain the
-        current state, e.g. unified orientations for averaging or for
-        building a new assembly.
+        input is never modified.  On a :class:`PleomorphicAssembly`,
+        :meth:`~PleomorphicAssembly.unify_polarity`,
+        :meth:`~PleomorphicAssembly.store_block_stats` and
+        :meth:`~PleomorphicAssembly.store_block_stat` change only this
+        object's copy (angles, or the requested columns; row order and index
+        are kept).  Use :meth:`~PleomorphicAssembly.get_blocks_as_motl` to
+        obtain the current state, e.g. unified orientations for averaging or
+        for building a new assembly.
         """
         shift = geom.as_triplet(site_shift)
         if symmetry_column is None:
             block_def: BlockDefinition | dict[float, BlockDefinition] = BlockDefinition.cyclic(symmetry, shift)
-            ps = cls(
+            return cls(
                 block_layer=BlockLayer(
                     blocks,
                     block_def,
@@ -8040,9 +8408,6 @@ class PleomorphicSurface:
                     tomo_id_column=tomo_id_column,
                 )
             )
-            ps._symmetry = symmetry
-            ps._site_shift = shift
-            return ps
         else:
             loaded = cryomotl.Motl.load(blocks)
             raw_vals = loaded.df[symmetry_column].unique()
@@ -8056,7 +8421,7 @@ class PleomorphicSurface:
                         f"non-integer or <1 value {val!r}. All values must be positive integers."
                     )
                 block_def_dict[fval] = BlockDefinition.cyclic(n, shift)
-            ps = cls(
+            return cls(
                 block_layer=BlockLayer(
                     loaded,
                     block_def_dict,
@@ -8066,24 +8431,21 @@ class PleomorphicSurface:
                     tomo_id_column=tomo_id_column,
                 )
             )
-            ps._symmetry_column = symmetry_column
-            ps._site_shift = shift
-            return ps
 
-    @staticmethod
-    def _unwrap_surface(surface: Mesh | OrientedPointCloud | "PleomorphicSurface") -> Mesh | OrientedPointCloud:
-        """Return the concrete Mesh / OrientedPointCloud behind an optional wrapper."""
-        if isinstance(surface, PleomorphicSurface):
-            return surface.surface
-        if isinstance(surface, (Mesh, OrientedPointCloud)):
-            return surface
-        raise TypeError(
-            f"Unsupported surface type: {type(surface)}. " "Must be Mesh, OrientedPointCloud, or PleomorphicSurface."
-        )
+    @property
+    def has_blocks(self) -> bool:
+        """True when a block layer is present."""
+        return self.blocks is not None
 
-    # ------------------------------------------------------------------
-    # Block-assembly methods
-    # ------------------------------------------------------------------
+    @property
+    def block_pixel_size(self) -> float:
+        """Ångström-per-voxel scale factor for block-layer computations.
+
+        Block-layer methods (contact distances, face centroids, site
+        annotations) multiply voxel-space coordinates by this value.  It never
+        overwrites a surface's own scale.
+        """
+        return self._block_pixel_size
 
     @gui_exposed(label="Sites as motl", group="Lattice setup", order=40, returns="motl", category="pleomorphic-op")
     def get_sites_as_motl(self, scope: Literal["original", "inferred", "all"] = "original") -> "cryomotl.Motl":
@@ -8162,6 +8524,7 @@ class PleomorphicSurface:
                     sort_vectors=False,
                     orientation="keep",
                     start_index=1,
+                    subtomo_id_column=self.subtomo_id_column,
                 )
                 for i, site in enumerate(definition.sites):
                     code = self.site_type_codes[site.site_type]
@@ -8195,7 +8558,7 @@ class PleomorphicSurface:
         if aff_col != bid_col:
             _aff_map: dict[float, float] = dict(
                 zip(
-                    _blks.df["subtomo_id"].astype(float).values,
+                    _blks.df[self.subtomo_id_column].astype(float).values,
                     _blks.df[aff_col].astype(float).values,
                 )
             )
@@ -8204,317 +8567,6 @@ class PleomorphicSurface:
         result = cryomotl.Motl(combined_df)
         result.renumber_particles()
         return result
-
-    def _get_flip_rot(self, global_idx: int) -> srot:
-        """Return the 180° flip rotation for block at *global_idx* in blocks.df."""
-        if isinstance(self.block_definition, dict):
-            cls_val = self.blocks.df.iloc[global_idx][self.block_type_column]
-            defn = self.block_definition[cls_val]
-        else:
-            defn = self.block_definition
-        v = np.array(defn.sites[defn.flip_site - 1].vector)
-        a_unnorm = np.array([v[0], v[1], 0.0])
-        a = a_unnorm / np.linalg.norm(a_unnorm)
-        return srot.from_rotvec(np.pi * a)
-
-    @gui_exposed(label="Unify polarity", group="Lattice setup", order=20, returns="none", category="pleomorphic-op")
-    def unify_polarity(
-        self,
-        max_block_distance: float | None = None,
-        reference: Literal["neighbours", "centroid", "envelope"] = "neighbours",
-        *,
-        _annotate_fn: Callable | None = None,
-    ) -> int:
-        """Align block polarities so neighbours point the same way.
-
-        Works per tomogram.  For ``reference='neighbours'`` or ``'centroid'``,
-        uses a BFS walk over the block-proximity graph (edges between blocks
-        whose centres are within *max_block_distance*): when a newly visited
-        block has ``z_n · z_m < 0`` relative to its BFS parent, it is flipped
-        by the 180° rotation around the in-plane part of its flip_site vector.
-
-        For ``reference='centroid'``, each connected component is additionally
-        aligned so that its blocks point outward from the component centroid
-        (``Σ z · (c - g) > 0``).
-
-        For ``reference='envelope'``, an envelope surface must be attached
-        (via ``ps.surface = ...``).  *max_block_distance* may be ``None``.
-
-        Parameters
-        ----------
-        max_block_distance : float or None, default=None
-            Maximum centre-to-centre distance (voxels) for two blocks to be
-            considered neighbours.  Required for ``'neighbours'`` and
-            ``'centroid'``; ignored for ``'envelope'``.
-        reference : {"neighbours", "centroid", "envelope"}, default="neighbours"
-            Alignment reference.
-        _annotate_fn : Callable or None, default=None
-            Private override for the envelope annotation callable.  When
-            ``None`` and ``reference='envelope'``, falls back to
-            :meth:`annotate_with_envelope`.
-
-        Returns
-        -------
-        int
-            Number of blocks whose final orientation differs from the initial one.
-
-        Raises
-        ------
-        ValueError
-            If no block layer is present, *reference* is invalid,
-            *max_block_distance* is None for a BFS-based reference, or
-            ``reference='envelope'`` is requested but no envelope is attached.
-        """
-        if self.blocks is None:
-            raise ValueError("unify_polarity requires a block layer (blocks=...).")
-        if reference not in ("neighbours", "centroid", "envelope"):
-            raise ValueError(f"reference must be 'neighbours', 'centroid', or 'envelope'; got {reference!r}.")
-        if reference != "envelope" and max_block_distance is None:
-            raise ValueError(f"max_block_distance is required for reference='{reference}'.")
-        if reference == "envelope" and _annotate_fn is None:
-            if not self.has_envelope:
-                raise ValueError(
-                    "unify_polarity(reference='envelope') requires an envelope surface "
-                    "(attach one via ps.surface = ... or pass a mesh to PleomorphicSurface)."
-                )
-            _annotate_fn = self.annotate_with_envelope
-
-        N = len(self.blocks.df)
-
-        angles_arr = self.blocks.get_angles().astype(float)
-        all_R_init = srot.from_euler("zxz", angles_arr, degrees=True)
-        R_list: list[srot] = [all_R_init[i] for i in range(N)]
-        z_unit = np.array([0.0, 0.0, 1.0])
-        z_arr = np.array([R_list[i].apply(z_unit) for i in range(N)])
-        all_c = self.blocks.get_coordinates()
-
-        for tomo_val in sorted(self.blocks.df[self.tomo_id_column].unique()):
-            tomo_mask = (self.blocks.df[self.tomo_id_column] == tomo_val).values
-            tomo_pos = np.where(tomo_mask)[0]
-            n_tomo = len(tomo_pos)
-            if n_tomo == 0:
-                continue
-
-            if reference == "envelope":
-                annot = _annotate_fn(tomo_id=float(tomo_val))
-                bid_to_global: dict[float, int] = {float(self.blocks.df.iloc[i]["subtomo_id"]): i for i in tomo_pos}
-                for _, arow in annot.iterrows():
-                    if float(arow["normal_angle"]) > 90.0:
-                        g_idx = bid_to_global[float(arow["block_id"])]
-                        flip_rot = self._get_flip_rot(g_idx)
-                        R_list[g_idx] = R_list[g_idx] * flip_rot
-                        z_arr[g_idx] = -z_arr[g_idx]
-                continue
-
-            c_tomo = all_c[tomo_pos]
-            qp_idx_list, nn_idx_list = nnana.find_nn_within_radius(c_tomo, c_tomo, max_block_distance, remove_qp=True)
-
-            adj: list[list[int]] = [[] for _ in range(n_tomo)]
-            for qi, nns in zip(qp_idx_list, nn_idx_list):
-                for ni in nns:
-                    if ni not in adj[qi]:
-                        adj[qi].append(ni)
-                    if qi not in adj[ni]:
-                        adj[ni].append(qi)
-
-            subtomo_ids = self.blocks.df["subtomo_id"].values[tomo_pos]
-            order = np.argsort(subtomo_ids)
-
-            visited = np.zeros(n_tomo, dtype=bool)
-            components: list[list[int]] = []
-
-            for start_local in order:
-                if visited[start_local]:
-                    continue
-                component: list[int] = []
-                queue = [int(start_local)]
-                visited[start_local] = True
-                while queue:
-                    m_local = queue.pop(0)
-                    component.append(m_local)
-                    m_global = int(tomo_pos[m_local])
-                    for n_local in adj[m_local]:
-                        if not visited[n_local]:
-                            visited[n_local] = True
-                            n_global = int(tomo_pos[n_local])
-                            if np.dot(z_arr[n_global], z_arr[m_global]) < 0:
-                                flip_rot = self._get_flip_rot(n_global)
-                                R_list[n_global] = R_list[n_global] * flip_rot
-                                z_arr[n_global] = -z_arr[n_global]
-                            queue.append(n_local)
-                components.append(component)
-
-            if reference == "centroid":
-                for comp in components:
-                    g = c_tomo[comp].mean(axis=0)
-                    total = sum(np.dot(z_arr[tomo_pos[i]], c_tomo[i] - g) for i in comp)
-                    if total < 0:
-                        for i in comp:
-                            g_i = int(tomo_pos[i])
-                            flip_rot = self._get_flip_rot(g_i)
-                            R_list[g_i] = R_list[g_i] * flip_rot
-                            z_arr[g_i] = -z_arr[g_i]
-
-        final_angles = np.array([R_list[i].as_euler("zxz", degrees=True) for i in range(N)])
-        self.blocks.df["phi"] = final_angles[:, 0]
-        self.blocks.df["theta"] = final_angles[:, 1]
-        self.blocks.df["psi"] = final_angles[:, 2]
-
-        changed = 0
-        for i in range(N):
-            rel_angle = np.linalg.norm((R_list[i].inv() * all_R_init[i]).as_rotvec())
-            if rel_angle > 1e-9:
-                changed += 1
-
-        self._site_table = None
-        self._faces = None
-        self._all_state = None
-        return changed
-
-    def get_inverted_blocks(self, max_block_distance: float, *, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
-        """Return blocks whose orientation disagrees with a majority of their neighbours.
-
-        Uses the same proximity graph and z-normal comparison as
-        :meth:`unify_polarity` (``reference='neighbours'``).  Does **not**
-        modify the motl.
-
-        A block is considered inverted when ``n_disagree > n_agree``, i.e.
-        more than half of its proximity neighbours have a negative dot product
-        with its z-normal (``z_block · z_neighbour < 0``).
-
-        Parameters
-        ----------
-        max_block_distance : float
-            Maximum centre-to-centre distance (voxels) for two blocks to be
-            considered neighbours.  Identical definition to
-            :meth:`unify_polarity`.
-        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
-            ``'original'`` uses :attr:`blocks` only.  ``'all'`` uses lattice +
-            inferred blocks combined.  ``'inferred'`` uses only inferred blocks.
-
-        Returns
-        -------
-        pandas.DataFrame
-            One row per inverted block, empty when none are found.
-
-            ============================  =============================================
-            ``tomo_id``                   tomogram identifier
-            *affiliation_column*          assembly affiliation (from
-                                          :attr:`affiliation_column`)
-            ``subtomo_id``                particle identifier
-            ``n_neighbours``              total proximity neighbours
-            ``n_agree``                   neighbours with ``z·z > 0``
-            ``n_disagree``                neighbours with ``z·z < 0``
-            ``angle_to_mean_normal_deg``  angle (°) between this block's z-normal
-                                          and the mean z-normal of its neighbours
-            ============================  =============================================
-
-        Raises
-        ------
-        ValueError
-            If no block layer is present, or *scope* is invalid.
-        """
-        _blks = self._blocks_for_scope(scope)
-
-        N = len(_blks.df)
-        angles_arr = _blks.get_angles().astype(float)
-        all_R = srot.from_euler("zxz", angles_arr, degrees=True)
-        z_unit = np.array([0.0, 0.0, 1.0])
-        z_arr = np.array([all_R[i].apply(z_unit) for i in range(N)])
-        all_c = _blks.get_coordinates()
-
-        tomo_col = self.tomo_id_column
-        aff_col = self.affiliation_column
-        rows: list[dict] = []
-
-        for tomo_val in sorted(_blks.df[tomo_col].unique()):
-            tomo_mask = (_blks.df[tomo_col] == tomo_val).values
-            tomo_pos = np.where(tomo_mask)[0]
-            n_tomo = len(tomo_pos)
-            if n_tomo == 0:
-                continue
-
-            c_tomo = all_c[tomo_pos]
-            qp_idx_list, nn_idx_list = nnana.find_nn_within_radius(c_tomo, c_tomo, max_block_distance, remove_qp=True)
-
-            adj: list[list[int]] = [[] for _ in range(n_tomo)]
-            for qi, nns in zip(qp_idx_list, nn_idx_list):
-                for ni in nns:
-                    if ni not in adj[qi]:
-                        adj[qi].append(ni)
-                    if qi not in adj[ni]:
-                        adj[ni].append(qi)
-
-            for local_i in range(n_tomo):
-                neighbours = adj[local_i]
-                if not neighbours:
-                    continue
-                g_i = int(tomo_pos[local_i])
-                z_i = z_arr[g_i]
-
-                n_agree = sum(1 for nl in neighbours if np.dot(z_i, z_arr[int(tomo_pos[nl])]) > 0)
-                n_disagree = sum(1 for nl in neighbours if np.dot(z_i, z_arr[int(tomo_pos[nl])]) < 0)
-                if n_disagree <= n_agree:
-                    continue
-
-                mean_z = np.mean([z_arr[int(tomo_pos[nl])] for nl in neighbours], axis=0)
-                norm_mz = np.linalg.norm(mean_z)
-                if norm_mz < 1e-9:
-                    angle_deg = 0.0
-                else:
-                    angle_deg = float(np.degrees(np.arccos(np.clip(np.dot(z_i, mean_z / norm_mz), -1.0, 1.0))))
-
-                block_row = _blks.df.iloc[g_i]
-                rows.append(
-                    {
-                        tomo_col: tomo_val,
-                        aff_col: float(block_row[aff_col]),
-                        "subtomo_id": float(block_row["subtomo_id"]),
-                        "n_neighbours": len(neighbours),
-                        "n_agree": n_agree,
-                        "n_disagree": n_disagree,
-                        "angle_to_mean_normal_deg": angle_deg,
-                    }
-                )
-
-        return pd.DataFrame(rows)
-
-    def get_inverted_blocks_as_motl(self, max_block_distance: float, *, scope: Literal["original", "inferred", "all"] = "original") -> "cryomotl.Motl":
-        """Return inverted blocks as a :class:`~cryocat.core.cryomotl.Motl`.
-
-        Calls :meth:`get_inverted_blocks` and filters the selected block pool
-        to those rows.  Returns an empty :class:`~cryocat.core.cryomotl.Motl`
-        when no inverted blocks are found.
-
-        Parameters
-        ----------
-        max_block_distance : float
-            Passed directly to :meth:`get_inverted_blocks`.
-        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
-            Passed directly to :meth:`get_inverted_blocks`.
-
-        Returns
-        -------
-        cryomotl.Motl
-            Subset of the selected block pool containing only the inverted
-            blocks, reset to a clean 1-based ``subtomo_id`` index.
-
-        Raises
-        ------
-        ValueError
-            If no block layer is present, or *scope* is invalid.
-        """
-        _blks = self._blocks_for_scope(scope)
-        inv_df = self.get_inverted_blocks(max_block_distance, scope=scope)
-        if inv_df.empty:
-            return cryomotl.Motl(pd.DataFrame(columns=cryomotl.Motl.motl_columns))
-        inv_ids = set(inv_df["subtomo_id"].values)
-        mask = _blks.df["subtomo_id"].isin(inv_ids)
-        return cryomotl.Motl(_blks.df[mask].copy().reset_index(drop=True))
-
-    # ------------------------------------------------------------------
-    # Contact graph
-    # ------------------------------------------------------------------
 
     @gui_exposed(label="Connect", group="Lattice setup", order=30, returns="none", category="pleomorphic-op")
     def connect(
@@ -8527,12 +8579,12 @@ class PleomorphicSurface:
         """Build and cache the contact graph from the block layer.
 
         Matches sites across blocks within *max_distance* voxels, assigns
-        each block to a connected-component assembly, and computes faces using
+        each block to a connected-component patch, and computes faces using
         the selected method.
 
         After calling this method the following getters become available:
         :meth:`get_contact_stats`, :meth:`get_face_stats`,
-        :meth:`get_block_stats`, :meth:`get_assembly_stats`.
+        :meth:`get_block_stats`, :meth:`get_object_stats`.
 
         Parameters
         ----------
@@ -8620,7 +8672,7 @@ class PleomorphicSurface:
         # Lookup effective_n_sites per block_id (cyclic: cyclic order; non-cyclic: n_sites)
         def _n_sites_for_block(bid: float) -> int:
             if isinstance(self.block_definition, dict):
-                block_row = _blks.df[_blks.df["subtomo_id"] == bid]
+                block_row = _blks.df[_blks.df[self.subtomo_id_column] == bid]
                 cls_val = float(block_row.iloc[0][self.block_type_column])
                 return self.block_definition[cls_val].effective_n_sites
             return self.block_definition.effective_n_sites
@@ -8628,7 +8680,7 @@ class PleomorphicSurface:
         # Block centres
         block_coords_by_id: dict[float, np.ndarray] = {}
         for _, brow in _blks.df.iterrows():
-            bid = float(brow["subtomo_id"])
+            bid = float(brow[self.subtomo_id_column])
             sx = float(brow.get("shift_x", 0.0))
             sy = float(brow.get("shift_y", 0.0))
             sz = float(brow.get("shift_z", 0.0))
@@ -8673,7 +8725,7 @@ class PleomorphicSurface:
         # Map subtomo_id → affiliation value; -1 for any block not in blocks.df
         _aff_map: dict[float, float] = dict(
             zip(
-                _blks.df["subtomo_id"].astype(float).values,
+                _blks.df[self.subtomo_id_column].astype(float).values,
                 _blks.df[aff_col].astype(float).values,
             )
         )
@@ -8681,11 +8733,11 @@ class PleomorphicSurface:
         site_table = site_table.sort_values(by=[tomo_col, aff_col, "block_id", "site"]).reset_index(drop=True)
 
         # ----------------------------------------------------------------
-        # 2. Per-tomogram matching and assembly
+        # 2. Per-tomogram matching and patches
         # ----------------------------------------------------------------
         partner_arr = np.full(H, -1, dtype=np.intp)
         n_candidates_arr = np.zeros(H, dtype=np.intp)
-        assembly_id_arr = np.full(H, -1, dtype=float)
+        patch_id_arr = np.full(H, -1, dtype=float)
         face_id_arr = np.full(H, -1, dtype=np.intp)
 
         face_records: list[dict] = []
@@ -8756,38 +8808,38 @@ class PleomorphicSurface:
                 partner_arr[global_i] = t_idx[partner_local[local_i]] if partner_local[local_i] >= 0 else -1
                 n_candidates_arr[global_i] = n_cand_local[local_i]
 
-            # ---- Assemblies ----
-            qp_ids_asm: list[float] = []
-            nn_ids_asm: list[float] = []
+            # ---- Patches ----
+            qp_ids_patch: list[float] = []
+            nn_ids_patch: list[float] = []
             for local_i in range(n_t):
                 lp = partner_local[local_i]
                 if lp >= 0:
-                    qp_ids_asm.append(float(block_t[local_i]))
-                    nn_ids_asm.append(float(block_t[lp]))
+                    qp_ids_patch.append(float(block_t[local_i]))
+                    nn_ids_patch.append(float(block_t[lp]))
 
             block_ids_tomo = np.unique(block_t)
-            block_assembly: dict[float, int] = {}
+            block_patch: dict[float, int] = {}
 
-            if qp_ids_asm:
-                components = _clustering.connected_component_clusters(qp_ids_asm, nn_ids_asm, min_size=1)
-                next_asm = 1
+            if qp_ids_patch:
+                components = _clustering.connected_component_clusters(qp_ids_patch, nn_ids_patch, min_size=1)
+                next_patch = 1
                 in_component: set = set()
                 for comp in components:
                     comp_ids = set(comp.nodes())
                     for bid in comp_ids:
-                        block_assembly[float(bid)] = next_asm
+                        block_patch[float(bid)] = next_patch
                     in_component.update(comp_ids)
-                    next_asm += 1
+                    next_patch += 1
                 for bid in block_ids_tomo:
                     if bid not in in_component:
-                        block_assembly[bid] = next_asm
-                        next_asm += 1
+                        block_patch[bid] = next_patch
+                        next_patch += 1
             else:
                 for k, bid in enumerate(sorted(block_ids_tomo), start=1):
-                    block_assembly[bid] = k
+                    block_patch[bid] = k
 
             for local_i, global_i in enumerate(t_idx):
-                assembly_id_arr[global_i] = float(block_assembly.get(block_t[local_i], -1))
+                patch_id_arr[global_i] = float(block_patch.get(block_t[local_i], -1))
 
             face_local = np.full(n_t, -1, dtype=np.intp)
             face_walks: dict[int, list[int]] = {}
@@ -9008,13 +9060,13 @@ class PleomorphicSurface:
 
             for fid, local_hedges in sorted(face_walks.items()):
                 global_hedges = [int(t_idx[li]) for li in local_hedges]
-                asm_id = float(block_assembly.get(float(block_t[local_hedges[0]]), -1))
+                patch_id = float(block_patch.get(float(block_t[local_hedges[0]]), -1))
                 face_records.append(
                     {
                         tomo_col: tomo_val,
                         aff_col: aff_val,
                         "face_id": fid,
-                        "assembly_id": asm_id,
+                        "patch_id": patch_id,
                         "half_edges": global_hedges,
                     }
                 )
@@ -9024,7 +9076,7 @@ class PleomorphicSurface:
         # ----------------------------------------------------------------
         site_table["partner"] = partner_arr
         site_table["n_candidates"] = n_candidates_arr
-        site_table["assembly_id"] = assembly_id_arr
+        site_table["patch_id"] = patch_id_arr
         site_table["face_id"] = face_id_arr
 
         if scope != "all":
@@ -9067,7 +9119,7 @@ class PleomorphicSurface:
             real_df.loc[_unset, _oc] = 1.0
         added_df = self._added.df.copy()
         merged_df = pd.concat([real_df, added_df], ignore_index=True)
-        merged_df["subtomo_id"] = np.arange(1, len(merged_df) + 1, dtype=float)
+        merged_df[self.subtomo_id_column] = np.arange(1, len(merged_df) + 1, dtype=float)
         type_col = self.block_type_column
         zero_mask = merged_df[type_col] == 0.0
         if zero_mask.any():
@@ -9133,8 +9185,8 @@ class PleomorphicSurface:
             combined = pd.concat([keep_df, new_df], ignore_index=True)
         if len(combined) > 0:
             self._added = cryomotl.Motl(combined)
-            _next_id = int(self.blocks.df["subtomo_id"].max()) + 1
-            self._added.df["subtomo_id"] = [float(_next_id + i) for i in range(len(self._added.df))]
+            _next_id = int(self.blocks.df[self.subtomo_id_column].max()) + 1
+            self._added.df[self.subtomo_id_column] = [float(_next_id + i) for i in range(len(self._added.df))]
         else:
             self._added = None
 
@@ -9160,7 +9212,7 @@ class PleomorphicSurface:
             # _blocks_for_scope("all") places original blocks first, renumbered 1..N_orig.
             _orig_blk_df = self.blocks.df
             _orig_subid_to_new: dict[float, int] = {
-                float(_orig_blk_df.iloc[_i]["subtomo_id"]): _i + 1
+                float(_orig_blk_df.iloc[_i][self.subtomo_id_column]): _i + 1
                 for _i in range(len(_orig_blk_df))
             }
 
@@ -9203,7 +9255,7 @@ class PleomorphicSurface:
                     tomo_col: _tv,
                     aff_col: _av,
                     "face_id": _fid_ctr[_k],
-                    "assembly_id": _orig_ff["assembly_id"],
+                    "patch_id": _orig_ff["patch_id"],
                     "half_edges": _new_hes,
                 })
 
@@ -9221,7 +9273,7 @@ class PleomorphicSurface:
                     tomo_col: _tv,
                     aff_col: _av,
                     "face_id": _fid_ctr[_k],
-                    "assembly_id": _all_ff["assembly_id"],
+                    "patch_id": _all_ff["patch_id"],
                     "half_edges": _all_ff["half_edges"],
                 }
                 _union_faces.append(_rec)
@@ -9243,10 +9295,6 @@ class PleomorphicSurface:
         else:
             self._all_state = None
 
-    # ------------------------------------------------------------------
-    # Statistics getters
-    # ------------------------------------------------------------------
-
     @gui_exposed(
         label="Contact stats", group="Lattice statistics", order=10, returns="dataframe", category="pleomorphic-op"
     )
@@ -9264,7 +9312,7 @@ class PleomorphicSurface:
         -------
         pandas.DataFrame
             Columns: ``tomo_id``, ``block_id``, ``site``, ``site_type``,
-            ``partner_block_id``, ``partner_site``, ``assembly_id``,
+            ``partner_block_id``, ``partner_site``, ``patch_id``,
             ``face_id``, ``n_candidates``, ``site_distance``,
             ``block_distance``, ``bend_angle``, ``label_offset``,
             ``mismatch_x``, ``mismatch_y``, ``mismatch_z``.
@@ -9291,7 +9339,7 @@ class PleomorphicSurface:
                     "site_type",
                     "partner_block_id",
                     "partner_site",
-                    "assembly_id",
+                    "patch_id",
                     "face_id",
                     "n_candidates",
                     "site_distance",
@@ -9308,7 +9356,7 @@ class PleomorphicSurface:
         angles_all = _blocks.get_angles().astype(float)
         all_R = srot.from_euler("zxz", angles_all, degrees=True)
         block_to_row: dict[float, int] = {
-            float(_blocks.df.iloc[i]["subtomo_id"]): i for i in range(len(_blocks.df))
+            float(_blocks.df.iloc[i][self.subtomo_id_column]): i for i in range(len(_blocks.df))
         }
         z_unit = np.array([0.0, 0.0, 1.0])
 
@@ -9350,7 +9398,7 @@ class PleomorphicSurface:
                     "site_type": st.at[h, "site_type"],
                     "partner_block_id": block_p,
                     "partner_site": int(st.at[p, "site"]),
-                    "assembly_id": float(st.at[h, "assembly_id"]),
+                    "patch_id": float(st.at[h, "patch_id"]),
                     "face_id": int(st.at[h, "face_id"]),
                     "n_candidates": int(st.at[h, "n_candidates"]),
                     "site_distance": site_dist,
@@ -9363,6 +9411,1009 @@ class PleomorphicSurface:
                 }
             )
         return pd.DataFrame(rows)
+
+    @gui_exposed(
+        label="Face stats", group="Lattice statistics", order=20, returns="dataframe", category="pleomorphic-op"
+    )
+    def get_face_stats(self, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
+        """Return one row per closed face.
+
+        Faces reflect **connectivity only** — the undirected block contact graph.
+        A block whose orientation is inverted relative to its neighbours keeps
+        its bonds, so it does not change the face count or topology (χ is
+        unaffected).  Use :meth:`get_inverted_blocks` to identify such blocks
+        before or after connecting.
+
+        All columns are derived directly from the contact graph; no inference is
+        performed here.  For merged-face detection and missing block counts use
+        :meth:`get_face_inference`.
+
+        Parameters
+        ----------
+        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
+            ``'original'`` uses the real-block contact graph.
+            ``'all'`` uses the combined lattice + inferred block graph and adds
+            the per-face column ``n_added`` (count of inferred blocks per face).
+            ``'inferred'`` returns only faces that exist in ``'all'`` but not in
+            ``'original'``, also with ``n_added``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Columns: ``tomo_id``, ``face_id``, ``patch_id``, ``size``,
+            ``n_unique_blocks``, ``block_ids``, ``centroid_x``, ``centroid_y``,
+            ``centroid_z``, ``normal_x``, ``normal_y``, ``normal_z``,
+            ``n_vertices`` (= ``size``),
+            ``n_boundary_blocks`` (face blocks with at least one unmatched site),
+            ``n_inferred_blocks`` (blocks whose origin column equals 2; 0 when no
+            inferred blocks are present),
+            ``planarity`` (RMS out-of-plane deviation of cycle blocks divided by
+            the cycle radius; 0 for a perfectly flat face, larger for a cycle
+            that wanders off the shell),
+            ``centroid_depth`` (distance from the face centroid to the nearest
+            block in the assembly, divided by the cycle radius; small for a face
+            lying on the shell, large for a shortcut cycle crossing the interior).
+            When *scope* is ``'all'`` or ``'inferred'``: additionally ``n_added``
+            (count of origin-2 blocks in the face).
+
+            Radius is the mean Euclidean distance of the cycle's blocks from
+            their centroid.  The face normal is the normalised mean of the
+            block z-vectors (each block's orientation applied to [0, 0, 1]).
+
+        Raises
+        ------
+        ValueError
+            If :meth:`connect` has not been called, or *scope* is ``'inferred'``
+            and :meth:`infer_missing_blocks` has not been called.
+        """
+        st, _faces, _blocks = self._state_for_scope(scope)
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+
+        # Blocks with at least one unmatched site, keyed by (tomo_id, block_id).
+        boundary_block_set: set[tuple] = set(
+            (row[tomo_col], row["block_id"])
+            for _, row in st[st["partner"] < 0][[tomo_col, "block_id"]].drop_duplicates().iterrows()
+        )
+
+        # Per-assembly unique block centres for centroid_depth.
+        asm_block_centres: dict[tuple, np.ndarray] = {}
+        for (_tv, _av), _grp in st.groupby([tomo_col, aff_col]):
+            _pts = _grp.drop_duplicates(subset=["block_id"])[["cx", "cy", "cz"]].values.astype(float)
+            asm_block_centres[(_tv, _av)] = _pts
+
+        _origin_col = self._origin_column
+        if _blocks is not None and _origin_col in _blocks.df.columns:
+            _origin_lookup: dict[float, float] = dict(
+                zip(_blocks.df[self.subtomo_id_column].astype(float), _blocks.df[_origin_col].astype(float))
+            )
+        else:
+            _origin_lookup = None
+
+        # Particle rotations for face-normal computation.
+        if _blocks is not None and len(_blocks.df) > 0:
+            _ang_fs = _blocks.get_angles().astype(float)
+            _all_R_fs = srot.from_euler("zxz", _ang_fs, degrees=True)
+            _b2r_fs: dict[float, int] = {
+                float(_blocks.df.iloc[i][self.subtomo_id_column]): i
+                for i in range(len(_blocks.df))
+            }
+        else:
+            _all_R_fs = None
+            _b2r_fs = None
+        _zu_fs = np.array([0.0, 0.0, 1.0])
+
+        # Precompute numpy arrays to avoid per-cell .at lookups inside the face loop.
+        _st_block_id_np = st["block_id"].to_numpy()
+        _st_cx_np = st["cx"].to_numpy()
+        _st_cy_np = st["cy"].to_numpy()
+        _st_cz_np = st["cz"].to_numpy()
+        _st_idx = st.index
+        _st_simple = (
+            isinstance(_st_idx, pd.RangeIndex)
+            and _st_idx.start == 0
+            and _st_idx.step == 1
+            and _st_idx.stop == len(st)
+        )
+        _st_label_to_pos: dict[int, int] | None = (
+            None if _st_simple else {int(lbl): pos for pos, lbl in enumerate(_st_idx)}
+        )
+
+        rows = []
+        for rec in _faces:
+            hedges = rec["half_edges"]
+            size = len(hedges)
+            if _st_label_to_pos is not None:
+                _hpos = np.array([_st_label_to_pos[h] for h in hedges], dtype=np.intp)
+            else:
+                _hpos = np.asarray(hedges, dtype=np.intp)
+            block_ids_walk = _st_block_id_np[_hpos].astype(float).tolist()
+            cx_vals = _st_cx_np[_hpos]
+            cy_vals = _st_cy_np[_hpos]
+            cz_vals = _st_cz_np[_hpos]
+            centres = np.column_stack([cx_vals, cy_vals, cz_vals])
+            centroid = centres.mean(axis=0)
+
+            # Face normal: mean z-vector of the face's block orientations.
+            if _all_R_fs is not None:
+                _zvecs_fs = [
+                    _all_R_fs[_b2r_fs[bid]].apply(_zu_fs)
+                    for bid in block_ids_walk
+                    if bid in _b2r_fs
+                ]
+            else:
+                _zvecs_fs = []
+            if _zvecs_fs:
+                normal_raw = np.array(_zvecs_fs).mean(axis=0)
+            else:
+                normal_raw = np.array([0.0, 0.0, 1.0])
+            n_norm = float(np.linalg.norm(normal_raw))
+            normal_unit = normal_raw / n_norm if n_norm > 1e-15 else np.array([0.0, 0.0, 1.0])
+
+            tomo_val = rec[tomo_col]
+            aff_val = rec[aff_col]
+
+            # Radius: mean distance of cycle blocks from centroid.
+            radius = float(np.linalg.norm(centres - centroid, axis=1).mean())
+
+            # planarity: RMS out-of-plane deviation normalised by radius.
+            deviations = (centres - centroid) @ normal_unit
+            rms_dev = float(np.sqrt(np.mean(deviations**2)))
+            planarity = rms_dev / radius if radius > 1e-15 else 0.0
+
+            # centroid_depth: nearest block in the assembly / radius.
+            _block_pts = asm_block_centres.get((tomo_val, aff_val))
+            if _block_pts is not None and len(_block_pts) > 0:
+                _d_min = float(np.linalg.norm(_block_pts - centroid, axis=1).min())
+                centroid_depth = _d_min / radius if radius > 1e-15 else 0.0
+            else:
+                centroid_depth = 0.0
+
+            n_boundary_blocks = sum(1 for bid in block_ids_walk if (tomo_val, bid) in boundary_block_set)
+            n_inferred_blocks = (
+                sum(1 for bid in block_ids_walk if _origin_lookup.get(bid, 1.0) == 2.0)
+                if _origin_lookup is not None
+                else 0
+            )
+
+            row_dict: dict = {
+                tomo_col: tomo_val,
+                aff_col: aff_val,
+                "face_id": rec["face_id"],
+                "patch_id": rec["patch_id"],
+                "size": size,
+                "n_unique_blocks": len(set(block_ids_walk)),
+                "block_ids": block_ids_walk,
+                "centroid_x": float(centroid[0]),
+                "centroid_y": float(centroid[1]),
+                "centroid_z": float(centroid[2]),
+                "normal_x": float(normal_unit[0]),
+                "normal_y": float(normal_unit[1]),
+                "normal_z": float(normal_unit[2]),
+                "n_vertices": size,
+                "n_boundary_blocks": n_boundary_blocks,
+                "n_inferred_blocks": n_inferred_blocks,
+                "planarity": planarity,
+                "centroid_depth": centroid_depth,
+            }
+            if scope in ("all", "inferred") and _origin_lookup is not None:
+                row_dict["n_added"] = sum(
+                    1 for bid in block_ids_walk if _origin_lookup.get(bid, 1.0) == 2.0
+                )
+            rows.append(row_dict)
+        return pd.DataFrame(rows)
+
+    @gui_exposed(
+        label="Block stats", group="Lattice statistics", order=30, returns="dataframe", category="pleomorphic-op"
+    )
+    def get_block_stats(self, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
+        """Return one row per block.
+
+        Parameters
+        ----------
+        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
+            ``'original'`` uses the real-block contact graph.
+            ``'all'`` uses the combined lattice + inferred block graph and adds
+            an ``origin`` column (1 = lattice, 2 = inferred).
+            ``'inferred'`` returns only blocks that participate in inferred faces,
+            also with ``origin``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Fixed columns: ``tomo_id``, ``block_id``, ``block_type``,
+            ``n_sites``, ``degree``, ``complete``, ``patch_id``,
+            ``face_signature``, ``angle_sum``, ``angle_deficit``,
+            ``face_sizes``, ``n_faces``.
+            Dynamic columns (one per distinct face size present in the
+            lattice): ``n_faces_<m>`` — how many faces of size *m* border
+            this block.  The set of *m* values is observed from the data;
+            no size is hardcoded.
+            When *scope* is ``'all'`` or ``'inferred'``: additionally
+            ``origin``.
+
+        Raises
+        ------
+        ValueError
+            If :meth:`connect` has not been called for *scope*.
+        """
+        from collections import Counter as _Counter
+
+        st, _faces, _blocks = self._state_for_scope(scope)
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+
+        # Face sizes keyed by (tomo, affiliation, face_id) — face_id restarts per (tomo, aff) group
+        face_size: dict[tuple, int] = {}
+        for rec in _faces:
+            key = (rec[tomo_col], rec[aff_col], rec["face_id"])
+            face_size[key] = len(rec["half_edges"])
+
+        # All distinct face sizes present in this lattice (for dynamic n_faces_<m> columns)
+        all_face_sizes: list[int] = sorted({sz for sz in face_size.values() if sz > 0})
+
+        # Block type lookup
+        block_type_map: dict[float, float] = {}
+        if isinstance(self.block_definition, dict):
+            for _, row in _blocks.df.iterrows():
+                block_type_map[float(row[self.subtomo_id_column])] = float(row[self.block_type_column])
+
+        # Origin lookup for scope="all"
+        _origin_col = self._origin_column
+        _origin_lookup_bs: dict[float, float] | None = None
+        if scope in ("all", "inferred") and _blocks is not None and _origin_col in _blocks.df.columns:
+            _origin_lookup_bs = dict(
+                zip(_blocks.df[self.subtomo_id_column].astype(float), _blocks.df[_origin_col].astype(float))
+            )
+
+        rows = []
+        for (tomo_val, block_val), grp in st.groupby([tomo_col, "block_id"]):
+            aff_val = float(grp[aff_col].iloc[0])
+            n_sites_val = int(grp["n_sites"].iloc[0])
+            degree = int((grp["partner"] >= 0).sum())
+
+            # face_signature: sorted face sizes per site (0 for boundary), preserving original semantics
+            face_sizes_for_sig = []
+            # unique face membership (deduplicated by face_id) for vertex-class columns
+            seen_fids: set[int] = set()
+            unique_face_sizes: list[int] = []
+            for _, hrow in grp.iterrows():
+                fid = int(hrow["face_id"])
+                if fid > 0:
+                    key = (tomo_val, aff_val, fid)
+                    sz = face_size.get(key, 0)
+                    face_sizes_for_sig.append(sz)
+                    if fid not in seen_fids and sz > 0:
+                        seen_fids.add(fid)
+                        unique_face_sizes.append(sz)
+                else:
+                    face_sizes_for_sig.append(0)
+            face_sig = "(" + ",".join(str(s) for s in sorted(face_sizes_for_sig)) + ")"
+            face_sizes_tup = tuple(sorted(unique_face_sizes))
+            n_faces_val = len(face_sizes_tup)
+            face_cnt = _Counter(face_sizes_tup)
+
+            # angle_sum / angle_deficit (only if complete)
+            if degree == n_sites_val:
+                bond_vecs = []
+                for site_idx in sorted(grp["site"].unique()):
+                    site_rows = grp[grp["site"] == site_idx]
+                    h_row = site_rows.iloc[0]
+                    p = int(h_row["partner"])
+                    c_p = np.array([st.at[p, "cx"], st.at[p, "cy"], st.at[p, "cz"]])
+                    c_h = np.array([h_row["cx"], h_row["cy"], h_row["cz"]])
+                    bond_vecs.append(c_p - c_h)
+                angle_sum_val = 0.0
+                n_b = len(bond_vecs)
+                for idx_b in range(n_b):
+                    v1 = bond_vecs[idx_b]
+                    v2 = bond_vecs[(idx_b + 1) % n_b]
+                    angle_sum_val += float(geom.angle_between_vectors(v1.reshape(1, 3), v2.reshape(1, 3))[0])
+                angle_deficit_val = 360.0 - angle_sum_val
+            else:
+                angle_sum_val = float("nan")
+                angle_deficit_val = float("nan")
+
+            btype = (
+                block_type_map.get(float(block_val), float("nan"))
+                if isinstance(self.block_definition, dict)
+                else float("nan")
+            )
+            patch_id = float(grp["patch_id"].iloc[0])
+
+            bs_row: dict = {
+                tomo_col: tomo_val,
+                aff_col: aff_val,
+                "block_id": float(block_val),
+                "block_type": btype,
+                "n_sites": n_sites_val,
+                "degree": degree,
+                "complete": degree == n_sites_val,
+                "patch_id": patch_id,
+                "face_signature": face_sig,
+                "angle_sum": angle_sum_val,
+                "angle_deficit": angle_deficit_val,
+                "face_sizes": face_sizes_tup,
+                "n_faces": n_faces_val,
+            }
+            for m in all_face_sizes:
+                bs_row[f"n_faces_{m}"] = face_cnt.get(m, 0)
+            if _origin_lookup_bs is not None:
+                bs_row["origin"] = _origin_lookup_bs.get(float(block_val), 1.0)
+            rows.append(bs_row)
+        return pd.DataFrame(rows)
+
+    @gui_exposed(
+        label="Object stats", group="Lattice statistics", order=40, returns="dataframe", category="pleomorphic-op"
+    )
+    def get_object_stats(self, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
+        """Return one row per (tomo_id, affiliation).
+
+        All measurements are derived from the contact graph that
+        :meth:`connect` builds; no assumed ideal lattice is required.
+
+        Parameters
+        ----------
+        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
+            ``'original'`` uses the real-block contact graph.  ``'all'`` uses
+            the combined lattice + inferred block graph.  ``'inferred'`` counts
+            only assemblies that have at least one inferred face.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Fixed columns: ``tomo_id``, the affiliation column
+            (``object_id`` by default), ``n_blocks``,
+            ``n_contacts``, ``n_faces``, ``n_boundary_half_edges``,
+            ``n_boundary_blocks`` (blocks with at least one unmatched site),
+            ``closed``, ``euler_characteristic``, ``angle_deficit_sum``,
+            ``majority_face_size`` (mode of observed face sizes, NaN on tie or
+            no faces), ``majority_face_defect`` (sum (mode − size) / mode over
+            all faces; **positive** when the assembly contains more faces smaller
+            than the background — e.g. pentagons in a hexagonal lattice close a
+            sphere and give +2; **negative** when it contains faces larger than
+            the background).
+            Dynamic columns: one ``n_faces_<m>`` per distinct observed face size
+            (``size``) and one ``n_degree_<k>`` per distinct vertex degree found
+            in the data.
+
+        Notes
+        -----
+        ``euler_characteristic`` (V − E + F) is the closure measurement.  A
+        connected closed shell gives 2; an open sheet gives a different value.
+        ``majority_face_defect`` measures face-topology deviation from the
+        observed background face size.  For a sphere built from hexagons with
+        twelve pentagons the background is six-sided, the deviation is +2.
+        A geodesic dome of all triangles has no face-size defect (0.0); its
+        closure is captured by ``euler_characteristic`` = 2 and twelve
+        degree-5 vertices in the ``n_degree_5`` column.
+        When the face-size distribution has no unique mode (equal split between
+        two or more sizes), both ``majority_face_size`` and
+        ``majority_face_defect`` are NaN.
+
+        Raises
+        ------
+        ValueError
+            If :meth:`connect` has not been called for *scope*.
+        """
+        st, _, _ = self._state_for_scope(scope)
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+        block_stats = self.get_block_stats(scope=scope)
+        face_stats = self.get_face_stats(scope=scope)
+
+        # Column headers spanning all assemblies
+        all_face_sizes = sorted(face_stats["size"].unique().tolist()) if len(face_stats) > 0 else []
+        all_degrees = sorted(block_stats["degree"].unique().tolist()) if len(block_stats) > 0 else []
+
+        # Boundary blocks per (tomo, block_id): has at least one unmatched site
+        boundary_block_set: set[tuple] = set(
+            (row[tomo_col], row["block_id"])
+            for _, row in st[st["partner"] < 0][[tomo_col, "block_id"]].drop_duplicates().iterrows()
+        )
+
+        rows = []
+        for (tomo_val, aff_val), block_grp in block_stats.groupby([tomo_col, aff_col]):
+            n_blocks = len(block_grp)
+            block_id_set = set(block_grp["block_id"].tolist())
+
+            # Contacts (matched half-edges / 2)
+            st_asm = st[(st[tomo_col] == tomo_val) & (st["block_id"].isin(block_id_set))]
+            n_matched = int((st_asm["partner"] >= 0).sum())
+            n_contacts = n_matched // 2
+
+            # Faces for this affiliation group
+            if len(face_stats) > 0:
+                face_asm = face_stats[(face_stats[tomo_col] == tomo_val) & (face_stats[aff_col] == aff_val)]
+            else:
+                face_asm = face_stats
+            n_faces = len(face_asm)
+
+            # Boundary half-edges and boundary blocks
+            n_boundary = int((st_asm["face_id"] <= 0).sum())
+            n_boundary_blocks = int(sum(1 for bid in block_id_set if (tomo_val, bid) in boundary_block_set))
+
+            closed = n_boundary == 0
+            euler = n_blocks - n_contacts + n_faces
+
+            # angle_deficit_sum
+            deficit_vals = block_grp["angle_deficit"].dropna()
+            angle_deficit_sum = float(deficit_vals.sum())
+
+            # Majority face statistics — derived from inferred sizes so that
+            # damaged larger faces are counted as their intact size, not as
+            # the smaller observed size.
+            if len(face_asm) > 0:
+                face_counts = face_asm["size"].value_counts()
+                max_cnt = face_counts.max()
+                majority_candidates = face_counts[face_counts == max_cnt]
+                if len(majority_candidates) == 1:
+                    majority_fs: int | float = int(majority_candidates.index[0])
+                    majority_fd: float = float(((majority_fs - face_asm["size"]) / majority_fs).sum())
+                else:
+                    majority_fs = float("nan")
+                    majority_fd = float("nan")
+            else:
+                majority_fs = float("nan")
+                majority_fd = float("nan")
+
+            # Vertex-degree distribution
+            degree_counts: dict[str, int] = {f"n_degree_{k}": 0 for k in all_degrees}
+            for k, cnt in block_grp["degree"].value_counts().items():
+                key = f"n_degree_{k}"
+                if key in degree_counts:
+                    degree_counts[key] = int(cnt)
+
+            # Face-size distribution (n_faces_<m>)
+            face_size_counts: dict[str, int] = {f"n_faces_{m}": 0 for m in all_face_sizes}
+            if len(face_asm) > 0:
+                for m, cnt in face_asm["size"].value_counts().items():
+                    key = f"n_faces_{m}"
+                    if key in face_size_counts:
+                        face_size_counts[key] = int(cnt)
+
+            row: dict = {
+                tomo_col: tomo_val,
+                aff_col: float(aff_val),
+                "n_blocks": n_blocks,
+                "n_contacts": n_contacts,
+                "n_faces": n_faces,
+                "n_boundary_half_edges": n_boundary,
+                "n_boundary_blocks": n_boundary_blocks,
+                "closed": closed,
+                "euler_characteristic": euler,
+                "angle_deficit_sum": angle_deficit_sum,
+                "majority_face_size": majority_fs,
+                "majority_face_defect": majority_fd,
+            }
+            row.update(face_size_counts)
+            row.update(degree_counts)
+            rows.append(row)
+
+        if not rows:
+            return pd.DataFrame()
+        result = pd.DataFrame(rows)
+        for m in all_face_sizes:
+            col = f"n_faces_{m}"
+            if col not in result.columns:
+                result[col] = 0
+        for k in all_degrees:
+            col = f"n_degree_{k}"
+            if col not in result.columns:
+                result[col] = 0
+        return result
+
+
+class PleomorphicAssembly(ContactGraph):
+    """Pleomorphic assembly: blocks plus an optional envelope.
+
+    Not part of the :class:`SymmetricComplex` family (:class:`CnComplex`,
+    :class:`PolyhedralComplex`, …) and does not inherit from it.
+
+    The assembly holds its envelope; it is not a surface itself.  The two
+    layers are independent.
+
+    * **Envelope layer** (``_surface``): a :class:`Mesh` or
+      :class:`OrientedPointCloud` representing the outer surface.  Access it
+      via :attr:`surface`; check its presence with :attr:`has_envelope`.
+    * **Block layer** (``blocks``): a :class:`~cryocat.core.cryomotl.Motl`
+      together with a :class:`BlockDefinition` (or dict thereof) describing the
+      building-block geometry.  Access it via :attr:`blocks`; check its
+      presence with :attr:`has_blocks`.
+
+    Either layer can be absent, but at least one is required.
+
+    **Blocks-only example** (no envelope, using the plain-parameter builder)::
+
+        ps = PleomorphicAssembly.from_blocks(
+            motl, symmetry="C3", site_length=9.0, site_elevation=-10.0
+        )
+        ps.connect(max_distance=4.0)
+        mesh = ps.envelope_from_faces()
+        ps.surface = mesh          # attach the envelope for polarity queries
+
+    For the GUI entry point see :meth:`from_blocks`.  For direct construction
+    see :meth:`__init__`.
+    """
+
+    def __init__(
+        self,
+        surface: Mesh | OrientedPointCloud | "PleomorphicAssembly" | None = None,
+        *,
+        block_layer: "BlockLayer | None" = None,
+    ) -> None:
+        """Create a :class:`PleomorphicAssembly`.
+
+        Parameters
+        ----------
+        surface : Mesh, OrientedPointCloud, PleomorphicAssembly, or None
+            Envelope surface.  When a :class:`PleomorphicAssembly` is passed,
+            its ``_surface`` is extracted; if *block_layer* is also ``None``,
+            the block layer is copied from it as well.  ``None`` means no
+            envelope.
+        block_layer : BlockLayer or None, default=None
+            Pre-built block layer carrying the blocks motl, block definition,
+            column names, and scale factor.  Use :meth:`from_blocks` to
+            construct one without building a :class:`BlockLayer` directly.
+
+        Raises
+        ------
+        TypeError
+            If neither *surface* nor *block_layer* is provided, or if
+            *surface* has an unsupported type.
+
+        Notes
+        -----
+        Envelope operations that return a new object (e.g. ``crop``,
+        ``extract_region``, ``convex_hull``, ``oversample``, and
+        ``apply_vertex_mask`` / ``flip_normals`` / ``refine_normals`` /
+        ``remove_nonfinite_vertices`` with ``inplace=False``) return an
+        envelope-only :class:`PleomorphicAssembly`; the block layer is not
+        carried.  :meth:`envelope_from_faces` returns a bare
+        :class:`~cryocat.core.surface.Mesh` built from the block layer;
+        attach it with ``ps.surface = mesh``.
+        """
+        self._surface: Mesh | OrientedPointCloud | None = None
+        copy_from = surface if block_layer is None and isinstance(surface, PleomorphicAssembly) else None
+        self._init_block_layer(block_layer if copy_from is None else copy_from)
+        self._envelopes: dict[tuple[float, float], "Mesh"] | None = None
+        self._envelope_scope: str | None = None
+        self._block_class: float = 1.0
+        self._block_class_non_unique: bool = False
+
+        # --- Envelope ---
+        if isinstance(surface, PleomorphicAssembly):
+            self._surface = surface._surface
+            if copy_from is not None:
+                self._envelopes = copy.deepcopy(surface._envelopes)
+                self._envelope_scope = surface._envelope_scope
+        elif surface is not None:
+            if not isinstance(surface, (Mesh, OrientedPointCloud)):
+                raise TypeError(
+                    f"Unsupported surface type: {type(surface)}. "
+                    "Must be Mesh, OrientedPointCloud, or PleomorphicAssembly."
+                )
+            self._surface = surface
+
+        if self._surface is None and self.blocks is None and block_layer is None:
+            raise TypeError(
+                "PleomorphicAssembly requires at least a surface " "(Mesh or OrientedPointCloud) or a block_layer."
+            )
+
+        # --- Block layer (adopted by _init_block_layer above) ---
+        if block_layer is not None:
+            surf_ps = getattr(self._surface, "pixel_size", None)
+            if surf_ps is not None:
+                surf_scalar = float(np.mean(np.asarray(surf_ps, dtype=float)))
+                if abs(self._block_pixel_size - surf_scalar) > 1e-9:
+                    import warnings as _warn
+
+                    _warn.warn(
+                        f"block_layer.pixel_size ({self._block_pixel_size}) differs from "
+                        f"surface pixel_size ({surf_scalar}). "
+                        f"Block-layer computations use {self._block_pixel_size}; "
+                        f"surface measurements use the mesh's own scale.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+
+        self._compute_block_class()
+
+    def _compute_block_class(self) -> None:
+        """Set ``_block_class`` and ``_block_class_non_unique`` from the blocks motl.
+
+        ``_block_class`` is the single non-zero class value (or 1 as fallback
+        when the motl is absent or all entries have class=0).
+        ``_block_class_non_unique`` is True when two or more distinct non-zero
+        class values are present; functions that build new motls from specific
+        block subsets then look up the class from the participating blocks
+        directly and print a note.
+        """
+        if self.blocks is None or len(self.blocks.df) == 0:
+            self._block_class = 1.0
+            self._block_class_non_unique = False
+            return
+        cls_col = self.blocks.df[self.class_column].astype(float) if self.class_column in self.blocks.df.columns else None
+        if cls_col is None:
+            self._block_class = 1.0
+            self._block_class_non_unique = False
+            return
+        non_zero = cls_col[cls_col != 0.0].unique()
+        if len(non_zero) == 0:
+            self._block_class = 1.0
+            self._block_class_non_unique = False
+        elif len(non_zero) == 1:
+            self._block_class = float(non_zero[0])
+            self._block_class_non_unique = False
+        else:
+            mode_cls = float(Counter(cls_col[cls_col != 0.0].values.tolist()).most_common(1)[0][0])
+            self._block_class = mode_cls
+            self._block_class_non_unique = True
+
+    @property
+    def surface(self) -> Mesh | OrientedPointCloud:
+        """The wrapped :class:`Mesh` or :class:`OrientedPointCloud`.
+
+        Raises
+        ------
+        ValueError
+            If this instance has no envelope (was created with blocks only).
+        """
+        if self._surface is None:
+            raise ValueError(
+                "PleomorphicAssembly has no envelope (Mesh/OrientedPointCloud). "
+                "Check has_envelope before accessing .surface."
+            )
+        return self._surface
+
+    @surface.setter
+    def surface(self, value: Mesh | OrientedPointCloud | None) -> None:
+        self._surface = value
+
+    @property
+    def has_envelope(self) -> bool:
+        """True when an envelope surface (Mesh or OrientedPointCloud) is present."""
+        return self._surface is not None
+
+    @property
+    def has_envelopes(self) -> bool:
+        """True when per-object envelopes have been built."""
+        return self._envelopes is not None and len(self._envelopes) > 0
+
+    @property
+    def envelopes(self) -> "dict[tuple[float, float], Mesh] | None":
+        """Per-object mesh envelopes keyed by ``(tomo_id, affiliation)``, or ``None``."""
+        return self._envelopes
+
+    @staticmethod
+    def _unwrap_surface(surface: Mesh | OrientedPointCloud | "PleomorphicAssembly") -> Mesh | OrientedPointCloud:
+        """Return the concrete Mesh / OrientedPointCloud behind an optional wrapper."""
+        if isinstance(surface, PleomorphicAssembly):
+            return surface.surface
+        if isinstance(surface, (Mesh, OrientedPointCloud)):
+            return surface
+        raise TypeError(
+            f"Unsupported surface type: {type(surface)}. " "Must be Mesh, OrientedPointCloud, or PleomorphicAssembly."
+        )
+
+    # ------------------------------------------------------------------
+    # Block-assembly methods
+    # ------------------------------------------------------------------
+
+    def _get_flip_rot(self, global_idx: int) -> srot:
+        """Return the 180° flip rotation for block at *global_idx* in blocks.df."""
+        if isinstance(self.block_definition, dict):
+            cls_val = self.blocks.df.iloc[global_idx][self.block_type_column]
+            defn = self.block_definition[cls_val]
+        else:
+            defn = self.block_definition
+        v = np.array(defn.sites[defn.flip_site - 1].vector)
+        a_unnorm = np.array([v[0], v[1], 0.0])
+        a = a_unnorm / np.linalg.norm(a_unnorm)
+        return srot.from_rotvec(np.pi * a)
+
+    @gui_exposed(label="Unify polarity", group="Lattice setup", order=20, returns="none", category="pleomorphic-op")
+    def unify_polarity(
+        self,
+        max_block_distance: float | None = None,
+        reference: Literal["neighbours", "centroid", "envelope"] = "neighbours",
+        *,
+        _annotate_fn: Callable | None = None,
+    ) -> int:
+        """Align block polarities so neighbours point the same way.
+
+        Works per tomogram.  For ``reference='neighbours'`` or ``'centroid'``,
+        uses a BFS walk over the block-proximity graph (edges between blocks
+        whose centres are within *max_block_distance*): when a newly visited
+        block has ``z_n · z_m < 0`` relative to its BFS parent, it is flipped
+        by the 180° rotation around the in-plane part of its flip_site vector.
+
+        For ``reference='centroid'``, each connected component is additionally
+        aligned so that its blocks point outward from the component centroid
+        (``Σ z · (c - g) > 0``).
+
+        For ``reference='envelope'``, an envelope surface must be attached
+        (via ``ps.surface = ...``).  *max_block_distance* may be ``None``.
+
+        Parameters
+        ----------
+        max_block_distance : float or None, default=None
+            Maximum centre-to-centre distance (voxels) for two blocks to be
+            considered neighbours.  Required for ``'neighbours'`` and
+            ``'centroid'``; ignored for ``'envelope'``.
+        reference : {"neighbours", "centroid", "envelope"}, default="neighbours"
+            Alignment reference.
+        _annotate_fn : Callable or None, default=None
+            Private override for the envelope annotation callable.  When
+            ``None`` and ``reference='envelope'``, falls back to
+            :meth:`annotate_with_envelope`.
+
+        Returns
+        -------
+        int
+            Number of blocks whose final orientation differs from the initial one.
+
+        Raises
+        ------
+        ValueError
+            If no block layer is present, *reference* is invalid,
+            *max_block_distance* is None for a BFS-based reference, or
+            ``reference='envelope'`` is requested but no envelope is attached.
+        """
+        if self.blocks is None:
+            raise ValueError("unify_polarity requires a block layer (blocks=...).")
+        if reference not in ("neighbours", "centroid", "envelope"):
+            raise ValueError(f"reference must be 'neighbours', 'centroid', or 'envelope'; got {reference!r}.")
+        if reference != "envelope" and max_block_distance is None:
+            raise ValueError(f"max_block_distance is required for reference='{reference}'.")
+        if reference == "envelope" and _annotate_fn is None:
+            if not self.has_envelope:
+                raise ValueError(
+                    "unify_polarity(reference='envelope') requires an envelope surface "
+                    "(attach one via ps.surface = ... or pass a mesh to PleomorphicAssembly)."
+                )
+            _annotate_fn = self.annotate_with_envelope
+
+        N = len(self.blocks.df)
+
+        angles_arr = self.blocks.get_angles().astype(float)
+        all_R_init = srot.from_euler("zxz", angles_arr, degrees=True)
+        R_list: list[srot] = [all_R_init[i] for i in range(N)]
+        z_unit = np.array([0.0, 0.0, 1.0])
+        z_arr = np.array([R_list[i].apply(z_unit) for i in range(N)])
+        all_c = self.blocks.get_coordinates()
+
+        for tomo_val in sorted(self.blocks.df[self.tomo_id_column].unique()):
+            tomo_mask = (self.blocks.df[self.tomo_id_column] == tomo_val).values
+            tomo_pos = np.where(tomo_mask)[0]
+            n_tomo = len(tomo_pos)
+            if n_tomo == 0:
+                continue
+
+            if reference == "envelope":
+                annot = _annotate_fn(tomo_id=float(tomo_val))
+                bid_to_global: dict[float, int] = {float(self.blocks.df.iloc[i][self.subtomo_id_column]): i for i in tomo_pos}
+                for _, arow in annot.iterrows():
+                    if float(arow["normal_angle"]) > 90.0:
+                        g_idx = bid_to_global[float(arow["block_id"])]
+                        flip_rot = self._get_flip_rot(g_idx)
+                        R_list[g_idx] = R_list[g_idx] * flip_rot
+                        z_arr[g_idx] = -z_arr[g_idx]
+                continue
+
+            c_tomo = all_c[tomo_pos]
+            qp_idx_list, nn_idx_list = nnana.find_nn_within_radius(c_tomo, c_tomo, max_block_distance, remove_qp=True)
+
+            adj: list[list[int]] = [[] for _ in range(n_tomo)]
+            for qi, nns in zip(qp_idx_list, nn_idx_list):
+                for ni in nns:
+                    if ni not in adj[qi]:
+                        adj[qi].append(ni)
+                    if qi not in adj[ni]:
+                        adj[ni].append(qi)
+
+            subtomo_ids = self.blocks.df[self.subtomo_id_column].values[tomo_pos]
+            order = np.argsort(subtomo_ids)
+
+            visited = np.zeros(n_tomo, dtype=bool)
+            components: list[list[int]] = []
+
+            for start_local in order:
+                if visited[start_local]:
+                    continue
+                component: list[int] = []
+                queue = [int(start_local)]
+                visited[start_local] = True
+                while queue:
+                    m_local = queue.pop(0)
+                    component.append(m_local)
+                    m_global = int(tomo_pos[m_local])
+                    for n_local in adj[m_local]:
+                        if not visited[n_local]:
+                            visited[n_local] = True
+                            n_global = int(tomo_pos[n_local])
+                            if np.dot(z_arr[n_global], z_arr[m_global]) < 0:
+                                flip_rot = self._get_flip_rot(n_global)
+                                R_list[n_global] = R_list[n_global] * flip_rot
+                                z_arr[n_global] = -z_arr[n_global]
+                            queue.append(n_local)
+                components.append(component)
+
+            if reference == "centroid":
+                for comp in components:
+                    g = c_tomo[comp].mean(axis=0)
+                    total = sum(np.dot(z_arr[tomo_pos[i]], c_tomo[i] - g) for i in comp)
+                    if total < 0:
+                        for i in comp:
+                            g_i = int(tomo_pos[i])
+                            flip_rot = self._get_flip_rot(g_i)
+                            R_list[g_i] = R_list[g_i] * flip_rot
+                            z_arr[g_i] = -z_arr[g_i]
+
+        final_angles = np.array([R_list[i].as_euler("zxz", degrees=True) for i in range(N)])
+        self.blocks.df["phi"] = final_angles[:, 0]
+        self.blocks.df["theta"] = final_angles[:, 1]
+        self.blocks.df["psi"] = final_angles[:, 2]
+
+        changed = 0
+        for i in range(N):
+            rel_angle = np.linalg.norm((R_list[i].inv() * all_R_init[i]).as_rotvec())
+            if rel_angle > 1e-9:
+                changed += 1
+
+        self._site_table = None
+        self._faces = None
+        self._all_state = None
+        return changed
+
+    def get_inverted_blocks(self, max_block_distance: float, *, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
+        """Return blocks whose orientation disagrees with a majority of their neighbours.
+
+        Uses the same proximity graph and z-normal comparison as
+        :meth:`unify_polarity` (``reference='neighbours'``).  Does **not**
+        modify the motl.
+
+        A block is considered inverted when ``n_disagree > n_agree``, i.e.
+        more than half of its proximity neighbours have a negative dot product
+        with its z-normal (``z_block · z_neighbour < 0``).
+
+        Parameters
+        ----------
+        max_block_distance : float
+            Maximum centre-to-centre distance (voxels) for two blocks to be
+            considered neighbours.  Identical definition to
+            :meth:`unify_polarity`.
+        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
+            ``'original'`` uses :attr:`blocks` only.  ``'all'`` uses lattice +
+            inferred blocks combined.  ``'inferred'`` uses only inferred blocks.
+
+        Returns
+        -------
+        pandas.DataFrame
+            One row per inverted block, empty when none are found.
+
+            ============================  =============================================
+            ``tomo_id``                   tomogram identifier
+            *affiliation_column*          assembly affiliation (from
+                                          :attr:`affiliation_column`)
+            ``subtomo_id``                particle identifier
+            ``n_neighbours``              total proximity neighbours
+            ``n_agree``                   neighbours with ``z·z > 0``
+            ``n_disagree``                neighbours with ``z·z < 0``
+            ``angle_to_mean_normal_deg``  angle (°) between this block's z-normal
+                                          and the mean z-normal of its neighbours
+            ============================  =============================================
+
+        Raises
+        ------
+        ValueError
+            If no block layer is present, or *scope* is invalid.
+        """
+        _blks = self._blocks_for_scope(scope)
+
+        N = len(_blks.df)
+        angles_arr = _blks.get_angles().astype(float)
+        all_R = srot.from_euler("zxz", angles_arr, degrees=True)
+        z_unit = np.array([0.0, 0.0, 1.0])
+        z_arr = np.array([all_R[i].apply(z_unit) for i in range(N)])
+        all_c = _blks.get_coordinates()
+
+        tomo_col = self.tomo_id_column
+        aff_col = self.affiliation_column
+        rows: list[dict] = []
+
+        for tomo_val in sorted(_blks.df[tomo_col].unique()):
+            tomo_mask = (_blks.df[tomo_col] == tomo_val).values
+            tomo_pos = np.where(tomo_mask)[0]
+            n_tomo = len(tomo_pos)
+            if n_tomo == 0:
+                continue
+
+            c_tomo = all_c[tomo_pos]
+            qp_idx_list, nn_idx_list = nnana.find_nn_within_radius(c_tomo, c_tomo, max_block_distance, remove_qp=True)
+
+            adj: list[list[int]] = [[] for _ in range(n_tomo)]
+            for qi, nns in zip(qp_idx_list, nn_idx_list):
+                for ni in nns:
+                    if ni not in adj[qi]:
+                        adj[qi].append(ni)
+                    if qi not in adj[ni]:
+                        adj[ni].append(qi)
+
+            for local_i in range(n_tomo):
+                neighbours = adj[local_i]
+                if not neighbours:
+                    continue
+                g_i = int(tomo_pos[local_i])
+                z_i = z_arr[g_i]
+
+                n_agree = sum(1 for nl in neighbours if np.dot(z_i, z_arr[int(tomo_pos[nl])]) > 0)
+                n_disagree = sum(1 for nl in neighbours if np.dot(z_i, z_arr[int(tomo_pos[nl])]) < 0)
+                if n_disagree <= n_agree:
+                    continue
+
+                mean_z = np.mean([z_arr[int(tomo_pos[nl])] for nl in neighbours], axis=0)
+                norm_mz = np.linalg.norm(mean_z)
+                if norm_mz < 1e-9:
+                    angle_deg = 0.0
+                else:
+                    angle_deg = float(np.degrees(np.arccos(np.clip(np.dot(z_i, mean_z / norm_mz), -1.0, 1.0))))
+
+                block_row = _blks.df.iloc[g_i]
+                rows.append(
+                    {
+                        tomo_col: tomo_val,
+                        aff_col: float(block_row[aff_col]),
+                        "subtomo_id": float(block_row[self.subtomo_id_column]),
+                        "n_neighbours": len(neighbours),
+                        "n_agree": n_agree,
+                        "n_disagree": n_disagree,
+                        "angle_to_mean_normal_deg": angle_deg,
+                    }
+                )
+
+        return pd.DataFrame(rows)
+
+    def get_inverted_blocks_as_motl(self, max_block_distance: float, *, scope: Literal["original", "inferred", "all"] = "original") -> "cryomotl.Motl":
+        """Return inverted blocks as a :class:`~cryocat.core.cryomotl.Motl`.
+
+        Calls :meth:`get_inverted_blocks` and filters the selected block pool
+        to those rows.  Returns an empty :class:`~cryocat.core.cryomotl.Motl`
+        when no inverted blocks are found.
+
+        Parameters
+        ----------
+        max_block_distance : float
+            Passed directly to :meth:`get_inverted_blocks`.
+        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
+            Passed directly to :meth:`get_inverted_blocks`.
+
+        Returns
+        -------
+        cryomotl.Motl
+            Subset of the selected block pool containing only the inverted
+            blocks, reset to a clean 1-based ``subtomo_id`` index.
+
+        Raises
+        ------
+        ValueError
+            If no block layer is present, or *scope* is invalid.
+        """
+        _blks = self._blocks_for_scope(scope)
+        inv_df = self.get_inverted_blocks(max_block_distance, scope=scope)
+        if inv_df.empty:
+            return cryomotl.Motl(pd.DataFrame(columns=cryomotl.Motl.motl_columns))
+        inv_ids = set(inv_df["subtomo_id"].values)
+        mask = _blks.df[self.subtomo_id_column].isin(inv_ids)
+        return cryomotl.Motl(_blks.df[mask].copy().reset_index(drop=True))
+
+    # ------------------------------------------------------------------
+    # Contact graph
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Statistics getters
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _face_hole_analysis(centres: np.ndarray, normal: np.ndarray) -> dict:
@@ -9532,203 +10583,12 @@ class PleomorphicSurface:
             "n_reflex": n_reflex,
         }
 
-    @gui_exposed(
-        label="Face stats", group="Lattice statistics", order=20, returns="dataframe", category="pleomorphic-op"
-    )
-    def get_face_stats(self, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
-        """Return one row per closed face.
-
-        Faces reflect **connectivity only** — the undirected block contact graph.
-        A block whose orientation is inverted relative to its neighbours keeps
-        its bonds, so it does not change the face count or topology (χ is
-        unaffected).  Use :meth:`get_inverted_blocks` to identify such blocks
-        before or after connecting.
-
-        All columns are derived directly from the contact graph; no inference is
-        performed here.  For merged-face detection and missing block counts use
-        :meth:`get_face_inference`.
-
-        Parameters
-        ----------
-        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
-            ``'original'`` uses the real-block contact graph.
-            ``'all'`` uses the combined lattice + inferred block graph and adds
-            the per-face column ``n_added`` (count of inferred blocks per face).
-            ``'inferred'`` returns only faces that exist in ``'all'`` but not in
-            ``'original'``, also with ``n_added``.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Columns: ``tomo_id``, ``face_id``, ``assembly_id``, ``size``,
-            ``n_unique_blocks``, ``block_ids``, ``centroid_x``, ``centroid_y``,
-            ``centroid_z``, ``normal_x``, ``normal_y``, ``normal_z``,
-            ``n_vertices`` (= ``size``),
-            ``n_boundary_blocks`` (face blocks with at least one unmatched site),
-            ``n_inferred_blocks`` (blocks whose origin column equals 2; 0 when no
-            inferred blocks are present),
-            ``planarity`` (RMS out-of-plane deviation of cycle blocks divided by
-            the cycle radius; 0 for a perfectly flat face, larger for a cycle
-            that wanders off the shell),
-            ``centroid_depth`` (distance from the face centroid to the nearest
-            block in the assembly, divided by the cycle radius; small for a face
-            lying on the shell, large for a shortcut cycle crossing the interior).
-            When *scope* is ``'all'`` or ``'inferred'``: additionally ``n_added``
-            (count of origin-2 blocks in the face).
-
-            Radius is the mean Euclidean distance of the cycle's blocks from
-            their centroid.  The face normal is the normalised mean of the
-            block z-vectors (each block's orientation applied to [0, 0, 1]).
-
-        Raises
-        ------
-        ValueError
-            If :meth:`connect` has not been called, or *scope* is ``'inferred'``
-            and :meth:`infer_missing_blocks` has not been called.
-        """
-        st, _faces, _blocks = self._state_for_scope(scope)
-        tomo_col = self.tomo_id_column
-        aff_col = self.affiliation_column
-
-        # Blocks with at least one unmatched site, keyed by (tomo_id, block_id).
-        boundary_block_set: set[tuple] = set(
-            (row[tomo_col], row["block_id"])
-            for _, row in st[st["partner"] < 0][[tomo_col, "block_id"]].drop_duplicates().iterrows()
-        )
-
-        # Per-assembly unique block centres for centroid_depth.
-        asm_block_centres: dict[tuple, np.ndarray] = {}
-        for (_tv, _av), _grp in st.groupby([tomo_col, aff_col]):
-            _pts = _grp.drop_duplicates(subset=["block_id"])[["cx", "cy", "cz"]].values.astype(float)
-            asm_block_centres[(_tv, _av)] = _pts
-
-        _origin_col = self._origin_column
-        if _blocks is not None and _origin_col in _blocks.df.columns:
-            _origin_lookup: dict[float, float] = dict(
-                zip(_blocks.df["subtomo_id"].astype(float), _blocks.df[_origin_col].astype(float))
-            )
-        else:
-            _origin_lookup = None
-
-        # Particle rotations for face-normal computation.
-        if _blocks is not None and len(_blocks.df) > 0:
-            _ang_fs = _blocks.get_angles().astype(float)
-            _all_R_fs = srot.from_euler("zxz", _ang_fs, degrees=True)
-            _b2r_fs: dict[float, int] = {
-                float(_blocks.df.iloc[i]["subtomo_id"]): i
-                for i in range(len(_blocks.df))
-            }
-        else:
-            _all_R_fs = None
-            _b2r_fs = None
-        _zu_fs = np.array([0.0, 0.0, 1.0])
-
-        # Precompute numpy arrays to avoid per-cell .at lookups inside the face loop.
-        _st_block_id_np = st["block_id"].to_numpy()
-        _st_cx_np = st["cx"].to_numpy()
-        _st_cy_np = st["cy"].to_numpy()
-        _st_cz_np = st["cz"].to_numpy()
-        _st_idx = st.index
-        _st_simple = (
-            isinstance(_st_idx, pd.RangeIndex)
-            and _st_idx.start == 0
-            and _st_idx.step == 1
-            and _st_idx.stop == len(st)
-        )
-        _st_label_to_pos: dict[int, int] | None = (
-            None if _st_simple else {int(lbl): pos for pos, lbl in enumerate(_st_idx)}
-        )
-
-        rows = []
-        for rec in _faces:
-            hedges = rec["half_edges"]
-            size = len(hedges)
-            if _st_label_to_pos is not None:
-                _hpos = np.array([_st_label_to_pos[h] for h in hedges], dtype=np.intp)
-            else:
-                _hpos = np.asarray(hedges, dtype=np.intp)
-            block_ids_walk = _st_block_id_np[_hpos].astype(float).tolist()
-            cx_vals = _st_cx_np[_hpos]
-            cy_vals = _st_cy_np[_hpos]
-            cz_vals = _st_cz_np[_hpos]
-            centres = np.column_stack([cx_vals, cy_vals, cz_vals])
-            centroid = centres.mean(axis=0)
-
-            # Face normal: mean z-vector of the face's block orientations.
-            if _all_R_fs is not None:
-                _zvecs_fs = [
-                    _all_R_fs[_b2r_fs[bid]].apply(_zu_fs)
-                    for bid in block_ids_walk
-                    if bid in _b2r_fs
-                ]
-            else:
-                _zvecs_fs = []
-            if _zvecs_fs:
-                normal_raw = np.array(_zvecs_fs).mean(axis=0)
-            else:
-                normal_raw = np.array([0.0, 0.0, 1.0])
-            n_norm = float(np.linalg.norm(normal_raw))
-            normal_unit = normal_raw / n_norm if n_norm > 1e-15 else np.array([0.0, 0.0, 1.0])
-
-            tomo_val = rec[tomo_col]
-            aff_val = rec[aff_col]
-
-            # Radius: mean distance of cycle blocks from centroid.
-            radius = float(np.linalg.norm(centres - centroid, axis=1).mean())
-
-            # planarity: RMS out-of-plane deviation normalised by radius.
-            deviations = (centres - centroid) @ normal_unit
-            rms_dev = float(np.sqrt(np.mean(deviations**2)))
-            planarity = rms_dev / radius if radius > 1e-15 else 0.0
-
-            # centroid_depth: nearest block in the assembly / radius.
-            _block_pts = asm_block_centres.get((tomo_val, aff_val))
-            if _block_pts is not None and len(_block_pts) > 0:
-                _d_min = float(np.linalg.norm(_block_pts - centroid, axis=1).min())
-                centroid_depth = _d_min / radius if radius > 1e-15 else 0.0
-            else:
-                centroid_depth = 0.0
-
-            n_boundary_blocks = sum(1 for bid in block_ids_walk if (tomo_val, bid) in boundary_block_set)
-            n_inferred_blocks = (
-                sum(1 for bid in block_ids_walk if _origin_lookup.get(bid, 1.0) == 2.0)
-                if _origin_lookup is not None
-                else 0
-            )
-
-            row_dict: dict = {
-                tomo_col: tomo_val,
-                aff_col: aff_val,
-                "face_id": rec["face_id"],
-                "assembly_id": rec["assembly_id"],
-                "size": size,
-                "n_unique_blocks": len(set(block_ids_walk)),
-                "block_ids": block_ids_walk,
-                "centroid_x": float(centroid[0]),
-                "centroid_y": float(centroid[1]),
-                "centroid_z": float(centroid[2]),
-                "normal_x": float(normal_unit[0]),
-                "normal_y": float(normal_unit[1]),
-                "normal_z": float(normal_unit[2]),
-                "n_vertices": size,
-                "n_boundary_blocks": n_boundary_blocks,
-                "n_inferred_blocks": n_inferred_blocks,
-                "planarity": planarity,
-                "centroid_depth": centroid_depth,
-            }
-            if scope in ("all", "inferred") and _origin_lookup is not None:
-                row_dict["n_added"] = sum(
-                    1 for bid in block_ids_walk if _origin_lookup.get(bid, 1.0) == 2.0
-                )
-            rows.append(row_dict)
-        return pd.DataFrame(rows)
-
-    def get_face_filling_summary(self, other: "PleomorphicSurface") -> pd.DataFrame:
+    def get_face_filling_summary(self, other: "PleomorphicAssembly") -> pd.DataFrame:
         """Return per-size face counts before and after block filling.
 
         Parameters
         ----------
-        other : PleomorphicSurface
+        other : PleomorphicAssembly
             A surface produced by :meth:`with_inferred_blocks` from this surface.
 
         Returns
@@ -9760,305 +10620,6 @@ class PleomorphicSurface:
             .astype(int)
             .reset_index()
         )
-
-    @gui_exposed(
-        label="Block stats", group="Lattice statistics", order=30, returns="dataframe", category="pleomorphic-op"
-    )
-    def get_block_stats(self, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
-        """Return one row per block.
-
-        Parameters
-        ----------
-        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
-            ``'original'`` uses the real-block contact graph.
-            ``'all'`` uses the combined lattice + inferred block graph and adds
-            an ``origin`` column (1 = lattice, 2 = inferred).
-            ``'inferred'`` returns only blocks that participate in inferred faces,
-            also with ``origin``.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Fixed columns: ``tomo_id``, ``block_id``, ``block_type``,
-            ``n_sites``, ``degree``, ``complete``, ``assembly_id``,
-            ``face_signature``, ``angle_sum``, ``angle_deficit``,
-            ``face_sizes``, ``n_faces``.
-            Dynamic columns (one per distinct face size present in the
-            lattice): ``n_faces_<m>`` — how many faces of size *m* border
-            this block.  The set of *m* values is observed from the data;
-            no size is hardcoded.
-            When *scope* is ``'all'`` or ``'inferred'``: additionally
-            ``origin``.
-
-        Raises
-        ------
-        ValueError
-            If :meth:`connect` has not been called for *scope*.
-        """
-        from collections import Counter as _Counter
-
-        st, _faces, _blocks = self._state_for_scope(scope)
-        tomo_col = self.tomo_id_column
-        aff_col = self.affiliation_column
-
-        # Face sizes keyed by (tomo, affiliation, face_id) — face_id restarts per (tomo, aff) group
-        face_size: dict[tuple, int] = {}
-        for rec in _faces:
-            key = (rec[tomo_col], rec[aff_col], rec["face_id"])
-            face_size[key] = len(rec["half_edges"])
-
-        # All distinct face sizes present in this lattice (for dynamic n_faces_<m> columns)
-        all_face_sizes: list[int] = sorted({sz for sz in face_size.values() if sz > 0})
-
-        # Block type lookup
-        block_type_map: dict[float, float] = {}
-        if isinstance(self.block_definition, dict):
-            for _, row in _blocks.df.iterrows():
-                block_type_map[float(row["subtomo_id"])] = float(row[self.block_type_column])
-
-        # Origin lookup for scope="all"
-        _origin_col = self._origin_column
-        _origin_lookup_bs: dict[float, float] | None = None
-        if scope in ("all", "inferred") and _blocks is not None and _origin_col in _blocks.df.columns:
-            _origin_lookup_bs = dict(
-                zip(_blocks.df["subtomo_id"].astype(float), _blocks.df[_origin_col].astype(float))
-            )
-
-        rows = []
-        for (tomo_val, block_val), grp in st.groupby([tomo_col, "block_id"]):
-            aff_val = float(grp[aff_col].iloc[0])
-            n_sites_val = int(grp["n_sites"].iloc[0])
-            degree = int((grp["partner"] >= 0).sum())
-
-            # face_signature: sorted face sizes per site (0 for boundary), preserving original semantics
-            face_sizes_for_sig = []
-            # unique face membership (deduplicated by face_id) for vertex-class columns
-            seen_fids: set[int] = set()
-            unique_face_sizes: list[int] = []
-            for _, hrow in grp.iterrows():
-                fid = int(hrow["face_id"])
-                if fid > 0:
-                    key = (tomo_val, aff_val, fid)
-                    sz = face_size.get(key, 0)
-                    face_sizes_for_sig.append(sz)
-                    if fid not in seen_fids and sz > 0:
-                        seen_fids.add(fid)
-                        unique_face_sizes.append(sz)
-                else:
-                    face_sizes_for_sig.append(0)
-            face_sig = "(" + ",".join(str(s) for s in sorted(face_sizes_for_sig)) + ")"
-            face_sizes_tup = tuple(sorted(unique_face_sizes))
-            n_faces_val = len(face_sizes_tup)
-            face_cnt = _Counter(face_sizes_tup)
-
-            # angle_sum / angle_deficit (only if complete)
-            if degree == n_sites_val:
-                bond_vecs = []
-                for site_idx in sorted(grp["site"].unique()):
-                    site_rows = grp[grp["site"] == site_idx]
-                    h_row = site_rows.iloc[0]
-                    p = int(h_row["partner"])
-                    c_p = np.array([st.at[p, "cx"], st.at[p, "cy"], st.at[p, "cz"]])
-                    c_h = np.array([h_row["cx"], h_row["cy"], h_row["cz"]])
-                    bond_vecs.append(c_p - c_h)
-                angle_sum_val = 0.0
-                n_b = len(bond_vecs)
-                for idx_b in range(n_b):
-                    v1 = bond_vecs[idx_b]
-                    v2 = bond_vecs[(idx_b + 1) % n_b]
-                    angle_sum_val += float(geom.angle_between_vectors(v1.reshape(1, 3), v2.reshape(1, 3))[0])
-                angle_deficit_val = 360.0 - angle_sum_val
-            else:
-                angle_sum_val = float("nan")
-                angle_deficit_val = float("nan")
-
-            btype = (
-                block_type_map.get(float(block_val), float("nan"))
-                if isinstance(self.block_definition, dict)
-                else float("nan")
-            )
-            asm_id = float(grp["assembly_id"].iloc[0])
-
-            bs_row: dict = {
-                tomo_col: tomo_val,
-                aff_col: aff_val,
-                "block_id": float(block_val),
-                "block_type": btype,
-                "n_sites": n_sites_val,
-                "degree": degree,
-                "complete": degree == n_sites_val,
-                "assembly_id": asm_id,
-                "face_signature": face_sig,
-                "angle_sum": angle_sum_val,
-                "angle_deficit": angle_deficit_val,
-                "face_sizes": face_sizes_tup,
-                "n_faces": n_faces_val,
-            }
-            for m in all_face_sizes:
-                bs_row[f"n_faces_{m}"] = face_cnt.get(m, 0)
-            if _origin_lookup_bs is not None:
-                bs_row["origin"] = _origin_lookup_bs.get(float(block_val), 1.0)
-            rows.append(bs_row)
-        return pd.DataFrame(rows)
-
-    @gui_exposed(
-        label="Assembly stats", group="Lattice statistics", order=40, returns="dataframe", category="pleomorphic-op"
-    )
-    def get_assembly_stats(self, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
-        """Return one row per (tomo_id, assembly_id).
-
-        All measurements are derived from the contact graph that
-        :meth:`connect` builds; no assumed ideal lattice is required.
-
-        Parameters
-        ----------
-        scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
-            ``'original'`` uses the real-block contact graph.  ``'all'`` uses
-            the combined lattice + inferred block graph.  ``'inferred'`` counts
-            only assemblies that have at least one inferred face.
-
-        Returns
-        -------
-        pandas.DataFrame
-            Fixed columns: ``tomo_id``, ``assembly_id``, ``n_blocks``,
-            ``n_contacts``, ``n_faces``, ``n_boundary_half_edges``,
-            ``n_boundary_blocks`` (blocks with at least one unmatched site),
-            ``closed``, ``euler_characteristic``, ``angle_deficit_sum``,
-            ``majority_face_size`` (mode of observed face sizes, NaN on tie or
-            no faces), ``majority_face_defect`` (sum (mode − size) / mode over
-            all faces; **positive** when the assembly contains more faces smaller
-            than the background — e.g. pentagons in a hexagonal lattice close a
-            sphere and give +2; **negative** when it contains faces larger than
-            the background).
-            Dynamic columns: one ``n_faces_<m>`` per distinct observed face size
-            (``size``) and one ``n_degree_<k>`` per distinct vertex degree found
-            in the data.
-
-        Notes
-        -----
-        ``euler_characteristic`` (V − E + F) is the closure measurement.  A
-        connected closed shell gives 2; an open sheet gives a different value.
-        ``majority_face_defect`` measures face-topology deviation from the
-        observed background face size.  For a sphere built from hexagons with
-        twelve pentagons the background is six-sided, the deviation is +2.
-        A geodesic dome of all triangles has no face-size defect (0.0); its
-        closure is captured by ``euler_characteristic`` = 2 and twelve
-        degree-5 vertices in the ``n_degree_5`` column.
-        When the face-size distribution has no unique mode (equal split between
-        two or more sizes), both ``majority_face_size`` and
-        ``majority_face_defect`` are NaN.
-
-        Raises
-        ------
-        ValueError
-            If :meth:`connect` has not been called for *scope*.
-        """
-        st, _, _ = self._state_for_scope(scope)
-        tomo_col = self.tomo_id_column
-        aff_col = self.affiliation_column
-        block_stats = self.get_block_stats(scope=scope)
-        face_stats = self.get_face_stats(scope=scope)
-
-        # Column headers spanning all assemblies
-        all_face_sizes = sorted(face_stats["size"].unique().tolist()) if len(face_stats) > 0 else []
-        all_degrees = sorted(block_stats["degree"].unique().tolist()) if len(block_stats) > 0 else []
-
-        # Boundary blocks per (tomo, block_id): has at least one unmatched site
-        boundary_block_set: set[tuple] = set(
-            (row[tomo_col], row["block_id"])
-            for _, row in st[st["partner"] < 0][[tomo_col, "block_id"]].drop_duplicates().iterrows()
-        )
-
-        rows = []
-        for (tomo_val, aff_val), block_grp in block_stats.groupby([tomo_col, aff_col]):
-            n_blocks = len(block_grp)
-            block_id_set = set(block_grp["block_id"].tolist())
-
-            # Contacts (matched half-edges / 2)
-            st_asm = st[(st[tomo_col] == tomo_val) & (st["block_id"].isin(block_id_set))]
-            n_matched = int((st_asm["partner"] >= 0).sum())
-            n_contacts = n_matched // 2
-
-            # Faces for this affiliation group
-            if len(face_stats) > 0:
-                face_asm = face_stats[(face_stats[tomo_col] == tomo_val) & (face_stats[aff_col] == aff_val)]
-            else:
-                face_asm = face_stats
-            n_faces = len(face_asm)
-
-            # Boundary half-edges and boundary blocks
-            n_boundary = int((st_asm["face_id"] <= 0).sum())
-            n_boundary_blocks = int(sum(1 for bid in block_id_set if (tomo_val, bid) in boundary_block_set))
-
-            closed = n_boundary == 0
-            euler = n_blocks - n_contacts + n_faces
-
-            # angle_deficit_sum
-            deficit_vals = block_grp["angle_deficit"].dropna()
-            angle_deficit_sum = float(deficit_vals.sum())
-
-            # Majority face statistics — derived from inferred sizes so that
-            # damaged larger faces are counted as their intact size, not as
-            # the smaller observed size.
-            if len(face_asm) > 0:
-                face_counts = face_asm["size"].value_counts()
-                max_cnt = face_counts.max()
-                majority_candidates = face_counts[face_counts == max_cnt]
-                if len(majority_candidates) == 1:
-                    majority_fs: int | float = int(majority_candidates.index[0])
-                    majority_fd: float = float(((majority_fs - face_asm["size"]) / majority_fs).sum())
-                else:
-                    majority_fs = float("nan")
-                    majority_fd = float("nan")
-            else:
-                majority_fs = float("nan")
-                majority_fd = float("nan")
-
-            # Vertex-degree distribution
-            degree_counts: dict[str, int] = {f"n_degree_{k}": 0 for k in all_degrees}
-            for k, cnt in block_grp["degree"].value_counts().items():
-                key = f"n_degree_{k}"
-                if key in degree_counts:
-                    degree_counts[key] = int(cnt)
-
-            # Face-size distribution (n_faces_<m>)
-            face_size_counts: dict[str, int] = {f"n_faces_{m}": 0 for m in all_face_sizes}
-            if len(face_asm) > 0:
-                for m, cnt in face_asm["size"].value_counts().items():
-                    key = f"n_faces_{m}"
-                    if key in face_size_counts:
-                        face_size_counts[key] = int(cnt)
-
-            row: dict = {
-                tomo_col: tomo_val,
-                aff_col: float(aff_val),
-                "n_blocks": n_blocks,
-                "n_contacts": n_contacts,
-                "n_faces": n_faces,
-                "n_boundary_half_edges": n_boundary,
-                "n_boundary_blocks": n_boundary_blocks,
-                "closed": closed,
-                "euler_characteristic": euler,
-                "angle_deficit_sum": angle_deficit_sum,
-                "majority_face_size": majority_fs,
-                "majority_face_defect": majority_fd,
-            }
-            row.update(face_size_counts)
-            row.update(degree_counts)
-            rows.append(row)
-
-        if not rows:
-            return pd.DataFrame()
-        result = pd.DataFrame(rows)
-        for m in all_face_sizes:
-            col = f"n_faces_{m}"
-            if col not in result.columns:
-                result[col] = 0
-        for k in all_degrees:
-            col = f"n_degree_{k}"
-            if col not in result.columns:
-                result[col] = 0
-        return result
 
     @gui_exposed(
         label="Face inference", group="Lattice statistics", order=45, returns="dataframe", category="pleomorphic-op"
@@ -10127,7 +10688,7 @@ class PleomorphicSurface:
             _ang_fi = self.blocks.get_angles().astype(float)
             _all_R_fi = srot.from_euler("zxz", _ang_fi, degrees=True)
             _b2r_fi: dict[float, int] = {
-                float(self.blocks.df.iloc[i]["subtomo_id"]): i
+                float(self.blocks.df.iloc[i][self.subtomo_id_column]): i
                 for i in range(len(self.blocks.df))
             }
         else:
@@ -10252,7 +10813,7 @@ class PleomorphicSurface:
         angles_all = _blocks.get_angles().astype(float)
         all_R = srot.from_euler("zxz", angles_all, degrees=True)
         block_to_row: dict[float, int] = {
-            float(_blocks.df.iloc[i]["subtomo_id"]): i for i in range(len(_blocks.df))
+            float(_blocks.df.iloc[i][self.subtomo_id_column]): i for i in range(len(_blocks.df))
         }
 
         # Per-assembly majority face size (mode of observed cycle lengths).
@@ -10302,7 +10863,7 @@ class PleomorphicSurface:
                     {
                         tomo_col: float(tomo_val),
                         aff_col: float(aff_val),
-                        "subtomo_id": float(subtomo_counter),
+                        self.subtomo_id_column: float(subtomo_counter),
                         "x": float(pos[0]),
                         "y": float(pos[1]),
                         "z": float(pos[2]),
@@ -10479,10 +11040,10 @@ class PleomorphicSurface:
 
         for tomo_val, tomo_block_grp in df.groupby(tomo_col):
             st_tomo = st[st[tomo_col] == tomo_val]
-            all_block_ids = tomo_block_grp["subtomo_id"].unique().tolist()
+            all_block_ids = tomo_block_grp[self.subtomo_id_column].unique().tolist()
 
             # Map subtomo_id → affiliation for blocks in this tomo.
-            bid_to_aff: dict[float, float] = dict(zip(tomo_block_grp["subtomo_id"], tomo_block_grp[aff_col]))
+            bid_to_aff: dict[float, float] = dict(zip(tomo_block_grp[self.subtomo_id_column], tomo_block_grp[aff_col]))
 
             # Build block-level graph.  Edges depend on the flags.
             G = _nx.Graph()
@@ -10526,7 +11087,7 @@ class PleomorphicSurface:
 
             # Write new affiliation back into the motl copy.
             tomo_mask = df[tomo_col] == tomo_val
-            df.loc[tomo_mask, aff_col] = df.loc[tomo_mask, "subtomo_id"].map(bid_to_new_aff)
+            df.loc[tomo_mask, aff_col] = df.loc[tomo_mask, self.subtomo_id_column].map(bid_to_new_aff)
 
         return new_motl
 
@@ -10555,24 +11116,24 @@ class PleomorphicSurface:
                 raise ValueError(f"Unknown get_block_stats() column: '{src}'.")
             tomo_col = self.tomo_id_column
             for _, row in block_stats.iterrows():
-                mask = self.blocks.df["subtomo_id"] == row["block_id"]
+                mask = self.blocks.df[self.subtomo_id_column] == row["block_id"]
                 self.blocks.df.loc[mask, dst] = float(row[src])
 
-    _BLOCK_STAT_CHOICES = ("n_sites", "degree", "complete", "assembly_id", "angle_sum", "angle_deficit")
+    _BLOCK_STAT_CHOICES = ("n_sites", "degree", "complete", "patch_id", "angle_sum", "angle_deficit")
 
     @gui_exposed(
         label="Store block stat", group="Lattice statistics", order=50, returns="motl", category="pleomorphic-op"
     )
     def store_block_stat(
         self,
-        stat: Literal["n_sites", "degree", "complete", "assembly_id", "angle_sum", "angle_deficit"],
+        stat: Literal["n_sites", "degree", "complete", "patch_id", "angle_sum", "angle_deficit"],
         column: MotlColumn,
     ) -> "cryomotl.Motl":
         """Write one block-stats column into the blocks motl and return the updated blocks.
 
         Parameters
         ----------
-        stat : {"n_sites", "degree", "complete", "assembly_id", "angle_sum", "angle_deficit"}
+        stat : {"n_sites", "degree", "complete", "patch_id", "angle_sum", "angle_deficit"}
             Name of the :meth:`get_block_stats` column to store.
         column : MotlColumn
             Motl column to write the values into.
@@ -10638,6 +11199,7 @@ class PleomorphicSurface:
         *,
         scope: Literal["original", "inferred", "all"] = "original",
         randomize_phi_angle: bool = True,
+        seed: int | None = None,
     ) -> "cryomotl.Motl":
         """Return a :class:`~cryocat.core.cryomotl.Motl` with one row per closed face.
 
@@ -10670,6 +11232,11 @@ class PleomorphicSurface:
             vector from the face centroid to the reference vertex (the block with
             the smallest ``subtomo_id``) onto the face plane, giving a
             deterministic, vertex-grounded orientation for each face.
+        seed : int, optional
+            Seed for the random in-plane angle ``phi`` when
+            *randomize_phi_angle* is ``True``
+            (:func:`~cryocat.utils.geom.normals_to_euler_angles`).  ``None``
+            draws new angles on every call; an integer repeats them.
         """
         _check_column_collisions("get_faces_as_motl", {
             "face_id_column": self.face_id_column,
@@ -10684,12 +11251,12 @@ class PleomorphicSurface:
         n = len(face_stats)
 
         normals = face_stats[["normal_x", "normal_y", "normal_z"]].values.astype(float)
-        euler_angles = geom.normals_to_euler_angles(normals)
+        euler_angles = geom.normals_to_euler_angles(normals, seed=seed)
 
         if not randomize_phi_angle:
             _block_coords = _blocks.get_coordinates() if _blocks is not None else np.empty((0, 3))
             _block_sids = (
-                _blocks.df["subtomo_id"].astype(float).values if _blocks is not None else np.empty(0)
+                _blocks.df[self.subtomo_id_column].astype(float).values if _blocks is not None else np.empty(0)
             )
             _sid_to_idx: dict[float, int] = {float(s): i for i, s in enumerate(_block_sids)}
             centroids = face_stats[["centroid_x", "centroid_y", "centroid_z"]].values.astype(float)
@@ -10719,22 +11286,22 @@ class PleomorphicSurface:
         data[aff_col] = face_stats[aff_col].values
         data[self.face_size_column] = face_stats["size"].values.astype(float)
         data[self.face_id_column] = face_stats["face_id"].values
-        if _blocks is not None and len(_blocks.df) > 0 and "class" in _blocks.df.columns:
+        if _blocks is not None and len(_blocks.df) > 0 and self.class_column in _blocks.df.columns:
             _bid_cls: dict[float, float] = dict(
-                zip(_blocks.df["subtomo_id"].astype(float), _blocks.df["class"].astype(float))
+                zip(_blocks.df[self.subtomo_id_column].astype(float), _blocks.df[self.class_column].astype(float))
             )
             if self._block_class_non_unique:
                 print(
                     "get_faces_as_motl: multiple block classes present; "
                     "face class assigned from one of its constituent blocks."
                 )
-            data["class"] = np.array([
+            data[self.class_column] = np.array([
                 next((c for b in bids if (c := _bid_cls.get(float(b), 0.0)) != 0.0), self._block_class)
                 if bids else self._block_class
                 for bids in face_stats["block_ids"]
             ])
         else:
-            data["class"] = np.full(n, self._block_class)
+            data[self.class_column] = np.full(n, self._block_class)
 
         motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
         motl.renumber_particles()
@@ -10770,7 +11337,7 @@ class PleomorphicSurface:
             Columns:
 
             * ``tomo_id`` — tomogram identifier
-            * ``assembly_id``
+            * ``patch_id``
             * ``unit_id`` — ``subtomo_id`` of the source block
             * ``partner_id`` — ``subtomo_id`` of the target block
             * ``elevation_deg`` — signed elevation angle in degrees
@@ -10791,7 +11358,7 @@ class PleomorphicSurface:
         aff_col = self.affiliation_column
 
         # Build block → rotation mapping
-        block_sids = _blocks.df["subtomo_id"].astype(float).values
+        block_sids = _blocks.df[self.subtomo_id_column].astype(float).values
         block_angles = _blocks.get_angles().astype(float)
         _sid_to_rot: dict[float, Any] = {
             float(s): srot.from_euler("zxz", block_angles[i], degrees=True)
@@ -10837,12 +11404,12 @@ class PleomorphicSurface:
             z_world = R_unit.apply(_z_hat)
             elevation = float(np.degrees(np.arcsin(float(np.clip(np.dot(d_norm, z_world), -1.0, 1.0)))))
 
-            asm_id = float(srow["assembly_id"])
+            patch_id = float(srow["patch_id"])
             tomo_val = srow[tomo_col]
 
             brow: dict = {
                 tomo_col: tomo_val,
-                "assembly_id": asm_id,
+                "patch_id": patch_id,
                 "unit_id": unit_bid,
                 "partner_id": partner_bid,
                 "elevation_deg": elevation,
@@ -10955,14 +11522,14 @@ class PleomorphicSurface:
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
 
-        block_sids = _blocks.df["subtomo_id"].astype(float).values
+        block_sids = _blocks.df[self.subtomo_id_column].astype(float).values
         block_coords = _blocks.get_coordinates()
         block_angles = _blocks.get_angles().astype(float)
 
         _sid_to_idx: dict[float, int] = {float(s): i for i, s in enumerate(block_sids)}
         _bid_to_class: dict[float, float] = (
-            dict(zip(_blocks.df["subtomo_id"].astype(float), _blocks.df["class"].astype(float)))
-            if "class" in _blocks.df.columns
+            dict(zip(_blocks.df[self.subtomo_id_column].astype(float), _blocks.df[self.class_column].astype(float)))
+            if self.class_column in _blocks.df.columns
             else {}
         )
 
@@ -11025,7 +11592,7 @@ class PleomorphicSurface:
                          if ob != bid and (c := _bid_to_class.get(float(ob), 0.0)) != 0.0),
                         self._block_class,
                     )
-                row["class"] = cls_val
+                row[self.class_column] = cls_val
                 out_rows.append(row)
 
         if not out_rows:
@@ -11177,6 +11744,7 @@ class PleomorphicSurface:
         min_blocks: int | None = None,
         *,
         scope: Literal["original", "inferred", "all"] = "original",
+        seed: int | None = None,
     ) -> "tuple[cryomotl.Motl, pd.DataFrame]":
         """Predict missing-block positions from unmatched contact sites.
 
@@ -11192,6 +11760,10 @@ class PleomorphicSurface:
             ``'original'`` uses the real-block contact graph.  ``'all'`` uses
             the combined lattice + inferred block graph.  ``'inferred'`` uses
             only contacts in inferred faces.
+        seed : int, optional
+            Seed for the random in-plane angle ``phi``
+            (:func:`~cryocat.utils.geom.normals_to_euler_angles`).  ``None``
+            draws new angles on every call; an integer repeats them.
 
         Returns
         -------
@@ -11212,6 +11784,7 @@ class PleomorphicSurface:
             * ``n_source_blocks`` — distinct source blocks contributing to
               this cluster
         """
+        rng = np.random.default_rng(seed)
         st, _, _blocks = self._state_for_scope(scope)
         import networkx as _nx
 
@@ -11230,7 +11803,7 @@ class PleomorphicSurface:
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
         block_to_row: dict[float, int] = {
-            float(_blocks.df.iloc[i]["subtomo_id"]): i for i in range(len(_blocks.df))
+            float(_blocks.df.iloc[i][self.subtomo_id_column]): i for i in range(len(_blocks.df))
         }
         angles_all = _blocks.get_angles().astype(float)
         all_R = srot.from_euler("zxz", angles_all, degrees=True)
@@ -11280,7 +11853,7 @@ class PleomorphicSurface:
                 mean_z = z_axes[nodes].mean(axis=0)
                 nrm = float(np.linalg.norm(mean_z))
                 mean_z = mean_z / nrm if nrm > 1e-15 else mean_z
-                euler = geom.normals_to_euler_angles(mean_z.reshape(1, 3))[0]
+                euler = geom.normals_to_euler_angles(mean_z.reshape(1, 3), seed=rng.integers(2**32))[0]
                 out_rows.append(
                     {
                         tomo_col: tomo_val,
@@ -11318,6 +11891,7 @@ class PleomorphicSurface:
         tol_angle: float,
         min_support: int,
         _diagnostics: "dict | None" = None,
+        seed: int | None = None,
     ) -> "tuple[float, float, float, float, float] | None":
         """Fit block orientation from tip vectors relative to the candidate centre.
 
@@ -11345,6 +11919,8 @@ class PleomorphicSurface:
             Maximum allowed pairwise residual for the Cn check (degrees).
         min_support : int
             Minimum projectable tips required for the Cn check to proceed.
+        seed : int, optional
+            Seed for the random in-plane angle of the non-Cn fallback.
         """
         _z_unit = np.array([0.0, 0.0, 1.0])
         site_length = float(np.linalg.norm(site_shift_use))
@@ -11463,7 +12039,7 @@ class PleomorphicSurface:
                 mean_z = np.mean(_z_axes, axis=0)
                 _nrm = float(np.linalg.norm(mean_z))
                 mean_z = mean_z / _nrm if _nrm > 1e-15 else mean_z
-                _euler = geom.normals_to_euler_angles(mean_z.reshape(1, 3))[0]
+                _euler = geom.normals_to_euler_angles(mean_z.reshape(1, 3), seed=seed)[0]
                 phi_c = float(_euler[0])
                 theta_c = float(_euler[1])
                 psi_c = float(_euler[2])
@@ -11486,6 +12062,7 @@ class PleomorphicSurface:
         site_shift: "TripletLike | None" = None,
         clean_distance: float | None = None,
         min_real_support: int = 0,
+        seed: int | None = None,
     ) -> "tuple[cryomotl.Motl, pd.DataFrame]":
         """Infer missing-block positions from unpaired legs via Cn symmetry fitting.
 
@@ -11564,6 +12141,11 @@ class PleomorphicSurface:
             appear in the returned motl.  0 returns everything;
             1 excludes pure-virtual candidates; 2 requires at least two
             confirmations from actual data.
+        seed : int, optional
+            Seed for the random in-plane angle of particles whose
+            orientation comes from the mean z-axis of their neighbours
+            (non-Cn blocks, or a single tip).  ``None`` draws new angles on
+            every call; an integer repeats them.
 
         Returns
         -------
@@ -11603,6 +12185,7 @@ class PleomorphicSurface:
             If ``connect()`` has not been called or no block definition is
             set.
         """
+        rng = np.random.default_rng(seed)
         self._require_connect()
         if self.block_definition is None or self.blocks is None:
             raise ValueError("No block definition: call from_blocks() or set block_definition.")
@@ -11656,7 +12239,7 @@ class PleomorphicSurface:
 
         # ── Block orientations (needed for non-Cn fallback) ────────────────
         _block_to_row: dict[float, int] = {
-            float(self.blocks.df.iloc[i]["subtomo_id"]): i for i in range(len(self.blocks.df))
+            float(self.blocks.df.iloc[i][self.subtomo_id_column]): i for i in range(len(self.blocks.df))
         }
         _angles_blocks = self.blocks.get_angles().astype(float)
         _all_R = srot.from_euler("zxz", _angles_blocks, degrees=True)
@@ -11737,6 +12320,7 @@ class PleomorphicSurface:
                         _fit = self._fit_orientation_from_tips(
                             V, _near_bids_fit, _block_to_row, _all_R, _sv_c,
                             _n_c, _ang_step_c, _tol_ang_c, min_support,
+                            seed=rng.integers(2**32),
                         )
                         if _fit is None:
                             continue
@@ -11782,7 +12366,7 @@ class PleomorphicSurface:
                     break
 
                 # Deduplicate: keep best angular RMS (lowest) candidate when two
-                # centres are within merge_distance of each other.
+                # centres are within clean_distance of each other.
                 round_cands.sort(key=lambda c: (c["angular_rms"], -c["n_support"]))
                 kept: list[dict] = []
                 for cand in round_cands:
@@ -11946,7 +12530,7 @@ class PleomorphicSurface:
             data["phi"][k] = row["phi"]
             data["theta"][k] = row["theta"]
             data["psi"][k] = row["psi"]
-            data["class"][k] = float(row.get("class", self._block_class))
+            data[self.class_column][k] = float(row.get("class", self._block_class))
             data[self.block_type_column][k] = float(row.get("block_type", 1.0))
             data[self._origin_column][k] = 2.0
             _diag_rows.append({
@@ -11964,8 +12548,8 @@ class PleomorphicSurface:
         if out_rows:
             self._update_added(motl.df.copy(), origin=2)
             _origin_2_mask = self._added.df[self._origin_column] == 2.0
-            _assigned_sids = self._added.df.loc[_origin_2_mask, "subtomo_id"].values
-            motl.df["subtomo_id"] = _assigned_sids
+            _assigned_sids = self._added.df.loc[_origin_2_mask, self.subtomo_id_column].values
+            motl.df[self.subtomo_id_column] = _assigned_sids
             for _k, _sid in enumerate(_assigned_sids):
                 _diag_rows[_k]["subtomo_id"] = float(_sid)
 
@@ -11984,6 +12568,7 @@ class PleomorphicSurface:
         min_neighbours: int = 2,
         bonding_tolerance: float | None = None,
         angle_tolerance: float | None = None,
+        seed: int | None = None,
     ) -> "tuple[cryomotl.Motl, pd.DataFrame]":
         """Recover orientations for particles removed from :attr:`blocks`.
 
@@ -12021,6 +12606,11 @@ class PleomorphicSurface:
             only.  ``None`` falls back to ``self.angle_tolerance``; if that
             is also ``None``, derives to ``0.125 × (360 / n)``.  Raises
             ``ValueError`` when the resolved value is ``>= 0.5 × (360 / n)``.
+        seed : int, optional
+            Seed for the random in-plane angle of particles whose
+            orientation comes from the mean z-axis of their neighbours
+            (non-Cn blocks, or a single tip).  ``None`` draws new angles on
+            every call; an integer repeats them.
 
         Returns
         -------
@@ -12055,6 +12645,7 @@ class PleomorphicSurface:
         ValueError
             If no block definition or block layer is present.
         """
+        rng = np.random.default_rng(seed)
         self._require_connect()
         if self.block_definition is None or self.blocks is None:
             raise ValueError("No block definition: call from_blocks() or set block_definition.")
@@ -12107,12 +12698,12 @@ class PleomorphicSurface:
 
         # ── Reference block data ─────────────────────────────────────────
         _block_to_row: dict[float, int] = {
-            float(self.blocks.df.iloc[i]["subtomo_id"]): i for i in range(len(self.blocks.df))
+            float(self.blocks.df.iloc[i][self.subtomo_id_column]): i for i in range(len(self.blocks.df))
         }
         _ref_pairs: set[tuple[float, float]] = set(
             zip(
                 self.blocks.df[tomo_col].astype(float),
-                self.blocks.df["subtomo_id"].astype(float),
+                self.blocks.df[self.subtomo_id_column].astype(float),
             )
         )
         _angles_blocks = self.blocks.get_angles().astype(float)
@@ -12121,7 +12712,7 @@ class PleomorphicSurface:
 
         # ── Resolve candidates ───────────────────────────────────────────
         _motl_pairs = list(
-            zip(motl.df[tomo_col].astype(float), motl.df["subtomo_id"].astype(float))
+            zip(motl.df[tomo_col].astype(float), motl.df[self.subtomo_id_column].astype(float))
         )
         _not_in_ref = pd.Series(
             [p not in _ref_pairs for p in _motl_pairs], index=motl.df.index
@@ -12151,7 +12742,7 @@ class PleomorphicSurface:
 
             if len(ref_tomo_idx) == 0:
                 for _, crow in cand_t.iterrows():
-                    unfitted_rows.append({"subtomo_id": float(crow["subtomo_id"]), "status": "unfitted", "n_neighbours": 0.0, "angular_rms": float("nan"), "normal_spread": float("nan"), "tip_plane_angle": float("nan"), "reason": "no_reference_blocks"})
+                    unfitted_rows.append({"subtomo_id": float(crow[self.subtomo_id_column]), "status": "unfitted", "n_neighbours": 0.0, "angular_rms": float("nan"), "normal_spread": float("nan"), "tip_plane_angle": float("nan"), "reason": "no_reference_blocks"})
                 continue
 
             ref_tomo_coords = ref_coords[ref_tomo_idx]
@@ -12162,7 +12753,7 @@ class PleomorphicSurface:
 
             for local_i, cand_row in cand_t.iterrows():
                 C = cand_coords_t[local_i]
-                _cand_sid = float(cand_row["subtomo_id"])
+                _cand_sid = float(cand_row[self.subtomo_id_column])
 
                 # Resolve definition for this candidate's block type.
                 if _is_dict_bd:
@@ -12200,7 +12791,7 @@ class PleomorphicSurface:
                 )
 
                 row_base: dict = {c: 0.0 for c in cryomotl.Motl.motl_columns}
-                row_base["subtomo_id"] = _cand_sid
+                row_base[self.subtomo_id_column] = _cand_sid
                 row_base[self.block_type_column] = float(cand_row[self.block_type_column])
                 row_base[tomo_col] = float(cand_tomo)
                 row_base[aff_col] = aff_majority
@@ -12208,18 +12799,19 @@ class PleomorphicSurface:
                 row_base["y"] = float(C[1])
                 row_base["z"] = float(C[2])
                 row_base[self.source_block_count_column] = float(n_accepted)
-                _cand_cls = float(cand_row["class"]) if "class" in cand_row.index else 0.0
-                row_base["class"] = _cand_cls if _cand_cls != 0.0 else self._block_class
+                _cand_cls = float(cand_row[self.class_column]) if self.class_column in cand_row.index else 0.0
+                row_base[self.class_column] = _cand_cls if _cand_cls != 0.0 else self._block_class
 
                 # Vectors from candidate to accepted neighbour centres: the bond directions.
                 V = ref_tomo_coords[accepted_local] - C
                 accepted_bids = np.array([
-                    float(self.blocks.df.iloc[k]["subtomo_id"]) for k in accepted_global_idx
+                    float(self.blocks.df.iloc[k][self.subtomo_id_column]) for k in accepted_global_idx
                 ])
                 _diag: dict = {}
                 _fit = self._fit_orientation_from_tips(
                     V, accepted_bids, _block_to_row, _all_R, _sv_cand,
                     _n_cand, _ang_step_cand, _ang_tol_cand, min_neighbours, _diag,
+                    seed=rng.integers(2**32),
                 )
                 if _fit is None:
                     unfitted_rows.append({
@@ -12361,7 +12953,9 @@ class PleomorphicSurface:
             min_neighbours is not None or max_angular_rms is not None or max_normal_dev is not None
         ):
             _fd = diagnostics[diagnostics["status"] == "fitted"][["subtomo_id", "n_neighbours", "angular_rms", "normal_spread"]]
-            rec_df = rec_df.merge(_fd, on="subtomo_id", how="left")
+            rec_df = rec_df.merge(
+                _fd.rename(columns={"subtomo_id": self.subtomo_id_column}), on=self.subtomo_id_column, how="left"
+            )
             if min_neighbours is not None:
                 rec_df = rec_df[rec_df["n_neighbours"].fillna(0.0) >= float(min_neighbours)]
             if max_angular_rms is not None:
@@ -12378,7 +12972,7 @@ class PleomorphicSurface:
 
         # Assign class to recovered particles.  Keep any non-zero class already
         # in the motl; for rows whose class is 0, use the nearest real block's class.
-        _zero_mask = rec_df["class"] == 0.0
+        _zero_mask = rec_df[self.class_column] == 0.0
         if _zero_mask.any():
             from scipy.spatial import cKDTree as _cKDTree
             _real_xyz = (
@@ -12390,15 +12984,15 @@ class PleomorphicSurface:
                 + rec_df.loc[_zero_mask, ["shift_x", "shift_y", "shift_z"]].values.astype(float)
             )
             _, _nn_idx = _cKDTree(_real_xyz).query(_rec_xyz, k=1)
-            _nn_classes = real_df["class"].values.astype(float)[_nn_idx]
+            _nn_classes = real_df[self.class_column].values.astype(float)[_nn_idx]
             _nn_classes[_nn_classes == 0.0] = 1.0
-            rec_df.loc[_zero_mask, "class"] = _nn_classes
+            rec_df.loc[_zero_mask, self.class_column] = _nn_classes
 
-        rec_df[self._source_id_column] = rec_df["subtomo_id"].copy()
+        rec_df[self._source_id_column] = rec_df[self.subtomo_id_column].copy()
         rec_df[self._origin_column] = 1.0
 
         merged_df = pd.concat([real_df, rec_df], ignore_index=True)
-        merged_df["subtomo_id"] = np.arange(1, len(merged_df) + 1, dtype=float)
+        merged_df[self.subtomo_id_column] = np.arange(1, len(merged_df) + 1, dtype=float)
         self.blocks = cryomotl.Motl(merged_df[cryomotl.Motl.motl_columns])
 
         self.connect(self._max_distance)
@@ -12467,7 +13061,7 @@ class PleomorphicSurface:
             raise ValueError("No faces to build envelope from (after filtering).")
 
         block_to_row: dict[float, int] = {
-            float(_blks.df.iloc[i]["subtomo_id"]): i for i in range(len(_blks.df))
+            float(_blks.df.iloc[i][self.subtomo_id_column]): i for i in range(len(_blks.df))
         }
         _blks_coords = _blks.get_coordinates()  # (N, 3) shifted, voxels
 
@@ -12776,10 +13370,10 @@ class PleomorphicSurface:
         (``self.blocks``).  The envelope is never built internally; the caller
         is responsible for attaching one, e.g.::
 
-            ps_clean = PleomorphicSurface(blocks=motl, block_definition=bd, ...)
+            ps_clean = PleomorphicAssembly(blocks=motl, block_definition=bd, ...)
             ps_clean.connect(max_distance=4.0)
             mesh = ps_clean.envelope_from_faces()
-            ps = PleomorphicSurface(mesh, blocks=motl, block_definition=bd, ...)
+            ps = PleomorphicAssembly(mesh, blocks=motl, block_definition=bd, ...)
             annot = ps.annotate_with_envelope()
 
         Do not pass the envelope back to the same instance that produced it;
@@ -12866,7 +13460,7 @@ class PleomorphicSurface:
             normal_angles = np.degrees(np.arccos(dots))
 
             try:
-                env_ps = PleomorphicSurface(envelope)
+                env_ps = PleomorphicAssembly(envelope)
                 curv_table = env_ps._mesh_triangle_curvature_table()
                 mean_curv = curv_table["mean_curvature"][prim_ids]
                 gauss_curv = curv_table["gaussian_curvature"][prim_ids]
@@ -12877,7 +13471,7 @@ class PleomorphicSurface:
             return pd.DataFrame(
                 {
                     tomo_col: blocks_df[tomo_col].values,
-                    "block_id": blocks_df["subtomo_id"].values,
+                    "block_id": blocks_df[self.subtomo_id_column].values,
                     "envelope_distance": distances,
                     "closest_x": closest_pts[:, 0],
                     "closest_y": closest_pts[:, 1],
@@ -12934,7 +13528,7 @@ class PleomorphicSurface:
         gauss_curv = np.full(n_total, float("nan"))
         if hit_mask.any():
             try:
-                env_ps = PleomorphicSurface(envelope)
+                env_ps = PleomorphicAssembly(envelope)
                 curv_table = env_ps._mesh_triangle_curvature_table()
                 mean_curv[hit_mask] = curv_table["mean_curvature"][prim_ids_raw[hit_mask].astype(int)]
                 gauss_curv[hit_mask] = curv_table["gaussian_curvature"][prim_ids_raw[hit_mask].astype(int)]
@@ -12944,7 +13538,7 @@ class PleomorphicSurface:
         return pd.DataFrame(
             {
                 tomo_col: blocks_df[tomo_col].values,
-                "block_id": blocks_df["subtomo_id"].values,
+                "block_id": blocks_df[self.subtomo_id_column].values,
                 "envelope_distance": distances,
                 "closest_x": closest_pts[:, 0],
                 "closest_y": closest_pts[:, 1],
@@ -12969,7 +13563,7 @@ class PleomorphicSurface:
             "point_cloud_from_motl",
         ] = "mesh",
         **kwargs: Any,
-    ) -> "PleomorphicSurface":
+    ) -> "PleomorphicAssembly":
         """
         Create a wrapped surface from common on-disk inputs.
 
@@ -12991,8 +13585,8 @@ class PleomorphicSurface:
             - "point_cloud_from_motl": oriented point cloud from a motl file via
               :meth:`OrientedPointCloud.from_motl`. Pass ``group_by`` (e.g.
               ``'object_id'`` or ``'subtomo_id'``) to split the motl into one wrapped
-              surface per unique value; returns a ``dict`` of ``PleomorphicSurface``
-              in that case, otherwise a single ``PleomorphicSurface``.
+              surface per unique value; returns a ``dict`` of ``PleomorphicAssembly``
+              in that case, otherwise a single ``PleomorphicAssembly``.
         **kwargs
             Forwarded to the selected loader. Accepted keywords depend on ``method``:
 
@@ -13039,7 +13633,7 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface or dict[Any, PleomorphicSurface]
+        PleomorphicAssembly or dict[Any, PleomorphicAssembly]
             Wrapped surface loaded from ``input_path``. For
             ``method="point_cloud_from_motl"`` with ``group_by`` splitting into
             multiple groups, a dict of wrapped surfaces keyed by group value.
@@ -13109,7 +13703,7 @@ class PleomorphicSurface:
     def faces(self):
         """Triangle connectivity for mesh-backed surfaces."""
         if not isinstance(self.surface, Mesh):
-            raise TypeError("faces are only available for Mesh-backed PleomorphicSurface")
+            raise TypeError("faces are only available for Mesh-backed PleomorphicAssembly")
         return self.surface.faces
 
     @property
@@ -13131,7 +13725,7 @@ class PleomorphicSurface:
             Columns are the two principal curvature values k1 and k2 at each vertex.
         """
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
         return self.surface.get_principal_curvatures()
 
     def get_mean_curvature(self) -> np.ndarray:
@@ -13143,7 +13737,7 @@ class PleomorphicSurface:
             Mean curvature H = (k1 + k2) / 2 at each vertex.
         """
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
         return self.surface.get_mean_curvature()
 
     def get_gaussian_curvature(self) -> np.ndarray:
@@ -13155,7 +13749,7 @@ class PleomorphicSurface:
             Gaussian curvature K = k1 * k2 at each vertex.
         """
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
         return self.surface.get_gaussian_curvature()
 
     def get_curvature_directions(self) -> np.ndarray:
@@ -13168,7 +13762,7 @@ class PleomorphicSurface:
             (k1), ``[:, :, 1]`` is the second (k2).
         """
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
         return self.surface.get_curvature_directions()
 
     def get_shape_index(self) -> np.ndarray:
@@ -13180,7 +13774,7 @@ class PleomorphicSurface:
             Shape index S = (2/pi) * arctan2(k1 + k2, k1 - k2) at each vertex, in [-1, 1].
         """
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
         return self.surface.get_shape_index()
 
     def get_curvedness(self) -> np.ndarray:
@@ -13192,7 +13786,7 @@ class PleomorphicSurface:
             Curvedness C = sqrt((k1^2 + k2^2) / 2) at each vertex, in [0, inf).
         """
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
         return self.surface.get_curvedness()
 
     def get_surface_type(self, as_labels: bool = False) -> np.ndarray:
@@ -13210,14 +13804,14 @@ class PleomorphicSurface:
             Surface type per vertex.
         """
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicSurface")
+            raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
         return self.surface.get_surface_type(as_labels=as_labels)
 
     def get_surface_area(self) -> float:
         """Return total surface area of a mesh-backed surface."""
         if not isinstance(self.surface, Mesh):
             raise TypeError(
-                "get_surface_area is only available for Mesh-backed PleomorphicSurface. "
+                "get_surface_area is only available for Mesh-backed PleomorphicAssembly. "
                 "An OrientedPointCloud has no face connectivity from which to compute area."
             )
         return self.surface.get_surface_area()
@@ -13265,7 +13859,7 @@ class PleomorphicSurface:
         """
         return self.surface.save(output_path, format=format, **kwargs)
 
-    def compute_normals(self, **kwargs: Any) -> "PleomorphicSurface":
+    def compute_normals(self, **kwargs: Any) -> "PleomorphicAssembly":
         """
         Delegates to :meth:`Mesh.compute_normals` or :meth:`OrientedPointCloud.compute_normals`.
 
@@ -13280,20 +13874,20 @@ class PleomorphicSurface:
             - ``orient_normals`` : bool, default=True — orient normals consistently.
             - ``tangent_plane_knn`` : int, default=50 — neighbors for normal orientation.
             - ``inplace`` : bool, default=True — update in place; if False, wrap and return a
-              new :class:`PleomorphicSurface`.
+              new :class:`PleomorphicAssembly`.
 
         Returns
         -------
-        PleomorphicSurface
+        PleomorphicAssembly
             ``self`` when the delegate updates in place; a new wrapper when the delegate returns
             a copy (point cloud with ``inplace=False``).
         """
         out = self.surface.compute_normals(**kwargs)
         if out is None:
             return self
-        return PleomorphicSurface(out)
+        return PleomorphicAssembly(out)
 
-    def flip_normals(self, inplace: bool = True, **kwargs: Any) -> "PleomorphicSurface" | None:
+    def flip_normals(self, inplace: bool = True, **kwargs: Any) -> "PleomorphicAssembly" | None:
         """
         Delegate normal-direction flipping to the wrapped surface.
 
@@ -13301,7 +13895,7 @@ class PleomorphicSurface:
         ----------
         inplace : bool, default=True
             If True, modify the wrapped surface in place and return ``self``.
-            If False, return a new :class:`PleomorphicSurface` wrapping a flipped copy.
+            If False, return a new :class:`PleomorphicAssembly` wrapping a flipped copy.
         **kwargs
             *Mesh* only:
 
@@ -13313,13 +13907,13 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface or None
+        PleomorphicAssembly or None
             ``self`` when ``inplace=True``; a new wrapper when ``inplace=False``.
         """
         out = self.surface.flip_normals(inplace=inplace, **kwargs)
         if inplace:
             return self
-        return PleomorphicSurface(out)
+        return PleomorphicAssembly(out)
 
     def refine_normals(
         self,
@@ -13330,7 +13924,7 @@ class PleomorphicSurface:
         logger: logging.Logger | None = None,
         inplace: bool = True,
         **kwargs: Any,
-    ) -> "PleomorphicSurface":
+    ) -> "PleomorphicAssembly":
         """
         Refine normals on the wrapped surface by neighborhood averaging.
 
@@ -13356,7 +13950,7 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface
+        PleomorphicAssembly
             ``self`` when ``inplace=True``; a new wrapper when ``inplace=False``.
         """
         if not (self.is_mesh or self.is_point_cloud):
@@ -13375,9 +13969,9 @@ class PleomorphicSurface:
         )
         if inplace:
             return self
-        return PleomorphicSurface(out)
+        return PleomorphicAssembly(out)
 
-    def remove_nonfinite_vertices(self, inplace: bool = True, **kwargs: Any) -> "PleomorphicSurface":
+    def remove_nonfinite_vertices(self, inplace: bool = True, **kwargs: Any) -> "PleomorphicAssembly":
         """
         Remove NaN/Inf vertices or point samples from the wrapped surface.
 
@@ -13387,7 +13981,7 @@ class PleomorphicSurface:
         ----------
         inplace : bool, default=True
             If True, modify the wrapped surface in place and return ``self``.
-            If False, return a new :class:`PleomorphicSurface` wrapping a repaired copy.
+            If False, return a new :class:`PleomorphicAssembly` wrapping a repaired copy.
         **kwargs
             - ``recompute_normals`` : bool — recompute normals after filtering.
               Default is ``True`` for :class:`Mesh`, ``False`` for
@@ -13395,16 +13989,16 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface
+        PleomorphicAssembly
             ``self`` when ``inplace=True``; a new wrapper around the repaired surface when
             ``inplace=False``.
         """
         out = self.surface.remove_nonfinite_vertices(inplace=inplace, **kwargs)
         if inplace:
             return self
-        return PleomorphicSurface(out)
+        return PleomorphicAssembly(out)
 
-    def oversample(self, **kwargs: Any) -> "PleomorphicSurface":
+    def oversample(self, **kwargs: Any) -> "PleomorphicAssembly":
         """
         Delegate to ``oversample`` on :attr:`surface`; mesh and point-cloud semantics differ.
 
@@ -13430,12 +14024,12 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface
+        PleomorphicAssembly
             New wrapper around the resampled surface.
         """
-        return PleomorphicSurface(self.surface.oversample(**kwargs))
+        return PleomorphicAssembly(self.surface.oversample(**kwargs))
 
-    def crop(self, bbox: Any, inplace: bool = False) -> "PleomorphicSurface | None":
+    def crop(self, bbox: Any, inplace: bool = False) -> "PleomorphicAssembly | None":
         """
         Delegate to :meth:`Mesh.crop` / :meth:`OrientedPointCloud.crop`.
 
@@ -13449,20 +14043,20 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface or None
+        PleomorphicAssembly or None
             Wrapped surface when ``inplace=False``; ``None`` when ``inplace=True``.
         """
         out = self.surface.crop(bbox, inplace=inplace)
         if inplace:
             return None
-        return PleomorphicSurface(out)
+        return PleomorphicAssembly(out)
 
     def extract_region(
         self,
         indices: np.ndarray,
         element: Literal["triangles", "points", "mask"] = "triangles",
         preserve_curvatures: bool = True,
-    ) -> "PleomorphicSurface":
+    ) -> "PleomorphicAssembly":
         """
         Extract an indexed subregion from the wrapped surface.
 
@@ -13487,7 +14081,7 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface
+        PleomorphicAssembly
             New wrapper containing only the extracted elements.
 
         Raises
@@ -13504,7 +14098,7 @@ class PleomorphicSurface:
             if element not in ("triangle", "triangles"):
                 raise ValueError("Mesh subregions currently support element='triangles'")
             out = self.surface.extract_submesh(indices, preserve_curvatures=preserve_curvatures)
-            return PleomorphicSurface(out)
+            return PleomorphicAssembly(out)
 
         if isinstance(self.surface, OrientedPointCloud):
             if element in ("point", "points"):
@@ -13513,13 +14107,13 @@ class PleomorphicSurface:
                 out = self.surface.extract_points(mask=indices)
             else:
                 raise ValueError("Point-cloud subregions support element='points' or element='mask'")
-            return PleomorphicSurface(out)
+            return PleomorphicAssembly(out)
 
         raise TypeError(f"Unsupported surface type: {type(self.surface)}")
 
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Convex hull", group="Geometry", order=20, returns="surface")
-    def convex_hull(self) -> "PleomorphicSurface":
-        """Return the convex hull as a :class:`PleomorphicSurface` wrapping a :class:`Mesh`.
+    def convex_hull(self) -> "PleomorphicAssembly":
+        """Return the convex hull as a :class:`PleomorphicAssembly` wrapping a :class:`Mesh`.
 
         Works for both Mesh and OrientedPointCloud backing surfaces. The per-hull
         statistics (volume, surface area, etc.) returned by Open3D are discarded; call
@@ -13527,7 +14121,7 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface
+        PleomorphicAssembly
             New wrapper whose backing surface is a :class:`Mesh` of the convex hull.
         """
         if isinstance(self.surface, Mesh):
@@ -13538,12 +14132,12 @@ class PleomorphicSurface:
             raise TypeError(f"Unsupported surface type: {type(self.surface)}")
         hull_mesh = Mesh.from_open3d(hull_o3d)
         print(f"Computed convex hull with {len(hull_mesh.vertices)} vertices")
-        return PleomorphicSurface(hull_mesh)
+        return PleomorphicAssembly(hull_mesh)
 
     @gui_exposed(
         category="surface-op", label="[Mesh/OPC] Clean by normals angle", group="Mask", order=30, returns="none"
     )
-    def clean_by_normals(self, max_angle_deg: float = 90.0) -> "PleomorphicSurface":
+    def clean_by_normals(self, max_angle_deg: float = 90.0) -> "PleomorphicAssembly":
         """Remove points whose normal deviates more than ``max_angle_deg`` from the mean direction.
 
         Cleans against the *mean* normal of the surface. To clean against a fixed
@@ -13559,7 +14153,7 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface
+        PleomorphicAssembly
             ``self`` (modified in-place).
         """
         self.surface.apply_normals_mask(
@@ -13573,7 +14167,7 @@ class PleomorphicSurface:
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Clean by angle", group="Mask", order=40, returns="none")
     def clean_by_angle(
         self, max_angle_deg: float, reference_normal: np.ndarray, signed: bool = False
-    ) -> "PleomorphicSurface":
+    ) -> "PleomorphicAssembly":
         """Remove points whose normal deviates more than ``max_angle_deg`` from a given axis.
 
         Companion to :meth:`clean_by_normals`; both delegate to the same engine
@@ -13594,7 +14188,7 @@ class PleomorphicSurface:
 
         Returns
         -------
-        PleomorphicSurface
+        PleomorphicAssembly
             ``self`` (modified in-place).
         """
         self.surface.apply_normals_mask(
@@ -13661,7 +14255,7 @@ class PleomorphicSurface:
                 "Use 'closed' (enclosed volumes) or 'planar' (flatter surfaces)."
             )
 
-    def apply_vertex_mask(self, mask: np.ndarray, inplace: bool = False) -> "PleomorphicSurface | None":
+    def apply_vertex_mask(self, mask: np.ndarray, inplace: bool = False) -> "PleomorphicAssembly | None":
         """
         Return a surface containing only vertices where ``mask`` is True.
 
@@ -13684,11 +14278,11 @@ class PleomorphicSurface:
             Boolean array of shape (N,) aligned with ``self.surface.vertices``.
         inplace : bool, default=False
             If True, modify this instance in place and return None.
-            If False, return a new PleomorphicSurface.
+            If False, return a new PleomorphicAssembly.
 
         Returns
         -------
-        PleomorphicSurface or None
+        PleomorphicAssembly or None
             New instance if ``inplace=False``, else None.
         """
         if not isinstance(self.surface, (Mesh, OrientedPointCloud)):
@@ -13696,7 +14290,7 @@ class PleomorphicSurface:
         filtered_surface = self.surface.apply_vertex_mask(mask, inplace=inplace)
         if inplace:
             return None
-        return PleomorphicSurface(filtered_surface)
+        return PleomorphicAssembly(filtered_surface)
 
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Distance to points", group="Analysis", order=50)
     def distance_to_points(
@@ -14042,7 +14636,7 @@ class PleomorphicSurface:
 
     def distance_to_pointcloud(
         self,
-        target: "PleomorphicSurface" | OrientedPointCloud,
+        target: "PleomorphicAssembly" | OrientedPointCloud,
         method: Literal["nn_unoriented", "nn", "nearest", "nn_oriented", "ray"] = "nn_unoriented",
         max_distance: float | None = None,
         ray_length: float | None = None,
@@ -14059,7 +14653,7 @@ class PleomorphicSurface:
 
         Parameters
         ----------
-        target : PleomorphicSurface or OrientedPointCloud
+        target : PleomorphicAssembly or OrientedPointCloud
             Target surface. Wrapped targets are unwrapped internally; the concrete
             target must be an OrientedPointCloud.
         method : {'nn_unoriented', 'nn', 'nearest', 'nn_oriented', 'ray'}, default='nn_unoriented'
@@ -14172,7 +14766,7 @@ class PleomorphicSurface:
             )
         target_ids = np.asarray(result["primitive_ids"])[hit_mask]
 
-        keep = PleomorphicSurface._filter_hits_by_distance(
+        keep = PleomorphicAssembly._filter_hits_by_distance(
             distances, min_distance_source_target, max_distance_source_target
         )
         out: dict[str, np.ndarray] = {
@@ -14197,7 +14791,7 @@ class PleomorphicSurface:
         distances = np.asarray(result["distances"])[hit_mask]
         target_ids = np.asarray(result["closest_indices"])[hit_mask]
 
-        keep = PleomorphicSurface._filter_hits_by_distance(
+        keep = PleomorphicAssembly._filter_hits_by_distance(
             distances, min_distance_source_target, max_distance_source_target
         )
         out: dict[str, np.ndarray] = {
@@ -14214,7 +14808,7 @@ class PleomorphicSurface:
     def _mesh_triangle_curvature_table(self) -> dict[str, np.ndarray]:
         """Per-triangle mean and Gaussian curvature (vertex average over face corners)."""
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Triangle curvature table requires a Mesh-backed PleomorphicSurface")
+            raise TypeError("Triangle curvature table requires a Mesh-backed PleomorphicAssembly")
         faces = self.surface.faces
         mean_vertex = self.get_mean_curvature()
         gaussian_vertex = self.get_gaussian_curvature()
@@ -14226,7 +14820,7 @@ class PleomorphicSurface:
     def _triangles_from_vertices(self, vertex_ids: np.ndarray) -> np.ndarray:
         """Triangle IDs incident on any of the given mesh vertex indices."""
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Vertex-to-triangle lookup requires a Mesh-backed PleomorphicSurface")
+            raise TypeError("Vertex-to-triangle lookup requires a Mesh-backed PleomorphicAssembly")
         vertex_ids = np.unique(np.asarray(vertex_ids, dtype=np.intp))
         faces = self.surface.faces
         return np.flatnonzero(np.isin(faces, vertex_ids).any(axis=1))
@@ -14262,7 +14856,7 @@ class PleomorphicSurface:
             Values are sorted integer arrays of triangle indices.
         """
         if not isinstance(self.surface, Mesh):
-            raise TypeError("Triangle neighborhoods require a Mesh-backed PleomorphicSurface")
+            raise TypeError("Triangle neighborhoods require a Mesh-backed PleomorphicAssembly")
 
         seeds = np.unique(np.asarray(seed_triangle_ids, dtype=np.intp))
         regions: dict[str, np.ndarray] = {
@@ -14355,7 +14949,7 @@ class PleomorphicSurface:
             Values are sorted integer arrays of point indices.
         """
         if not isinstance(self.surface, OrientedPointCloud):
-            raise TypeError("Point neighborhoods require an OrientedPointCloud-backed PleomorphicSurface")
+            raise TypeError("Point neighborhoods require an OrientedPointCloud-backed PleomorphicAssembly")
         return self.surface.get_point_neighborhoods(seed_point_ids, radii)
 
     @staticmethod
@@ -14593,80 +15187,200 @@ class PleomorphicSurface:
 
 
 # =============================================================================
-# ParametricSurface — wrapper for analytic (ellipsoid) surface workflows
+# ParametricAssembly — particles assigned to fitted analytic surfaces (ellipsoids, tubes)
 # =============================================================================
 
+AnalyticSurfaceTypeName = Literal["ellipsoid", "tube"]
+"""Type alias for the surface-type strings accepted by :class:`AnalyticSurfacesM`."""
 
-class ParametricSurface:
-    """Wrapper around :class:`AnalyticSurfacesM` for the ellipsoid particle-assignment workflow.
 
-    Mirrors the static-method interface of the old ``PleomorphicSurface`` ellipsoid
-    methods but as a proper class with instance state.
+class ParametricAssembly(ContactGraph):
+    """Parametric assembly: analytic surfaces plus an optional block layer.
+
+    Not part of the :class:`SymmetricComplex` family (:class:`CnComplex`,
+    :class:`PolyhedralComplex`, …) and does not inherit from it.
+
+    The two layers are independent; either can be absent, but at least one
+    is required.
+
+    * **Surface layer** (``_surfaces``): an :class:`AnalyticSurfacesM` with
+      one fitted analytic surface (ellipsoid or tube) per
+      ``(tomo_id, column_name)`` group, to which particles are assigned.
+      Access it via :attr:`surfaces`; check its presence with
+      :attr:`has_surfaces`.  Built by :meth:`from_motl` or :meth:`from_csv`.
+    * **Block layer** (``blocks``): a :class:`~cryocat.core.cryomotl.Motl`
+      with a :class:`BlockDefinition` (or dict thereof), shared with
+      :class:`PleomorphicAssembly` through :class:`ContactGraph`.  Built by
+      :meth:`from_blocks`; :meth:`connect` builds the contact graph, read
+      through :meth:`get_sites_as_motl` and the four statistics getters.
 
     Parameters
     ----------
-    surfaces : AnalyticSurfacesM
-        Already-constructed container of analytic surfaces.
+    surfaces : AnalyticSurfacesM or None, default=None
+        Already-constructed container of analytic surfaces.  ``None`` means
+        no surface layer.
     column_name : MotlColumn, default='object_id'
         Column name used as the surface-object identifier (one fitted surface
         per unique ``(tomo_id, column_name)`` group). Per the column-naming
         convention this is :data:`cryocat._types.MotlColumn`.
+    block_layer : BlockLayer or None, default=None
+        Pre-built block layer.  Use :meth:`from_blocks` to construct one
+        without building a :class:`BlockLayer` directly.
+
+    Raises
+    ------
+    TypeError
+        If neither *surfaces* nor *block_layer* is provided.
     """
 
-    def __init__(self, surfaces: AnalyticSurfacesM, column_name: MotlColumn = "object_id") -> None:
-        self.surfaces = surfaces
+    def __init__(
+        self,
+        surfaces: AnalyticSurfacesM | None = None,
+        column_name: MotlColumn = "object_id",
+        *,
+        block_layer: BlockLayer | None = None,
+    ) -> None:
+        if surfaces is None and block_layer is None:
+            raise TypeError("ParametricAssembly requires at least surfaces (AnalyticSurfacesM) or a block_layer.")
+        self._surfaces: AnalyticSurfacesM | None = surfaces
         self.column_name = column_name
+        self._init_block_layer(block_layer)
+
+    @property
+    def surfaces(self) -> AnalyticSurfacesM:
+        """The fitted analytic surfaces.
+
+        Raises
+        ------
+        ValueError
+            If this instance has no surface layer (was created with blocks only).
+        """
+        if self._surfaces is None:
+            raise ValueError(
+                "ParametricAssembly has no analytic surfaces. Check has_surfaces before accessing .surfaces."
+            )
+        return self._surfaces
+
+    @surfaces.setter
+    def surfaces(self, value: AnalyticSurfacesM | None) -> None:
+        self._surfaces = value
+
+    @property
+    def has_surfaces(self) -> bool:
+        """True when analytic surfaces are present."""
+        return self._surfaces is not None
 
     @classmethod
     def from_motl(
         cls,
         input_motl: MotlSource,
-        surface_type: Literal["ellipsoid"] = "ellipsoid",
+        surface_type: AnalyticSurfaceTypeName = "ellipsoid",
         column_name: MotlColumn = "object_id",
-    ) -> "ParametricSurface":
-        """Fit analytic surfaces to particle groups and return a ParametricSurface.
+        *,
+        tomo_id_column: MotlColumn = "tomo_id",
+    ) -> "ParametricAssembly":
+        """Fit analytic surfaces to particle groups and return a ParametricAssembly.
 
         Parameters
         ----------
         input_motl : MotlSource
             Input particle list. One surface is fitted per unique
             ``(tomo_id, column_name)`` group.
-        surface_type : {'ellipsoid'}, default='ellipsoid'
-            Analytic surface type; currently only ellipsoid is supported.
+        surface_type : {'ellipsoid', 'tube'}, default='ellipsoid'
+            Analytic surface type.
         column_name : MotlColumn, default='object_id'
             Column used to group particles.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each surface.
 
         Returns
         -------
-        ParametricSurface
+        ParametricAssembly
         """
-        surfaces = AnalyticSurfacesM(input_motl, surface_type=surface_type, feature_id=column_name)
+        surfaces = AnalyticSurfacesM(input_motl, surface_type=surface_type, feature_id=column_name, tomo_id_column=tomo_id_column)
         return cls(surfaces, column_name=column_name)
 
     @classmethod
     def from_csv(
         cls,
         path: PathOrStr,
-        surface_type: Literal["ellipsoid"] = "ellipsoid",
+        surface_type: AnalyticSurfaceTypeName = "ellipsoid",
         column_name: MotlColumn = "object_id",
-    ) -> "ParametricSurface":
+        *,
+        tomo_id_column: MotlColumn = "tomo_id",
+    ) -> "ParametricAssembly":
         """Load analytic surface parameters from a CSV file.
 
         Parameters
         ----------
         path : PathOrStr
             Path to a CSV produced by :meth:`write_out`.
-        surface_type : {'ellipsoid'}, default='ellipsoid'
+        surface_type : {'ellipsoid', 'tube'}, default='ellipsoid'
             Analytic surface type to materialise.
         column_name : MotlColumn, default='object_id'
             Surface-object identifier column the file is keyed on.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each surface.
 
         Returns
         -------
-        ParametricSurface
+        ParametricAssembly
         """
-        surfaces = AnalyticSurfacesM(path, surface_type=surface_type, feature_id=column_name)
+        surfaces = AnalyticSurfacesM(path, surface_type=surface_type, feature_id=column_name, tomo_id_column=tomo_id_column)
         return cls(surfaces, column_name=column_name)
+
+    @classmethod
+    def from_sphere_motl(
+        cls,
+        input_motl: MotlSource,
+        radius_column: MotlColumn,
+        *,
+        column_name: MotlColumn = "object_id",
+        tomo_id_column: MotlColumn = "tomo_id",
+    ) -> "ParametricAssembly":
+        """Build the assembly from a motl that holds one sphere per row.
+
+        Each row becomes an :class:`~cryocat.core.surface.Ellipsoid` with
+        three equal radii, centred at the row's position, keyed by
+        ``(tomo_id, row[column_name])`` like every other fitted surface.  The
+        surface type is ``"ellipsoid"``.
+
+        Parameters
+        ----------
+        input_motl : MotlSource
+            One row per sphere.
+        radius_column : MotlColumn
+            Column holding each sphere's radius, in voxels.
+        column_name : MotlColumn, default='object_id'
+            Surface-object identifier column.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
+
+        Returns
+        -------
+        ParametricAssembly
+
+        Raises
+        ------
+        ValueError
+            If two rows share a ``(tomo_id, column_name)`` key.
+        """
+        motl = cryomotl.Motl.load(input_motl)
+        axes = np.eye(3)
+        surfaces: dict[tuple[float, float], Ellipsoid] = {}
+        for center, radius, tomo_id, feature_id in zip(
+            motl.get_coordinates(),
+            motl.df[radius_column].to_numpy(dtype=float),
+            motl.df[tomo_id_column].to_numpy(),
+            motl.df[column_name].to_numpy(),
+        ):
+            key = (tomo_id, feature_id)
+            if key in surfaces:
+                raise ValueError(f"Two spheres share the key (tomo_id, {column_name}) = {key}.")
+            surfaces[key] = Ellipsoid(
+                center=center, radii=np.full(3, radius), e_vec1=axes[0], e_vec2=axes[1], e_vec3=axes[2]
+            )
+        return cls(AnalyticSurfacesM(surfaces, surface_type="ellipsoid", feature_id=column_name, tomo_id_column=tomo_id_column), column_name=column_name)
 
     def write_out(self, output_path: PathOrStr) -> None:
         """Write the surface parameter table to *output_path* as CSV.
@@ -14683,6 +15397,8 @@ class ParametricSurface:
         input_motl: MotlSource,
         output_path: PathOrStr | None = None,
         store_column_name: MotlColumn = "geom4",
+        *,
+        tomo_id_column: MotlColumn = "tomo_id",
     ) -> "cryomotl.Motl":
         """Compute the shortest distance from each particle to its assigned surface.
 
@@ -14694,6 +15410,8 @@ class ParametricSurface:
             Path to save the result.
         store_column_name : MotlColumn, default='geom4'
             Column that receives the distance values.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
 
         Returns
         -------
@@ -14707,8 +15425,8 @@ class ParametricSurface:
         for f in features:
             fm = in_motl.get_motl_subset(column_values=f, column_name=self.column_name, reset_index=True)
             coord = fm.get_coordinates()
-            tomo_id = fm.df["tomo_id"].values[0]
-            fm.df[store_column_name] = self.quadrics.distance_point_surface(tomo_id, f, coord)
+            tomo_id = fm.df[tomo_id_column].values[0]
+            fm.df[store_column_name] = self.surfaces.distance_point_surface(tomo_id, f, coord)
             assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
 
         assigned_motl = cryomotl.Motl(assigned_motl_df)
@@ -14722,6 +15440,8 @@ class ParametricSurface:
         input_motl: MotlSource,
         output_path: PathOrStr | None = None,
         unassigned_value: float | None = None,
+        *,
+        tomo_id_column: MotlColumn = "tomo_id",
     ) -> "cryomotl.Motl":
         """Assign each particle to the nearest surface centre.
 
@@ -14735,6 +15455,8 @@ class ParametricSurface:
             When provided, only particles whose current ``self.column_name``
             value equals this value are re-assigned; the rest are kept
             unchanged.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
 
         Returns
         -------
@@ -14748,13 +15470,13 @@ class ParametricSurface:
             in_motl.df = in_motl.df[in_motl.df[self.column_name] == unassigned_value]
             in_motl.df.reset_index(drop=True, inplace=True)
 
-        tomos = in_motl.get_unique_values(column_name="tomo_id")
+        tomos = in_motl.get_unique_values(column_name=tomo_id_column)
         assigned_motl_df = pd.DataFrame()
 
         for t in tomos:
-            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id", reset_index=True)
+            tm = in_motl.get_motl_subset(column_values=t, column_name=tomo_id_column, reset_index=True)
             coord = tm.get_coordinates()
-            closest_ids = self.quadrics.find_closest_quadric(t, coord)
+            closest_ids = self.surfaces.find_closest_surface(t, coord)
             tm.df[self.column_name] = closest_ids
             assigned_motl_df = pd.concat([assigned_motl_df, tm.df])
 
@@ -14768,13 +15490,13 @@ class ParametricSurface:
             assigned_motl.write_out(output_path)
         return assigned_motl
 
-    # TODO: only Ellipsoid currently supported for intersection methods
-
     def assign_affiliation_intersection_based(
         self,
         input_motl: MotlSource,
         output_path: PathOrStr | None = None,
         keep_unassigned: bool = True,
+        *,
+        tomo_id_column: MotlColumn = "tomo_id",
     ) -> "cryomotl.Motl":
         """Assign each particle to the surface it points toward (ray casting).
 
@@ -14792,6 +15514,8 @@ class ParametricSurface:
         keep_unassigned : bool, default=True
             When ``False``, particles whose ``self.column_name`` is ``-1``
             are removed.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
 
         Returns
         -------
@@ -14799,24 +15523,23 @@ class ParametricSurface:
             Motl with ``self.column_name`` updated.
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        tomos = in_motl.get_unique_values(column_name="tomo_id")
+        tomos = in_motl.get_unique_values(column_name=tomo_id_column)
         assigned_motl_df = pd.DataFrame()
 
         for t in tomos:
-            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id")
+            tm = in_motl.get_motl_subset(column_values=t, column_name=tomo_id_column)
             coord = tm.get_coordinates()
             normal_vectors = -geom.euler_angles_to_normals(tm.get_angles())
 
-            tomo_keys = [(tid, fid) for (tid, fid) in self.quadrics.dict if tid == t]
+            tomo_keys = [(tid, fid) for (tid, fid) in self.surfaces.dict if tid == t]
             num_points = coord.shape[0]
             closest_ids = np.full(num_points, -1)
             closest_distances = np.full(num_points, np.inf)
 
             for i in range(num_points):
                 for tid, fid in tomo_keys:
-                    params_array = self.quadrics.dict[(tid, fid)].params
-                    _, _, d1, d2, is_inside = geom.ray_ellipsoid_intersection_3d(
-                        coord[i, :], normal_vectors[i, :], params_array
+                    _, _, d1, d2, is_inside = self.surfaces.dict[(tid, fid)].intersection_ray(
+                        geom.Line(coord[i, :], normal_vectors[i, :])
                     )
                     if is_inside:
                         closest_distances[i] = np.inf
@@ -14843,17 +15566,28 @@ class ParametricSurface:
             assigned_motl.write_out(output_path)
         return assigned_motl
 
-    def compute_intersection(self, input_motl: MotlSource) -> pd.DataFrame:
-        """Compute ray-ellipsoid intersection distances for each particle.
+    def compute_intersection(
+        self,
+        input_motl: MotlSource,
+        *,
+        tomo_id_column: MotlColumn = "tomo_id",
+        subtomo_id_column: MotlColumn = "subtomo_id",
+    ) -> pd.DataFrame:
+        """Compute line-surface intersection distances for each particle.
 
-        For every particle a ray is cast along ``-euler_angles_to_normals``
-        and the two intersection distances with the assigned ellipsoid are
-        returned.
+        For every particle a line is cast through it along
+        ``-euler_angles_to_normals`` and the two signed intersection distances
+        with the assigned surface are returned (see
+        :meth:`~cryocat.core.surface.AnalyticSurface.intersection_line`).
 
         Parameters
         ----------
         input_motl : MotlSource
             Particles grouped by ``self.column_name``.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
+        subtomo_id_column : MotlColumn, default='subtomo_id'
+            Column that identifies each particle.
 
         Returns
         -------
@@ -14868,15 +15602,15 @@ class ParametricSurface:
             fm = in_motl.get_motl_subset(column_values=f, column_name=self.column_name, reset_index=True)
             coord = fm.get_coordinates()
             normal_vectors = -geom.euler_angles_to_normals(fm.get_angles())
-            tomo_id = fm.df["tomo_id"].values[0]
+            tomo_id = fm.df[tomo_id_column].values[0]
             key = (tomo_id, f)
-            if key not in self.quadrics.dict:
+            if key not in self.surfaces.dict:
                 continue
-            params_array = self.quadrics.dict[key].params
+            surface = self.surfaces.dict[key]
             for i in range(coord.shape[0]):
-                _, _, d1, d2, _ = geom.ray_ellipsoid_intersection_3d(coord[i, :], normal_vectors[i, :], params_array)
+                _, _, d1, d2, _ = surface.intersection_line(geom.Line(coord[i, :], normal_vectors[i, :]))
                 new_row = pd.Series(
-                    {"subtomo_id": fm.df.iloc[i]["subtomo_id"], self.column_name: f, "d1": d1, "d2": d2}
+                    {"subtomo_id": fm.df.iloc[i][subtomo_id_column], self.column_name: f, "d1": d1, "d2": d2}
                 )
                 intersection_points = pd.concat([intersection_points, new_row.to_frame().T], ignore_index=True)
 
@@ -14887,12 +15621,15 @@ class ParametricSurface:
         input_motl: MotlSource,
         store_column_name: MotlColumn = "geom4",
         output_path: PathOrStr | None = None,
+        *,
+        tomo_id_column: MotlColumn = "tomo_id",
     ) -> "cryomotl.Motl":
-        """Compute the angle between each particle's orientation and the ellipsoid radial normal.
+        """Compute the angle between each particle's orientation and the surface normal.
 
-        The radial normal is the vector from the fitted ellipsoid centre to
-        the particle. The stored value is the angle (degrees) between that
-        vector and the particle's orientation normal.
+        The surface normal is taken at the particle's projection onto its
+        assigned surface (:meth:`~cryocat.core.surface.AnalyticSurface.project_points`).
+        The stored value is the angle (degrees) between that normal and the
+        particle's orientation normal.
 
         Parameters
         ----------
@@ -14902,6 +15639,8 @@ class ParametricSurface:
             Column that receives the angle values.
         output_path : PathOrStr, optional
             Path to save the result.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
 
         Returns
         -------
@@ -14916,14 +15655,13 @@ class ParametricSurface:
             fm = in_motl.get_motl_subset(column_values=f, column_name=self.column_name, reset_index=True)
             coord = fm.get_coordinates()
             normals = geom.euler_angles_to_normals(fm.get_angles())
-            tomo_id = fm.df["tomo_id"].values[0]
+            tomo_id = fm.df[tomo_id_column].values[0]
             key = (tomo_id, f)
-            if key not in self.quadrics.dict:
+            if key not in self.surfaces.dict:
                 assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
                 continue
-            center = self.quadrics.dict[key].center
-            normals_t = coord - np.tile(center, (coord.shape[0], 1))
-            fm.df[store_column_name] = geom.angle_between_n_vectors(normals, normals_t)
+            _, surface_normals = self.surfaces.dict[key].project_points(coord)
+            fm.df[store_column_name] = geom.angle_between_n_vectors(normals, surface_normals)
             assigned_motl_df = pd.concat([assigned_motl_df, fm.df])
 
         assigned_motl_df.index = in_motl.df.index
@@ -14990,8 +15728,14 @@ class ParametricSurface:
         input_motl: MotlSource,
         threshold: float | None = None,
         output_path: PathOrStr | None = None,
+        *,
+        tomo_id_column: MotlColumn = "tomo_id",
     ) -> "cryomotl.Motl":
-        """Remove particles that lie too far from the mean ellipsoid radius.
+        """Remove particles that lie too far from the mean surface radius.
+
+        A particle is kept when its distance to the surface centre (an
+        ellipsoid's centre, a tube's centerline) is within *threshold* of the
+        surface's :attr:`~cryocat.core.surface.AnalyticSurface.mean_radius`.
 
         Parameters
         ----------
@@ -15002,6 +15746,8 @@ class ParametricSurface:
             deviation.
         output_path : PathOrStr, optional
             Path to save the result.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
 
         Returns
         -------
@@ -15014,15 +15760,13 @@ class ParametricSurface:
         for f in features:
             fm = in_motl.get_motl_subset(column_values=f, column_name=self.column_name, reset_index=True)
             coord = fm.get_coordinates()
-            tomo_id = fm.df["tomo_id"].values[0]
+            tomo_id = fm.df[tomo_id_column].values[0]
             key = (tomo_id, f)
-            if key not in self.quadrics.dict:
+            if key not in self.surfaces.dict:
                 cleaned_motl_df = pd.concat([cleaned_motl_df, fm.df])
                 continue
-            el = self.quadrics.dict[key]
-            center = el.center
-            radius = float(np.mean(el.radii))
-            distances = np.linalg.norm(coord - center, axis=1)
+            radius = self.surfaces.dict[key].mean_radius
+            distances = np.asarray(self.surfaces.distance_point_center(tomo_id, f, coord))
             thr = np.std(distances) if threshold is None else threshold
             mask = (distances >= radius - thr) & (distances <= radius + thr)
             fm.df = fm.df.iloc[mask]
@@ -15038,117 +15782,123 @@ class ParametricSurface:
             cleaned_motl.write_out(output_path)
         return cleaned_motl
 
-    @staticmethod
-    def assign_affiliation_mask_based(
+    def assign_affiliation_band_based(
+        self,
         input_motl: MotlSource,
-        object_motl: MotlSource,
-        tomo_dim: TomoDimensions,
-        shell_size: int,
-        column_name: MotlColumn = "object_id",
+        *,
+        band_width: float,
+        band_offset: float = 0.0,
         output_path: PathOrStr | None = None,
-        radius_offset: float = 0.0,
-        motl_radius_id: MotlColumn = "geom5",
+        tomo_id_column: MotlColumn = "tomo_id",
     ) -> "cryomotl.Motl":
-        """Assign each particle to a surface object using a spherical-shell mask.
+        """Assign particles to every surface whose band they lie in.
+
+        The band of a surface is the set of points whose signed distance to it
+        (:meth:`~cryocat.core.surface.AnalyticSurface.signed_distances`,
+        negative inside) ``d`` satisfies
+        ``band_offset - band_width / 2 < d <= band_offset + band_width / 2``.
+        For a sphere of radius ``r`` this is the shell of
+        ``cryomask.spherical_shell_mask`` with radius ``r + band_offset`` and
+        thickness ``band_width``.
+
+        The closest surface does not decide: a particle in the bands of two
+        surfaces is kept twice, once per surface, with the same
+        ``subtomo_id`` in both rows.  A particle in no band is dropped.  Each
+        particle is compared only with the surfaces of its own tomogram.
 
         Parameters
         ----------
         input_motl : MotlSource
             Particles to assign.
-        object_motl : MotlSource
-            Surface-object positions (one row per object).
-        tomo_dim : TomoDimensions
-            Tomogram dimensions; normalized via :func:`ioutils.dimensions_load`.
-        shell_size : int
-            Thickness of the spherical shell mask in voxels.
-        column_name : MotlColumn, default='object_id'
-            Identifier column on ``input_motl`` that receives the assigned
-            object id.
+        band_width : float
+            Thickness of the band, in voxels.
+        band_offset : float, default=0.0
+            Signed distance of the band's middle from the surface, in voxels;
+            positive moves it outwards.
         output_path : PathOrStr, optional
             Path to save the result.
-        radius_offset : float, default=0.0
-            Constant added to ``object_motl[motl_radius_id]`` to pad the shell.
-        motl_radius_id : MotlColumn, default='geom5'
-            Column in ``object_motl`` holding each object's radius.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
 
         Returns
         -------
         Motl
+            One row per (particle, surface) pair inside the band, with
+            ``self.column_name`` set to the surface id; every other column
+            is carried over unchanged.
         """
         in_motl = cryomotl.Motl.load(input_motl)
-        object_motl = cryomotl.Motl.load(object_motl)
-        tomo_dim = ioutils.dimensions_load(tomo_dim)
-        tomos = in_motl.get_unique_values(column_name="tomo_id")
-        assigned_motl_df = pd.DataFrame()
+        low, high = band_offset - band_width / 2.0, band_offset + band_width / 2.0
+        frames = []
+        for t in in_motl.get_unique_values(column_name=tomo_id_column):
+            tm = in_motl.get_motl_subset(column_values=t, column_name=tomo_id_column, reset_index=True)
+            coords = tm.get_coordinates()
+            for (tomo_id, feature_id), surface in self.surfaces.dict.items():
+                if tomo_id != t:
+                    continue
+                d = surface.signed_distances(coords)
+                rows = tm.df.loc[(d > low) & (d <= high)].copy()
+                rows[self.column_name] = feature_id
+                frames.append(rows)
 
-        for t in tomos:
-            tm = in_motl.get_motl_subset(column_values=t, column_name="tomo_id", reset_index=True)
-            tm_dim = tomo_dim.loc[tomo_dim["tomo_id"] == t, ["x", "y", "z"]].values[0]
-            coords = tm.get_coordinates().astype(int)
-            tom = object_motl.get_motl_subset(column_values=t, column_name="tomo_id")
-            for o in tom.get_unique_values(column_name=column_name):
-                om = tom.get_motl_subset(column_values=o, column_name=column_name)
-                om.df["class"] = 1
-                to_radius = tom.df.iloc[0][motl_radius_id] + radius_offset
-                object_mask = cryomask.generate_mask("s_shell_r" + str(int(to_radius)) + "_s" + str(int(shell_size)))
-                tomo_mask = cryomap.place_object(object_mask, om, volume_shape=tm_dim, feature_to_color="class")
-                mask_values = tomo_mask[coords[:, 0], coords[:, 1], coords[:, 2]]
-                idx_to_keep = np.where(mask_values == 1)[0]
-                tm.df[column_name] = o
-                assigned_motl_df = pd.concat([assigned_motl_df, tm.df.iloc[idx_to_keep]])
-
-        assigned_motl_df.reset_index(drop=True, inplace=True)
-        assigned_motl = cryomotl.Motl(assigned_motl_df)
+        assigned_df = pd.concat(frames, ignore_index=True) if frames else in_motl.df.iloc[0:0].copy()
+        assigned_motl = cryomotl.Motl(assigned_df)
         if output_path is not None:
             assigned_motl.write_out(output_path)
         return assigned_motl
 
-    @staticmethod
-    def create_spherical_oversampling(
-        input_motl: MotlSource,
-        motl_radius_id: MotlColumn,
-        sampling_distance: float,
-        sampling_angle: float = 360.0,
+    def create_surface_oversampling(
+        self,
+        *,
         output_path: PathOrStr | None = None,
+        seed: int | None = None,
+        tomo_id_column: MotlColumn = "tomo_id",
+        class_column: MotlColumn = "class",
+        **oversample_kwargs: Any,
     ) -> "cryomotl.Motl":
-        """Generate oversampled particles on a sphere around each input particle.
+        """Oversample every surface and return the samples as particles.
+
+        Each surface's own ``oversample`` is called with *oversample_kwargs*
+        (e.g. ``spacing=`` for any type; ``angular_step=`` and ``cap_angle=``
+        for ellipsoids).  The samples become particles oriented along the
+        outward normal (Euler angles from
+        :func:`geom.normals_to_euler_angles`, ``zxz``) with *tomo_id_column* and
+        ``self.column_name`` taken from the surface key and *class_column* set to 1;
+        every other column is 0.
 
         Parameters
         ----------
-        input_motl : MotlSource
-            Source particles (one sphere per row).
-        motl_radius_id : MotlColumn
-            Column holding the sphere radius for each particle.
-        sampling_distance : float
-            Angular sampling step forwarded to :func:`geom.sample_cone`.
-        sampling_angle : float, default=360.0
-            Half-opening angle of the sampling cone. ``360`` samples the full
-            sphere.
         output_path : PathOrStr, optional
             Path to save the result.
+        seed : int, optional
+            Seed for the random in-plane angle ``phi``
+            (:func:`~cryocat.utils.geom.normals_to_euler_angles`).  ``None``
+            draws new angles on every call; an integer repeats them.
+        tomo_id_column : MotlColumn, default='tomo_id'
+            Column that identifies the tomogram of each particle.
+        class_column : MotlColumn, default='class'
+            Column set to 1 for every sample.
+        **oversample_kwargs
+            Passed to each surface's ``oversample``.
 
         Returns
         -------
         Motl
+            Renumbered particle list.
         """
-        motl = cryomotl.Motl.load(input_motl)
+        rng = np.random.default_rng(seed)
         new_motl_df = pd.DataFrame()
-        for tomo in motl.get_unique_values("tomo_id"):
-            tm = motl.get_motl_subset(tomo)
-            coord = tm.get_coordinates()
-            radii = tm.df[motl_radius_id].values
-            objects = tm.df["object_id"].values
-            for i, r in enumerate(radii):
-                points = geom.sample_cone(sampling_angle, sampling_distance, center=coord[i, :], radius=r)
-                normals = points - np.tile(coord[i, :], (points.shape[0], 1))
-                angles = geom.normals_to_euler_angles(normals, output_order="zxz")
-                em = cryomotl.Motl.create_empty_motl_df()
-                em[["x", "y", "z"]] = points
-                em[["phi", "theta", "psi"]] = angles
-                em["object_id"] = objects[i]
-                em["tomo_id"] = tomo
-                em["class"] = 1
-                new_motl_df = pd.concat((new_motl_df, em))
+        for (tomo_id, feature_id), surface in self.surfaces.dict.items():
+            samples = surface.oversample(**oversample_kwargs)
+            em = cryomotl.Motl.create_empty_motl_df()
+            em[["x", "y", "z"]] = samples.vertices
+            em[["phi", "theta", "psi"]] = geom.normals_to_euler_angles(
+                samples.normals, output_order="zxz", seed=rng.integers(2**32)
+            )
+            em[self.column_name] = feature_id
+            em[tomo_id_column] = tomo_id
+            em[class_column] = 1
+            new_motl_df = pd.concat((new_motl_df, em))
 
         new_motl_df.fillna(0, inplace=True)
         motl = cryomotl.Motl(new_motl_df)
@@ -15227,7 +15977,7 @@ class PolyhedralComplex(SymmetricComplex):
         motl: MotlSource,
         *,
         affiliation_column: MotlColumn = "object_id",
-        order_column: MotlColumn = "geom1",
+        subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
     ) -> None:
         if self._symmetry is None or self._solid is None:
@@ -15241,7 +15991,7 @@ class PolyhedralComplex(SymmetricComplex):
             motl,
             self._symmetry,
             affiliation_column=affiliation_column,
-            order_column=order_column,
+            subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
         )
 
@@ -15280,7 +16030,7 @@ class PolyhedralComplex(SymmetricComplex):
     # ------------------------------------------------------------------
 
     @gui_exposed(label="Assign subunit order", group="Affiliation", order=50, returns="none")
-    def assign_subunit_order(self) -> None:
+    def assign_subunit_index(self) -> None:
         """Assign 1-based subunit indices ordered by x→y→z (ascending)."""
         for (_tomo_id, _aff_id), group in self.motl.df.groupby([self.tomo_id_column, self.affiliation_column]):
             orig_idx = group.index.to_numpy()
@@ -15288,7 +16038,7 @@ class PolyhedralComplex(SymmetricComplex):
             sorted_positions = np.lexsort((coords[:, 2], coords[:, 1], coords[:, 0]))
             ranks = np.empty(len(sorted_positions), dtype=int)
             ranks[sorted_positions] = np.arange(1, len(sorted_positions) + 1)
-            self.motl.df.loc[orig_idx, self.order_column] = ranks
+            self.motl.df.loc[orig_idx, self.subunit_index_column] = ranks
 
     # ------------------------------------------------------------------
     # Geometry helpers

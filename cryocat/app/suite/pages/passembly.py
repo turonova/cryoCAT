@@ -5,7 +5,7 @@ The page exposes two accordion items in the sidebar:
 * **Loading** — a single dropdown lists every supported way to bring a
   surface into the page: ``Mesh`` from an MRC segmentation, ``Mesh`` with
   pre-computed curvatures from a VTP file, ``OrientedPointCloud`` from
-  MRC / from a motl file, and ``ParametricSurface`` from a pool motl or
+  MRC / from a motl file, and ``ParametricAssembly`` from a pool motl or
   from a saved CSV parameter file.  Picking an entry renders that
   method's signature via :func:`cryocat.app.formgen.build_form` (or a
   small custom picker for the pool-motl flow), and a single Run button
@@ -19,7 +19,7 @@ The page exposes two accordion items in the sidebar:
   surface (for mesh ops), against the *active fit* (for parametric ops),
   or against both (for particle-mesh intersection).
 
-Live ``PleomorphicSurface`` objects live in
+Live ``PleomorphicAssembly`` objects live in
 :mod:`cryocat.app.components.surface_registry`; the page's
 ``dcc.Store(id="surfaces-pool")`` only carries lightweight handles so the
 state stays JSON-serialisable.  Active parametric fits live in
@@ -48,7 +48,7 @@ import dash
 from dash import html, dcc, Input, Output, State, ALL, no_update, ctx
 import dash_bootstrap_components as dbc
 
-from cryocat.analysis.assembly import ParametricSurface, PleomorphicSurface, rays_from_motl as _rays_from_motl
+from cryocat.analysis.assembly import ParametricAssembly, PleomorphicAssembly, rays_from_motl as _rays_from_motl
 from cryocat.core.cryomotl import Motl
 from cryocat.core.surface import Mesh, OrientedPointCloud, DiscreteSurface
 from cryocat.app import ids, formgen
@@ -145,9 +145,9 @@ def _hrow(label: str, control) -> html.Div:
 #                    "motl_pool" (small custom form: pool picker + column).
 #   "method"      -- for "formgen": the callable formgen reads + run_operation
 #                    invokes.
-#   "method_name" -- for "motl_pool": attribute name on ParametricSurface.
+#   "method_name" -- for "motl_pool": attribute name on ParametricAssembly.
 #   "result"      -- "surface" (Mesh/OPC -> page pool) or
-#                    "parametric" (ParametricSurface -> active fit).
+#                    "parametric" (ParametricAssembly -> active fit).
 #   "exclude"     -- extra param names to hide from the form (formgen kind).
 
 LOAD_OPS: dict[str, dict[str, Any]] = {
@@ -205,7 +205,7 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
     "param_motl": {
         "label": "Parametric (ellipsoid) from pool motl",
         "kind": "motl_pool",
-        "method": ParametricSurface.from_motl,
+        "method": ParametricAssembly.from_motl,
         "motl_kwarg": "input_motl",
         "result": "parametric",
         "exclude": ["input_motl"],
@@ -213,7 +213,7 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
     "param_csv": {
         "label": "Parametric (ellipsoid) from CSV parameter file",
         "kind": "formgen",
-        "method": ParametricSurface.from_csv,
+        "method": ParametricAssembly.from_csv,
         "result": "parametric",
         "exclude": [],
     },
@@ -232,16 +232,16 @@ LOAD_OPS: dict[str, dict[str, Any]] = {
 #   "category"        -- "mesh" for all SURFACE_OP entries (derived).
 #   "kind"            -- derived by _derive_kind() from entry.returns + annotation.
 #   "reg_key"         -- the registry key (= op id for surface ops).
-#   "method_for"      -- callable (PleomorphicSurface) -> bound method (overrides).
+#   "method_for"      -- callable (PleomorphicAssembly) -> bound method (overrides).
 #   "needs_selection" -- always True for surface ops (derived default).
-#   "method_name"     -- for "parametric": attribute name on ParametricSurface.
+#   "method_name"     -- for "parametric": attribute name on ParametricAssembly.
 #   "needs_active_fit"-- for "parametric": True iff the op consumes the active fit.
 #   "result_kind"     -- for "parametric": "motl" or "dataframe".
 #   "extra_pickers"   -- for "parametric": list of extra pool motl picker names.
 #   "needs_selection" -- for "mesh": True iff the op consumes the selected
 #                        surface.
 #   "method_name"     -- for "parametric": attribute name on
-#                        ParametricSurface (instance or @staticmethod).
+#                        ParametricAssembly (instance or @staticmethod).
 #   "needs_active_fit"-- for "parametric": True iff the op consumes the
 #                        active fit.
 #   "result_kind"     -- for "parametric": "motl" or "dataframe".
@@ -275,7 +275,7 @@ def _derive_kind(entry) -> str:
     return "unary-inplace"
 
 
-def _mesh_only(psurf: "PleomorphicSurface | None") -> "Mesh | None":
+def _mesh_only(psurf: "PleomorphicAssembly | None") -> "Mesh | None":
     """Return psurf.surface when it is a Mesh, otherwise None."""
     if psurf is None:
         return None
@@ -285,7 +285,7 @@ def _mesh_only(psurf: "PleomorphicSurface | None") -> "Mesh | None":
 def _build_surface_ops() -> dict[str, dict[str, Any]]:
     """Build OPERATIONS entries for all SURFACE_OP registry entries via discovery.
 
-    method_for is derived from the entry's owning class: PleomorphicSurface
+    method_for is derived from the entry's owning class: PleomorphicAssembly
     methods are looked up on the wrapper (psurf); all others on psurf.surface.
     getattr(..., None) returns None when the surface type does not have the
     method (e.g. a Mesh-only method called on an OPC), which the dispatch
@@ -297,7 +297,7 @@ def _build_surface_ops() -> dict[str, dict[str, Any]]:
     for entry in discovery.entries(category=GuiCategory.SURFACE_OP):
         key = entry.key
         method_name = entry.fn.__name__
-        on_wrapper = entry.owner.rsplit(".", 1)[-1] == "PleomorphicSurface"
+        on_wrapper = entry.owner.rsplit(".", 1)[-1] == "PleomorphicAssembly"
         if on_wrapper:
             method_for = (lambda p, mn=method_name: getattr(p, mn, None) if p is not None else None)
         else:
@@ -575,7 +575,7 @@ def _show_pts_checkbox(param_spec: dict) -> dbc.Checkbox:
 
 
 def _render_alpha_preview(
-    psurf: PleomorphicSurface,
+    psurf: PleomorphicAssembly,
     kwargs: dict,
     *,
     selected_id: str,
@@ -885,20 +885,20 @@ def _filter_kwargs_to_signature(method: Callable, kwargs: dict) -> dict:
 
 
 def _adopt_result(result: Any, parent_id: str | None, label_root: str) -> list[tuple[str, dict]]:
-    """Wrap backend output(s) into ``PleomorphicSurface`` and register them."""
+    """Wrap backend output(s) into ``PleomorphicAssembly`` and register them."""
     out: list[tuple[str, dict]] = []
 
     def _add(surface, label: str):
         # Capture the variable the loader bound the raw surface to BEFORE wrapping,
         # so we can emit a synthetic wrapping call event for the script.
         raw_var: str | None = (
-            None if isinstance(surface, PleomorphicSurface)
+            None if isinstance(surface, PleomorphicAssembly)
             else _prov.var_for_obj(surface)
         )
         # Fallback: when the caller did not pre-bind a name (e.g. unary-inplace returning
         # a new surface, or any future path not yet covered), generate a synthetic name and
         # emit a placeholder so the script stays complete, even if not automatically runnable.
-        if raw_var is None and not isinstance(surface, PleomorphicSurface):
+        if raw_var is None and not isinstance(surface, PleomorphicAssembly):
             raw_var = "_" + _prov.bind(sr.registry.peek_next_key())
             _prov.register_intermediate(surface, raw_var)
             from cryocat.app.event import call_event as _ce
@@ -909,25 +909,25 @@ def _adopt_result(result: Any, parent_id: str | None, label_root: str) -> list[t
                 imports=[],
                 command_src=f"{raw_var} = ...  # surface produced by operation; cannot reconstruct call",
             ))
-        psurf = surface if isinstance(surface, PleomorphicSurface) else PleomorphicSurface(surface)
+        psurf = surface if isinstance(surface, PleomorphicAssembly) else PleomorphicAssembly(surface)
         sid = sr.registry.add(psurf)
         surf_var = _prov.bind(sid)
         if raw_var is not None:
             # Emit a synthetic call event so the script includes the wrapping step:
-            #   surf_0 = assembly.PleomorphicSurface(surf_0)
+            #   surf_0 = assembly.PleomorphicAssembly(surf_0)
             # command_src is used verbatim by the script projection.
             from cryocat.app.event import call_event as _ce
             _session.emit(_ce(
-                "cryocat.analysis.assembly.PleomorphicSurface.__init__",
+                "cryocat.analysis.assembly.PleomorphicAssembly.__init__",
                 kwargs_src={},
                 status="ok",
                 imports=[["structure", "from cryocat.analysis import assembly"]],
-                command_src=f"{surf_var} = assembly.PleomorphicSurface({raw_var})",
+                command_src=f"{surf_var} = assembly.PleomorphicAssembly({raw_var})",
             ))
         psurf._pool_surface_id = sid
         if (hasattr(psurf, "surface")
                 and psurf.surface is not psurf
-                and not isinstance(psurf.surface, PleomorphicSurface)):
+                and not isinstance(psurf.surface, PleomorphicAssembly)):
             psurf.surface._pool_surface_inner_id = sid
         _prov.record(sid, _session.last_seq())
         handle = sr.make_handle(psurf, label=label, parent_id=parent_id, visible=True)
@@ -1308,7 +1308,7 @@ def register_callbacks(app):
             )
 
         # parametric
-        method = getattr(ParametricSurface, op["method_name"])
+        method = getattr(ParametricAssembly, op["method_name"])
         if "exclude" in op:
             exclude = list(op["exclude"]) + list(op.get("extra_pickers", []))
         else:
@@ -1428,7 +1428,7 @@ def register_callbacks(app):
             kwargs = generate_kwargs(ids, values, pool_state) if (ids and values) else {}
             kwargs = {k: v for k, v in kwargs.items() if v not in (None, "", [])}
 
-            psurf: PleomorphicSurface | None = None
+            psurf: PleomorphicAssembly | None = None
             if op.get("needs_selection"):
                 if not selected_id or selected_id not in pool:
                     return (no_update,) * 8 + (
@@ -1563,7 +1563,7 @@ def register_callbacks(app):
                         "No active fit -- load a parametric surface first.", no_update, no_update, no_update)
                 method = getattr(psurf, op["method_name"])
             else:
-                method = getattr(ParametricSurface, op["method_name"])
+                method = getattr(ParametricAssembly, op["method_name"])
             try:
                 result = run_operation(method, kwargs)
             except Exception as exc:

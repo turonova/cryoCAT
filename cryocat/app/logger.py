@@ -262,8 +262,8 @@ def invoke_operation(
     obj_to_var: dict[int, str] = {}
 
     # Check the receiver (fn.__self__ for bound instance methods).
-    # Pool-stamped objects carry _pool_motl_id (Motl), _pool_surface_id (PleomorphicSurface),
-    # _pool_complex_id, or _pool_nn_id.  The inner Mesh of a PleomorphicSurface carries
+    # Pool-stamped objects carry _pool_motl_id (Motl), _pool_surface_id (PleomorphicAssembly),
+    # _pool_complex_id, or _pool_nn_id.  The inner Mesh of a PleomorphicAssembly carries
     # _pool_surface_inner_id so methods dispatched on it render as "surface_2.surface.method()".
     # Locally-produced intermediates registered via assign_to are in _intermediate_vars.
     self_obj = getattr(fn, "__self__", None)

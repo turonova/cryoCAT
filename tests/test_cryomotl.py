@@ -7425,3 +7425,68 @@ class TestMergeObjects:
         motl = Motl(copy.deepcopy(sample_motl_data1))
         with pytest.raises(ValueError, match="at least two"):
             motl.merge_objects([])
+
+
+# =============================================================================
+# split_in_asymmetric_subunits: subunit index column
+# =============================================================================
+
+def _two_particle_motl() -> Motl:
+    data = []
+    for sid, pos, angles in ((4.0, (10.0, 20.0, 30.0), (10.0, 40.0, 70.0)), (9.0, (60.0, 5.0, 25.0), (-30.0, 80.0, 15.0))):
+        d = dict.fromkeys(Motl.motl_columns, 0.0)
+        d.update(subtomo_id=sid, tomo_id=1.0, object_id=1.0, x=pos[0], y=pos[1], z=pos[2],
+                 phi=angles[0], theta=angles[1], psi=angles[2])
+        data.append(d)
+    return Motl(pd.DataFrame(data)[Motl.motl_columns])
+
+
+@pytest.mark.parametrize("symmetry, n", [("C4", 4), ("D3", 6), ("T", 12)])
+def test_split_writes_one_to_n_into_the_subunit_index_column(symmetry, n):
+    split = _two_particle_motl().split_in_asymmetric_subunits(symmetry, [5.0, 3.0, 2.0], subunit_index_column="geom3")
+    for _, group in split.df.groupby("geom5"):
+        assert sorted(group["geom3"].astype(int).tolist()) == list(range(1, n + 1))
+    assert len(split.df) == 2 * n
+
+
+# =============================================================================
+# ModMotl: file and DataFrame inputs
+# =============================================================================
+
+def test_mod_motl_from_file_and_from_dataframe_are_identical(tmp_path):
+    from cryocat.utils.imod import write_model_binary
+
+    # Two points per contour: each particle gets an orientation with a random in-plane angle.
+    rng = np.random.default_rng(0)
+    start = rng.uniform(20.0, 80.0, size=(6, 3))
+    end = start + rng.normal(scale=5.0, size=(6, 3))
+    points = np.empty((12, 3))
+    points[0::2], points[1::2] = start, end
+    contours = pd.DataFrame({
+        "object_id": np.repeat([1, 1, 1, 2, 2, 2], 2),
+        "contour_id": np.repeat([1, 2, 3, 1, 2, 3], 2),
+        "x": points[:, 0], "y": points[:, 1], "z": points[:, 2],
+        "object_radius": 3,
+    })
+    path = str(tmp_path / "tomo7.mod")
+    write_model_binary(contours, path)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from_file = ModMotl(path, seed=11)
+        from_df = ModMotl(ModMotl.read_in(path), seed=11)
+        other_seed = ModMotl(path, seed=12)
+
+    assert len(from_file.df) == 6
+    pd.testing.assert_frame_equal(from_file.df, from_df.df)
+    assert not np.array_equal(from_file.df["phi"], other_seed.df["phi"])
+
+
+def test_mod_motl_single_point_file_and_dataframe_are_identical():
+    path = test_data + "/motl_data/modMotl/correct111.mod"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from_file = ModMotl(path, seed=11)
+        from_df = ModMotl(ModMotl.read_in(path), seed=11)
+    assert len(from_file.df) > 0
+    pd.testing.assert_frame_equal(from_file.df, from_df.df)

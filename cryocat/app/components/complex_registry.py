@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from cryocat.app.components.registry import Registry
-from cryocat.analysis.assembly import PleomorphicSurface as _PS
+from cryocat.analysis.assembly import PleomorphicAssembly as _PS
 
 if TYPE_CHECKING:
     from cryocat.analysis.assembly import SymmetricComplex
@@ -47,7 +47,7 @@ class ComplexHandle:
     n_objects: int
     motl_links: dict         # {"source": "motl_3"} — provenance link
     affiliation_column: str
-    order_column: str
+    subunit_index_column: str
     tomo_id_column: str
     geometry_fitted: bool = False    # True when fit_geometry has been called
     radius: float | None = None      # circumscribed-sphere radius in voxels
@@ -83,7 +83,7 @@ def make_handle(
     init_kwargs:
         Extra constructor keyword arguments (beyond ``motl``), JSON-serialisable.
     """
-    from cryocat.analysis.assembly import PleomorphicSurface as _PS
+    from cryocat.analysis.assembly import PleomorphicAssembly as _PS
     cls_name = type(cpx).__name__
 
     if isinstance(cpx, _PS):
@@ -117,7 +117,7 @@ def make_handle(
             n_objects=n_objects,
             motl_links=motl_links,
             affiliation_column="",
-            order_column="",
+            subunit_index_column="",
             tomo_id_column=getattr(cpx, "tomo_id_column", "tomo_id") or "tomo_id",
             geometry_fitted=False,
             radius=None,
@@ -157,7 +157,7 @@ def make_handle(
         n_objects=n_objects,
         motl_links=motl_links,
         affiliation_column=getattr(cpx, "affiliation_column", "object_id") or "object_id",
-        order_column=getattr(cpx, "order_column", "geom1") or "geom1",
+        subunit_index_column=getattr(cpx, "subunit_index_column", "geom1") or "geom1",
         tomo_id_column=getattr(cpx, "tomo_id_column", "tomo_id") or "tomo_id",
         geometry_fitted=geometry_fitted,
         radius=radius,
@@ -187,7 +187,7 @@ def reconstruct(handle_dict: dict, motl: Any) -> Any:
     if builder is cls:
         kwargs: dict[str, Any] = {
             "affiliation_column": handle.affiliation_column,
-            "order_column": handle.order_column,
+            "subunit_index_column": handle.subunit_index_column,
             "tomo_id_column": handle.tomo_id_column,
             **handle.init_kwargs,
         }
@@ -198,7 +198,7 @@ def reconstruct(handle_dict: dict, motl: Any) -> Any:
             if handle.cls not in base_names:
                 kwargs["symmetry"] = handle.symmetry
     else:
-        # Custom builder (e.g. PleomorphicSurface.from_blocks): stored
+        # Custom builder (e.g. PleomorphicAssembly.from_blocks): stored
         # init_kwargs already contain all parameters except the first (motl).
         kwargs = dict(handle.init_kwargs)
     return builder(**{first: motl}, **kwargs)

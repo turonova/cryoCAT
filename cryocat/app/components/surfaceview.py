@@ -46,7 +46,7 @@ from cryocat.app.components.paletteloader import get_palette_loader, register_pa
 
 # Curvature color-by options. Values match
 # :func:`cryocat.analysis.visplot.plot_vtp_mesh` for cross-tool parity; the
-# trace builder maps each value to the matching PleomorphicSurface getter.
+# trace builder maps each value to the matching PleomorphicAssembly getter.
 COLOR_BY_OPTIONS = [
     {"label": "No color-by", "value": "none"},
     {"label": "Mean curvature", "value": "mean_curvature"},
@@ -59,7 +59,7 @@ COLOR_BY_OPTIONS = [
 
 
 def _vertex_field(psurf, color_by: str) -> np.ndarray | None:
-    """Pull a per-vertex curvature field off a Mesh-backed PleomorphicSurface.
+    """Pull a per-vertex curvature field off a Mesh-backed PleomorphicAssembly.
 
     Returns ``None`` when the surface has no curvatures populated, or the
     requested ``color_by`` is ``"none"`` / unrecognised. Field naming matches
@@ -68,7 +68,7 @@ def _vertex_field(psurf, color_by: str) -> np.ndarray | None:
 
     Parameters
     ----------
-    psurf : PleomorphicSurface
+    psurf : PleomorphicAssembly
         Source surface; must wrap a :class:`cryocat.core.surface.Mesh` for
         any non-``"none"`` field to be returned.
     color_by : str
@@ -123,14 +123,14 @@ def _mesh_traces(
     surface_id: str | None = None,
     max_triangles: int | None = None,
 ) -> tuple[list, str]:
-    """Build the Plotly traces for a Mesh-backed :class:`PleomorphicSurface`.
+    """Build the Plotly traces for a Mesh-backed :class:`PleomorphicAssembly`.
 
     Returns ``(traces, notice)`` where *notice* is a non-empty string when the
     mesh was decimated for display (e.g. "showing 50,000 of 200,000 triangles").
 
     Parameters
     ----------
-    surface : PleomorphicSurface
+    surface : PleomorphicAssembly
         Must wrap a :class:`cryocat.core.surface.Mesh`.
     color : str
         Hex / named color applied uniformly to the mesh surface when no

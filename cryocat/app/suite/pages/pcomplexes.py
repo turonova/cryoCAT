@@ -24,7 +24,7 @@ from cryocat.core.surface import Mesh
 from cryocat.analysis.assembly import (
     CnComplex, DnComplex, NPC,
     TetrahedralComplex, OctahedralComplex, IcosahedralComplex,
-    PleomorphicSurface,
+    PleomorphicAssembly,
 )
 from cryocat.app import ids, formgen, discovery
 from cryocat.utils.classutils import GuiCategory
@@ -60,7 +60,7 @@ COMPLEX_CLASSES: dict[str, type] = {
     "TetrahedralComplex":    TetrahedralComplex,
     "OctahedralComplex":     OctahedralComplex,
     "IcosahedralComplex":    IcosahedralComplex,
-    "Pleomorphic assembly":  PleomorphicSurface,
+    "Pleomorphic assembly":  PleomorphicAssembly,
 }
 
 # Hierarchy groups for the class picker (D3).
@@ -198,7 +198,7 @@ def _dispatch_result(
     if kind == "surface":
         if not isinstance(result, Mesh):
             return [], [], [], f"{label}: expected Mesh, got {type(result).__name__}."
-        psurf = PleomorphicSurface(result)
+        psurf = PleomorphicAssembly(result)
         sr.registry.add(psurf)
         surf_label = f"{handle.get('label', '')} — {label}"
         return [], [], [], f"{label} → surface '{surf_label}' registered; open the Surfaces tab to use it."
@@ -506,7 +506,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         init_kwargs = generate_kwargs(init_ids, init_vals, pool_state) if (init_ids and init_vals) else {}
         init_kwargs = {k: v for k, v in init_kwargs.items() if v not in (None, "", [])}
 
-        if cls is PleomorphicSurface:
+        if cls is PleomorphicAssembly:
             if not bdef_specs:
                 return (no_update, no_update,
                         "No block types configured — click 'Configure block types' first.",
@@ -515,7 +515,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
             cpx_var = _prov.bind(next_complex_id)
             try:
                 cpx = _invoke_op(
-                    PleomorphicSurface.from_blocks,
+                    PleomorphicAssembly.from_blocks,
                     {
                         "blocks": motl,
                         "symmetry": bdef_specs["symmetry"],
@@ -623,7 +623,7 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
         if cls is None:
             return [], None, ""
         allowed_cats = {GuiCategory.MOTL_OP}
-        if cls is PleomorphicSurface:
+        if cls is PleomorphicAssembly:
             allowed_cats.add(GuiCategory.PLEOMORPHIC_OP)
         entries = [
             e for e in discovery.entries_for_class(cls)
@@ -851,8 +851,8 @@ def register_callbacks(app: dash.Dash) -> None:  # noqa: C901
             if hasattr(cpx, "affiliation_column"):
                 n_objects = int(cpx.motl.df[cpx.affiliation_column].nunique())
             fn_name = getattr(entry.fn, "__name__", "")
-            if fn_name == "assign_subunit_order" and hasattr(cpx, "order_column"):
-                column_written = cpx.order_column
+            if fn_name == "assign_subunit_index" and hasattr(cpx, "subunit_index_column"):
+                column_written = cpx.subunit_index_column
             elif fn_name == "merge_subunits" and hasattr(cpx, "affiliation_column"):
                 column_written = cpx.affiliation_column
             elif fn_name == "unify_nn_orientations":

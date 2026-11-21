@@ -2669,7 +2669,7 @@ class Motl:
         xyz_shift: ArrayLike,
         symmetry_orientation: RotationLike | None = None,
         *,
-        order_column: MotlColumn = "geom1",
+        subunit_index_column: MotlColumn = "geom1",
         original_subtomo_id_column: MotlColumn = "geom5",
         split_into_objects: bool = False,
         original_object_id_column: MotlColumn = "geom4",
@@ -2695,7 +2695,7 @@ class Motl:
             re-expressed in this orientation (``R @ g @ R.T``) before
             splitting. Must describe a single rotation. Default is None: the
             reference is assumed to be in the canonical orientation.
-        order_column : MotlColumn, default=``"geom1"``
+        subunit_index_column : MotlColumn, default=``"geom1"``
             Column written with the 1-based subunit index (1 … *n_subunits*).
         original_subtomo_id_column : MotlColumn, default=``"geom5"``
             Column in which the original ``subtomo_id`` of each source
@@ -2772,7 +2772,7 @@ class Motl:
         )
         new_motl_df[original_subtomo_id_column] = new_motl_df["subtomo_id"]
         new_motl_df = new_motl_df.sort_values(by="subtomo_id")
-        new_motl_df[order_column] = np.tile(np.arange(1, n_subunits + 1).reshape(n_subunits, 1), (len(self.df), 1))
+        new_motl_df[subunit_index_column] = np.tile(np.arange(1, n_subunits + 1).reshape(n_subunits, 1), (len(self.df), 1))
 
         if split_into_objects:
             new_motl_df[original_object_id_column] = new_motl_df["object_id"]
@@ -5966,6 +5966,9 @@ class ModMotl(Motl):
         Filename prefix filter when ``input_motl`` is a directory.
     mod_suffix : str, default='.mod'
         Filename suffix filter when ``input_motl`` is a directory.
+    seed : int, optional
+        Seed for the random in-plane angle of particles built from contour
+        pairs (see :meth:`convert_to_motl`); ``None`` draws new ones.
 
     Raises
     ------
@@ -5975,7 +5978,13 @@ class ModMotl(Motl):
 
     columns = ["object_id", "contour_id", "x", "y", "z", "object_radius", "mod_id"]
 
-    def __init__(self, input_motl: "MotlSource" | None = None, mod_prefix: str = "", mod_suffix: str = ".mod") -> None:
+    def __init__(
+        self,
+        input_motl: "MotlSource" | None = None,
+        mod_prefix: str = "",
+        mod_suffix: str = ".mod",
+        seed: int | None = None,
+    ) -> None:
         super().__init__()
         self.mod_df = pd.DataFrame()
 
@@ -5984,10 +5993,10 @@ class ModMotl(Motl):
                 self.df = input_motl.df.copy()
                 self.mod_df = input_motl.mod_df.copy()
             elif isinstance(input_motl, pd.DataFrame):
-                self.check_df_type(input_motl)
+                self.check_df_type(input_motl, seed=seed)
             elif isinstance(input_motl, str):
                 mod_df = self.read_in(input_motl, mod_prefix=mod_prefix, mod_suffix=mod_suffix)
-                self.convert_to_motl(mod_df)
+                self.convert_to_motl(mod_df, seed=seed)
             else:
                 raise UserInputError(
                     f"Provided input_motl is neither DataFrame nor path to the mod file: {input_motl}."
@@ -6020,7 +6029,7 @@ class ModMotl(Motl):
 
         return imod.read_mod_files(input_path, file_prefix=mod_prefix, file_suffix=mod_suffix)
 
-    def convert_to_motl(self, mod_df: pd.DataFrame) -> None:
+    def convert_to_motl(self, mod_df: pd.DataFrame, seed: int | None = None) -> None:
         """Converts a DataFrame containing model data into a format suitable for motl file generation.
 
         Parameters
@@ -6028,6 +6037,9 @@ class ModMotl(Motl):
         mod_df : pandas.DataFrame
             A DataFrame containing columns for 'object_id', 'x', 'y', 'z', 'mod_id', 'contour_id', and optionally
             'object_radius'. This DataFrame should represent objects and their contours with coordinates.
+        seed : int, optional
+            Seed for the random in-plane angle of particles built from contour pairs
+            (:func:`cryocat.utils.geom.normals_to_euler_angles`); ``None`` draws new ones.
 
         Returns
         -------
@@ -6061,6 +6073,8 @@ class ModMotl(Motl):
         >>> convert_instance.convert_to_motl(mod_df)
         """
 
+        rng = np.random.default_rng(seed)
+
         def subtract_rows(group):
             if len(group) != 2:
                 raise ValueError(f"object_id {group.iloc[0]['object_id']} does not have exactly 2 points.")
@@ -6069,7 +6083,7 @@ class ModMotl(Motl):
             second_row = group.iloc[1]
 
             normals = second_row[["x", "y", "z"]].values - first_row[["x", "y", "z"]].values
-            angles = geom.normals_to_euler_angles(normals, output_order="zxz")
+            angles = geom.normals_to_euler_angles(normals, output_order="zxz", seed=rng.integers(2**32))
             coord = first_row[["x", "y", "z"]].values
 
             result = {

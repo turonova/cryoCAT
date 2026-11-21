@@ -1,4 +1,4 @@
-"""Server-side registry for live :class:`PleomorphicSurface` objects.
+"""Server-side registry for live :class:`PleomorphicAssembly` objects.
 
 Live surfaces hold open3d-backed buffers and are not JSON-serializable, so
 they cannot live in a ``dcc.Store``. The Structure page instead stores only
@@ -25,10 +25,10 @@ from typing import TYPE_CHECKING
 from cryocat.app.components.registry import Registry
 
 if TYPE_CHECKING:
-    from cryocat.analysis.assembly import PleomorphicSurface
+    from cryocat.analysis.assembly import PleomorphicAssembly
 
 
-registry: Registry["PleomorphicSurface"] = Registry("surface")
+registry: Registry["PleomorphicAssembly"] = Registry("surface")
 
 
 @dataclass
@@ -66,7 +66,7 @@ def _has_hit_counts(surface) -> bool:
 
 
 def make_handle(
-    surface: "PleomorphicSurface",
+    surface: "PleomorphicAssembly",
     label: str,
     parent_id: str | None = None,
     visible: bool = True,
@@ -78,7 +78,7 @@ def make_handle(
 
     Parameters
     ----------
-    surface : PleomorphicSurface
+    surface : PleomorphicAssembly
         The live surface (used to derive ``representation``, ``n_elements``,
         and ``has_curvatures``).
     label : str

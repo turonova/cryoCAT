@@ -12,7 +12,6 @@ import os
 import math
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev, make_interp_spline, BSpline
-from scipy.optimize import fsolve
 
 from cryocat._types import RotationLike, Symmetry, TripletLike, EulerAngles, ArrayLike, PathOrStr
 from cryocat.utils.classutils import gui_exposed
@@ -1703,6 +1702,7 @@ def euler_angles_to_normals(angles: EulerAngles) -> np.ndarray:
 def normals_to_euler_angles(
     input_normals: np.ndarray | pd.DataFrame,
     output_order: str = "zxz",
+    seed: int | None = None,
 ) -> np.ndarray:
     """Given normal vectors pointing in z-direction in particle frames,
     compute choice of Euler angles.
@@ -1710,9 +1710,14 @@ def normals_to_euler_angles(
     Parameters
     ----------
     input_normals : numpy.ndarray or pandas.DataFrame
-        z-normal vectors. DataFrames must have ``x``, ``y``, ``z`` columns.
+        z-normal vectors, shape (n, 3), or a single one of shape (3,).
+        DataFrames must have ``x``, ``y``, ``z`` columns.
     output_order : str, optional
         Euler angle convention. Defaults to "zxz".
+    seed : int, optional
+        Seed for the random in-plane angle ``phi``, drawn uniformly from
+        [0, 360) by :func:`numpy.random.default_rng`.  ``None`` (default)
+        draws a different ``phi`` on every call; an integer repeats it.
 
     Raises
     ------
@@ -1722,7 +1727,8 @@ def normals_to_euler_angles(
     Returns
     -------
     ndarray : (n,3)
-        n triplets of Euler angles in choses convention.
+        n triplets of Euler angles in choses convention; shape (3,) for a
+        single input vector.
     """
     if isinstance(input_normals, pd.DataFrame):
         normals = input_normals.loc[:, ["x", "y", "z"]].values
@@ -1731,6 +1737,8 @@ def normals_to_euler_angles(
     else:
         raise UserInputError("The input_normals have to be either pandas dataFrame or numpy array")
 
+    single = normals.ndim == 1
+    normals = np.atleast_2d(normals)
     # normalize vectors
     normals = normals / np.linalg.norm(normals, axis=1)[:, np.newaxis]
     theta = np.degrees(np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2]))
@@ -1739,14 +1747,14 @@ def normals_to_euler_angles(
     b_idx = np.where(np.arctan2(normals[:, 1], normals[:, 0]) == 0)
     psi[b_idx] = 0
 
-    phi = np.random.rand(normals.shape[0]) * 360
+    phi = np.random.default_rng(seed).random(normals.shape[0]) * 360
 
     if output_order == "zzx":
         angles = np.column_stack((phi, psi, theta))
     else:
         angles = np.column_stack((phi, theta, psi))
 
-    return angles
+    return angles[0] if single else angles
 
 
 def quaternion_mult(qs1: np.ndarray, qs2: np.ndarray) -> np.ndarray:
@@ -2960,14 +2968,15 @@ def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
     radii : ndarray
         Radii of the ellipsoid along the principal axes.
     evecs : ndarray
-        The eigenvectors corresponding to the principal axes of the ellipsoid.
+        The eigenvectors corresponding to the principal axes of the ellipsoid, one per row.
     v : ndarray
         The 1D array of the ellipsoid parameters used to form the quadratic form.
 
     Notes
     -----
     This function fits an ellipsoid to a set of points by solving a linear least squares problem to estimate the
-    parameters of the ellipsoid's equation in its algebraic form.
+    parameters of the ellipsoid's equation in its algebraic form; the axes are then derived from those parameters
+    by :func:`ellipsoid_axes_from_quadric`.
 
     Examples
     --------
@@ -3005,80 +3014,8 @@ def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
     b = np.array([u[0] - 2 * u[1] - 1])
     c = np.array([u[1] - 2 * u[0] - 1])
     v = np.concatenate([a, b, c, u[2:]], axis=0).flatten()
-    A = np.array(
-        [
-            [v[0], v[3], v[4], v[6]],
-            [v[3], v[1], v[5], v[7]],
-            [v[4], v[5], v[2], v[8]],
-            [v[6], v[7], v[8], v[9]],
-        ]
-    )
-
-    center = np.linalg.solve(-A[:3, :3], v[6:9])
-
-    translation_matrix = np.eye(4)
-    translation_matrix[3, :3] = center.T
-
-    R = translation_matrix.dot(A).dot(translation_matrix.T)
-
-    evals, evecs = np.linalg.eig(R[:3, :3] / -R[3, 3])
-    evecs = evecs.T
-
-    radii = np.sqrt(1.0 / np.abs(evals))
-    radii *= np.sign(evals)
-
-    return center, radii, evecs, v
-
-
-def point_ellipsoid_distance(
-    p: ArrayLike,
-    params: ArrayLike,
-) -> float:
-    """Computes the shortest distance from a point p to the surface of an ellipsoid.
-
-    Parameters
-    ----------
-    p : ArrayLike
-        The 3D point in space. Normalized via :func:`numpy.asarray`.
-    params : ArrayLike
-        The ellipsoid parameters in the following order::
-
-            ["cx", "cy", "cz", "rx", "ry", "rz",
-             "ev1x", "ev1y", "ev1z", "ev2x", "ev2y", "ev2z",
-             "ev3x", "ev3y", "ev3z", "p1", ..., "p10"]
-
-    Returns
-    -------
-    float
-        The shortest distance from the point to the ellipsoid surface.
-    """
-    p = np.asarray(p)
-    params = np.asarray(params)
-
-    # Extract ellipsoid parameters
-    center = np.array(params[:3])  # (cx, cy, cz)
-    radii = np.array(params[3:6])  # (rx, ry, rz)
-    evecs = np.array(params[6:15]).reshape(3, 3)  # 3x3 eigenvector matrix
-
-    # Transform point to local ellipsoid coordinates
-    p_local = np.dot(evecs.T, (p - center))
-
-    # Function to solve for lambda (scaling factor)
-    def scale_equation(lmbda):
-        scaled = p_local / (1 + lmbda)
-        return np.sum((scaled / radii) ** 2) - 1
-
-    # Solve for Î» numerically
-    lambda_solution = fsolve(scale_equation, 0)[0]
-
-    # Compute closest point on ellipsoid in local space
-    closest_local = p_local / (1 + lambda_solution)
-
-    # Transform back to global coordinates
-    closest_global = np.dot(evecs, closest_local) + center
-
-    # Compute Euclidean distance from point to closest surface point
-    return np.linalg.norm(p - closest_global)
+    center, radii, evecs = ellipsoid_axes_from_quadric(v)
+    return center, radii, evecs.T, v
 
 
 def point_pairwise_dist(coord_1: np.ndarray, coord_2: np.ndarray) -> np.ndarray:
@@ -3145,43 +3082,38 @@ def area_triangle(coords: np.ndarray) -> float:
     return np.linalg.norm(triangles) / 2
 
 
-def ray_ellipsoid_intersection_3d(
+def line_ellipsoid_roots(
     point: ArrayLike,
-    normal: ArrayLike,
+    direction: ArrayLike,
     ellipsoid_params: ArrayLike,
-) -> tuple[np.ndarray, np.ndarray, float, float, bool]:
-    """Compute the intersection between a ray starting at point in direction of normal and
-    an ellipsoid specified by ellipsoid_params.
+) -> tuple[np.ndarray, bool]:
+    """Line parameters at which the line ``point + t * direction`` meets an ellipsoid.
 
     Parameters
     ----------
     point : ArrayLike
-        Point in 3D describing origin of ray. Normalized via :func:`numpy.asarray`.
-    normal : ArrayLike
-        Normal vector describing direction of ray. Normalized via :func:`numpy.asarray`.
+        Point on the line, shape (3,). Normalized via :func:`numpy.asarray`.
+    direction : ArrayLike
+        Direction of the line, shape (3,). Normalized via :func:`numpy.asarray`.
     ellipsoid_params : ArrayLike
         Coefficients describing quadratic form of ellipsoid (10 elements).
 
     Returns
     -------
-    tuple (p1, p2, d1, d2, is_inside) with:
-        p1: ndarray describing closest intersection, or NaN.
-        p2: ndarray describing intersection, or NaN.
-        d1: float (distance between point and p1), or NaN.
-        d2: float (distance between point and p2), or NaN.
-        is_inside: bool, true if point lies inside the ellipsoid.
+    roots : ndarray
+        Line parameters ``t`` of the intersections in ascending order: none, one
+        (tangent line) or two.
+    is_inside : bool
+        True if *point* lies strictly inside the ellipsoid, i.e. the two roots
+        have opposite signs.
     """
-    point = np.asarray(point)
-    normal = np.asarray(normal)
+    point = np.asarray(point, dtype=float)
+    direction = np.asarray(direction, dtype=float)
 
-    # Extract line parameters
     x, y, z = point[0], point[1], point[2]
-    n1, n2, n3 = normal[0], normal[1], normal[2]
-
-    # Extract ellipsoid parameters
+    n1, n2, n3 = direction[0], direction[1], direction[2]
     a, b, c, d, e, f, g, h, i, j = ellipsoid_params
 
-    # Calculate coefficients A, B, C for the quadratic equation
     A = a * n1**2 + b * n2**2 + c * n3**2 + 2 * d * n1 * n2 + 2 * e * n1 * n3 + 2 * f * n3 * n2
     B = 2 * (
         a * x * n1
@@ -3199,52 +3131,619 @@ def ray_ellipsoid_intersection_3d(
     )
     C = j + a * x**2 + b * y**2 + c * z**2 + 2 * (i * z + h * y + g * x + d * x * y + e * x * z + f * z * y)
 
-    # Discriminant
     D = B**2 - 4 * A * C
+    if D < 0:
+        return np.empty(0), False
+    if D == 0:
+        return np.array([-B / (2 * A)]), False
+    roots = np.sort([(-B + np.sqrt(D)) / (2 * A), (-B - np.sqrt(D)) / (2 * A)])
+    return roots, bool(roots[0] < 0 < roots[1])
 
-    # Initialize results
-    p1, p2 = None, None
-    is_inside = False
 
-    if D < 0:  # No intersection
-        p1, p2 = np.nan, np.nan
-        d1, d2 = np.nan, np.nan
-    elif D == 0:  # One intersection point
-        t1 = -B / (2 * A)
-        p1 = point + t1 * normal
-        d1 = np.sign(t1) * np.linalg.norm(p1 - point)  # assigning the correct sign
-        p2 = np.nan
-        d2 = np.nan
-    else:  # Two intersection points
-        t1 = (-B + np.sqrt(D)) / (2 * A)
-        t2 = (-B - np.sqrt(D)) / (2 * A)
+def ellipsoid_axes_from_quadric(params: ArrayLike) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Centre, semi-axes and axis directions of the ellipsoid given by its ten quadric coefficients.
 
-        p1 = point + t1 * normal
-        p2 = point + t2 * normal
+    Parameters
+    ----------
+    params : ArrayLike
+        Coefficients ``(a, b, c, d, e, f, g, h, i, j)`` of
+        ``a x² + b y² + c z² + 2d xy + 2e xz + 2f yz + 2g x + 2h y + 2i z + j = 0``.
 
-        d1 = np.sign(t1) * np.linalg.norm(p1 - point)  # assigning the correct sign
-        d2 = np.sign(t2) * np.linalg.norm(p2 - point)  # assigning the correct sign
+    Returns
+    -------
+    center : ndarray
+        Shape (3,).
+    radii : ndarray
+        Semi-axis lengths, shape (3,); a negative value marks an axis along
+        which the quadric is not closed (the fit was not an ellipsoid).
+    evecs : ndarray
+        Shape (3, 3); column ``k`` is the direction of semi-axis ``k``.
+    """
+    p = np.asarray(params, dtype=float)
+    A = np.array([
+        [p[0], p[3], p[4], p[6]],
+        [p[3], p[1], p[5], p[7]],
+        [p[4], p[5], p[2], p[8]],
+        [p[6], p[7], p[8], p[9]],
+    ])
+    center = np.linalg.solve(-A[:3, :3], p[6:9])
+    T = np.eye(4)
+    T[3, :3] = center.T
+    R = T.dot(A).dot(T.T)
+    evals, evecs = np.linalg.eig(R[:3, :3] / -R[3, 3])
+    radii = np.sqrt(1.0 / np.abs(evals)) * np.sign(evals)
+    return center, radii, evecs
 
-        ps = np.column_stack((p1, p2))
-        distances = np.asarray([d1, d2])
 
-        if d1 < 0 and d2 > 0:
-            is_inside = True
-            pi = 1
-        elif d1 > 0 and d2 < 0:
-            is_inside = True
-            pi = 0
-        elif d1 < 0 and d2 < 0:
-            pi = np.argmin(abs(distances))
-        else:
-            pi = np.argmin(distances)
+def ellipsoid_quadric_from_axes(center: ArrayLike, radii: ArrayLike, evecs: np.ndarray) -> np.ndarray:
+    """The ten quadric coefficients of an ellipsoid given by its centre, semi-axes and axis directions.
 
-        p1 = ps[:, pi]
-        p2 = ps[:, 1 - pi]
-        d1 = distances[pi]
-        d2 = distances[1 - pi]
+    The inverse of :func:`ellipsoid_axes_from_quadric`, normalized so that the
+    quadric is ``(x - c)ᵀ M (x - c) - 1 = 0`` with
+    ``M = evecs · diag(1 / (r |r|)) · evecsᵀ``; a negative radius keeps its sign.
 
-    return p1, p2, d1, d2, is_inside
+    Parameters
+    ----------
+    center : ArrayLike
+        Shape (3,).
+    radii : ArrayLike
+        Semi-axis lengths, shape (3,), along the columns of *evecs*.
+    evecs : ndarray
+        Shape (3, 3); column ``k`` is the direction of semi-axis ``k``.
+
+    Returns
+    -------
+    ndarray
+        Shape (10,), in the order of :func:`ellipsoid_axes_from_quadric`.
+    """
+    c = np.asarray(center, dtype=float)
+    r = np.asarray(radii, dtype=float)
+    E = np.asarray(evecs, dtype=float)
+    M = E @ np.diag(1.0 / (r * np.abs(r))) @ E.T
+    g = -M @ c
+    return np.array([M[0, 0], M[1, 1], M[2, 2], M[0, 1], M[0, 2], M[1, 2], g[0], g[1], g[2], c @ M @ c - 1.0])
+
+
+def project_points_on_ellipsoid(
+    points: ArrayLike,
+    center: ArrayLike,
+    radii: ArrayLike,
+    evecs: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project points radially onto an ellipsoid and return the surface normals there.
+
+    Each point is moved along the line through the ellipsoid centre until it
+    reaches the surface; :meth:`~cryocat.core.surface.Ellipsoid.distance_point_surface`
+    measures to this point. It is the nearest surface point only for a sphere.
+
+    Parameters
+    ----------
+    points : ArrayLike
+        Query points, shape (N, 3) or (3,).
+    center : ArrayLike
+        Ellipsoid centre, shape (3,).
+    radii : ArrayLike
+        Semi-axis lengths, shape (3,), along the columns of *evecs*.
+    evecs : ndarray
+        Shape (3, 3); column ``k`` is the direction of semi-axis ``k``.
+
+    Returns
+    -------
+    projected : ndarray
+        Points on the surface, shape (N, 3).
+    normals : ndarray
+        Outward unit surface normals at *projected*, shape (N, 3). A point at the
+        centre is nearest to the two ends of the shortest axis; it is projected
+        onto the end along ``+evecs[:, k]`` for that axis ``k``, so its signed
+        distance is minus the smallest radius.
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=float))
+    center = np.asarray(center, dtype=float)
+    radii = np.asarray(radii, dtype=float)
+    evecs = np.asarray(evecs, dtype=float)
+
+    local = (points - center) @ evecs
+    scale = np.sqrt(np.sum((local / radii) ** 2, axis=1, keepdims=True))
+    proj_local = np.divide(local, scale, out=np.zeros_like(local), where=scale > 0)
+    at_center = scale[:, 0] == 0
+    if at_center.any():
+        shortest = int(np.argmin(np.abs(radii)))
+        proj_local[at_center, shortest] = abs(radii[shortest])
+    normals_local = normalize_vectors(proj_local / radii**2)
+    return proj_local @ evecs.T + center, normals_local @ evecs.T
+
+
+def in_cone_cap(directions: ArrayLike, cap_angle: float) -> np.ndarray:
+    """Whether each direction lies in the cap that :func:`sample_cone` samples for *cap_angle*.
+
+    :func:`sample_cone` starts at the +z pole and lets the unit-sphere ``z``
+    run from 1 down to ``1 - cap_angle / 180``; the cap is therefore the part
+    of the sphere with ``z >= 1 - cap_angle / 180``, a fraction
+    ``cap_angle / 360`` of its area (360 is the whole sphere, 180 the upper
+    hemisphere).
+
+    Parameters
+    ----------
+    directions : ArrayLike
+        Shape (N, 3); need not be unit length.
+    cap_angle : float
+        Cap size in the convention of :func:`sample_cone`.
+
+    Returns
+    -------
+    ndarray
+        Boolean mask, shape (N,).
+    """
+    unit = normalize_vectors(np.atleast_2d(np.asarray(directions, dtype=float)))
+    return unit[:, 2] >= 1.0 - cap_angle / 180.0 - 1e-12
+
+
+def sample_ellipsoid_by_directions(
+    center: ArrayLike,
+    ellipsoid_params: ArrayLike,
+    angular_step: float,
+    cap_angle: float = 360.0,
+) -> np.ndarray:
+    """Points where rays from the centre along :func:`sample_cone` directions meet an ellipsoid.
+
+    The directions are ``sample_cone(cap_angle, angular_step)`` on the unit
+    sphere, so the points cover the same cap; each point is the forward
+    intersection from :func:`line_ellipsoid_roots`.  On a sphere of radius
+    ``r`` this is ``sample_cone(cap_angle, angular_step, center=center, radius=r)``.
+
+    Parameters
+    ----------
+    center : ArrayLike
+        Ellipsoid centre, shape (3,).
+    ellipsoid_params : ArrayLike
+        The ten quadric coefficients (see :func:`ellipsoid_quadric_from_axes`).
+    angular_step : float
+        Angular sampling step in degrees, passed to :func:`sample_cone`.
+    cap_angle : float, default=360.0
+        Cap size, passed to :func:`sample_cone`.
+
+    Returns
+    -------
+    ndarray
+        Points on the ellipsoid, shape (M, 3).
+    """
+    center = np.asarray(center, dtype=float)
+    directions = sample_cone(cap_angle, angular_step)
+    reach = np.array([line_ellipsoid_roots(center, d, ellipsoid_params)[0].max() for d in directions])
+    return center + reach[:, None] * directions
+
+
+def sample_ellipsoid_surface(
+    center: ArrayLike,
+    radii: ArrayLike,
+    evecs: np.ndarray,
+    spacing: float,
+    cap_angle: float = 360.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample points on an ellipsoid surface with their outward normals.
+
+    Golden-angle points on the unit sphere (:func:`sample_sphere`) are stretched
+    onto the ellipsoid. The point count is the surface area (Knud Thomsen's
+    approximation) divided by ``spacing**2``; the spacing is uniform only for a
+    sphere and stretches along the longer axes otherwise.
+
+    Parameters
+    ----------
+    center : ArrayLike
+        Ellipsoid centre, shape (3,).
+    radii : ArrayLike
+        Semi-axis lengths, shape (3,), along the columns of *evecs*. Signs are
+        ignored.
+    evecs : ndarray
+        Shape (3, 3); column ``k`` is the direction of semi-axis ``k``.
+    spacing : float
+        Target distance between neighbouring samples.
+    cap_angle : float, default=360.0
+        Keep only the points whose direction from the centre lies in this cap
+        (:func:`in_cone_cap`); 360 keeps the whole surface.
+
+    Returns
+    -------
+    points : ndarray
+        Shape (M, 3).
+    normals : ndarray
+        Outward unit normals, shape (M, 3).
+
+    Raises
+    ------
+    UserInputError
+        When *spacing* or any radius is not positive.
+    """
+    radii = np.abs(np.asarray(radii, dtype=float))
+    evecs = np.asarray(evecs, dtype=float)
+    if spacing <= 0:
+        raise UserInputError(f"spacing must be positive, got {spacing}.")
+    if np.any(radii <= 0):
+        raise UserInputError(f"All radii must be positive, got {radii}.")
+
+    p = 1.6075
+    a, b, c = radii
+    area = 4 * np.pi * (((a * b) ** p + (a * c) ** p + (b * c) ** p) / 3) ** (1 / p)
+    unit = sample_sphere(max(1, int(round(area / spacing**2))))
+    normals_local = normalize_vectors(unit / radii)
+    center = np.asarray(center, dtype=float)
+    points = (unit * radii) @ evecs.T + center
+    keep = in_cone_cap(points - center, cap_angle)
+    return points[keep], (normals_local @ evecs.T)[keep]
+
+
+def closest_points_on_polyline(
+    points: ArrayLike,
+    polyline: ArrayLike,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Closest point on a 3-D polyline for each query point.
+
+    Parameters
+    ----------
+    points : ArrayLike
+        Query points, shape (N, 3) or (3,).
+    polyline : ArrayLike
+        Polyline vertices in order, shape (V, 3). A single vertex is a point;
+        zero-length segments are allowed.
+
+    Returns
+    -------
+    closest : ndarray
+        Closest polyline point for each query point, shape (N, 3).
+    distances : ndarray
+        Distance from each query point to *closest*, shape (N,).
+    """
+    closest, distances, _, _ = _nearest_on_polyline(points, polyline)
+    return closest, distances
+
+
+def _nearest_on_polyline(
+    points: ArrayLike,
+    polyline: ArrayLike,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Closest polyline point, its distance, the segment it lies on and the unclamped segment parameter.
+
+    The segment parameter ``s`` runs from 0 at a segment's start vertex to 1 at
+    its end vertex; it falls outside ``[0, 1]`` where the closest point was
+    clamped to a vertex. A single-vertex polyline reports segment 0 and
+    ``s = 0``.
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=float))
+    polyline = np.atleast_2d(np.asarray(polyline, dtype=float))
+    if len(polyline) == 1:
+        closest = np.repeat(polyline, len(points), axis=0)
+        zeros = np.zeros(len(points))
+        return closest, np.linalg.norm(points - closest, axis=1), zeros.astype(int), zeros
+
+    starts = polyline[:-1]
+    segments = polyline[1:] - starts
+    seg_len2 = np.einsum("ij,ij->i", segments, segments)
+    closest = np.empty_like(points)
+    distances = np.empty(len(points))
+    seg_index = np.empty(len(points), dtype=int)
+    seg_param = np.empty(len(points))
+    chunk = max(1, 2_000_000 // len(segments))
+    for lo in range(0, len(points), chunk):
+        pts = points[lo:lo + chunk]
+        rel = pts[:, None, :] - starts[None, :, :]
+        s = np.divide(
+            np.einsum("nmk,mk->nm", rel, segments), seg_len2,
+            out=np.zeros(rel.shape[:2]), where=seg_len2 > 0,
+        )
+        cand = starts[None, :, :] + np.clip(s, 0.0, 1.0)[..., None] * segments[None, :, :]
+        d2 = np.sum((pts[:, None, :] - cand) ** 2, axis=2)
+        k = np.argmin(d2, axis=1)
+        rows = np.arange(len(pts))
+        closest[lo:lo + chunk] = cand[rows, k]
+        distances[lo:lo + chunk] = np.sqrt(d2[rows, k])
+        seg_index[lo:lo + chunk] = k
+        seg_param[lo:lo + chunk] = s[rows, k]
+    return closest, distances, seg_index, seg_param
+
+
+def _any_perpendicular(t: np.ndarray) -> np.ndarray:
+    """A unit vector perpendicular to each row of the unit vectors *t*, shape (N, 3)."""
+    t = np.atleast_2d(t)
+    ref = np.where(np.abs(t[:, :1]) < 0.9, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+    return normalize_vectors(ref - np.einsum("ij,ij->i", ref, t)[:, None] * t)
+
+
+def _tube_nearest(
+    points: np.ndarray,
+    centerline: ArrayLike,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Nearest centerline point, distance to it, segment axis there, and whether the point lies beyond an end.
+
+    A point lies beyond an end when its nearest centerline point is an end
+    vertex reached by clamping, i.e. it is past the plane through that vertex
+    normal to the end segment.
+    """
+    poly = np.atleast_2d(np.asarray(centerline, dtype=float))
+    if len(poly) < 2:
+        raise UserInputError("A tube centerline needs at least two vertices.")
+    closest, distances, k, s = _nearest_on_polyline(points, poly)
+    axis = normalize_vectors(poly[1:] - poly[:-1])[k]
+    beyond = ((k == 0) & (s < 0)) | ((k == len(poly) - 2) & (s > 1))
+    return closest, distances, axis, beyond
+
+
+def project_points_on_tube(
+    points: ArrayLike,
+    centerline: ArrayLike,
+    radius: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project points onto the wall of an open tube and return the wall normals there.
+
+    The wall is the lateral surface at distance *radius* from the polyline
+    *centerline*; the two ends are open. A point beyond an end is projected
+    onto that end's rim. A straight tube is a two-vertex centerline; a curved
+    one is a dense sampling of its centerline curve.
+
+    Parameters
+    ----------
+    points : ArrayLike
+        Query points, shape (N, 3) or (3,).
+    centerline : ArrayLike
+        Centerline vertices in order, shape (V, 3) with ``V >= 2``.
+    radius : float
+        Tube radius.
+
+    Returns
+    -------
+    projected : ndarray
+        Nearest points on the tube wall, shape (N, 3).
+    normals : ndarray
+        Outward unit wall normals at *projected*, shape (N, 3). A point on the
+        centerline (or on its extension beyond an end) has no unique
+        projection; one perpendicular direction is picked for it.  For a
+        point beyond an end the normal is the direction from its rim point to
+        it, one of the normals the rim admits; the point lies outside the open
+        tube, so its offset along that normal is its full, positive distance
+        to the rim.
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=float))
+    closest, _, axis, beyond = _tube_nearest(points, centerline)
+    radial = points - closest
+    radial[beyond] -= np.einsum("ij,ij->i", radial[beyond], axis[beyond])[:, None] * axis[beyond]
+    normals = normalize_vectors(radial)
+    on_axis = ~np.any(normals, axis=1)
+    normals[on_axis] = _any_perpendicular(axis[on_axis])
+    projected = closest + radius * normals
+    to_point = normalize_vectors(points[beyond] - projected[beyond])
+    off_rim = np.any(to_point, axis=1)
+    normals[np.flatnonzero(beyond)[off_rim]] = to_point[off_rim]
+    return projected, normals
+
+
+def line_tube_roots(
+    point: ArrayLike,
+    direction: ArrayLike,
+    centerline: ArrayLike,
+    radius: float,
+) -> tuple[np.ndarray, bool]:
+    """Line parameters at which the line ``point + t * direction`` meets an open tube wall.
+
+    The tube is defined as in :func:`project_points_on_tube`. Its wall is the
+    outer boundary of the union of one cylinder per segment, clipped to the
+    segment, and one sphere per interior vertex (which closes the joints at
+    bends); hits beyond either end are not on the wall. A curved tube can be
+    crossed more than twice, and a line can leave through an open end without
+    crossing the wall.
+
+    Parameters
+    ----------
+    point : ArrayLike
+        Point on the line, shape (3,).
+    direction : ArrayLike
+        Direction of the line, shape (3,); need not be unit length.
+    centerline : ArrayLike
+        Centerline vertices in order, shape (V, 3) with ``V >= 2``.
+    radius : float
+        Tube radius.
+
+    Returns
+    -------
+    roots : ndarray
+        Line parameters ``t`` of the intersections in ascending order.
+    is_inside : bool
+        True if *point* lies strictly inside the wall and between the two ends.
+    """
+    p0 = np.asarray(point, dtype=float)
+    d = np.asarray(direction, dtype=float)
+    poly = np.atleast_2d(np.asarray(centerline, dtype=float))
+    r2 = float(radius) ** 2
+    candidates = []
+
+    # Sphere around every interior vertex: |p0 + t d - v|^2 = r^2.
+    w = p0 - poly[1:-1]
+    qa = float(d @ d)
+    if qa > 0 and len(w):
+        qb = 2.0 * (w @ d)
+        disc = qb**2 - 4.0 * qa * (np.einsum("ij,ij->i", w, w) - r2)
+        ok = disc >= 0
+        sq = np.sqrt(disc[ok])
+        candidates += [(-qb[ok] + sq) / (2.0 * qa), (-qb[ok] - sq) / (2.0 * qa)]
+
+    # Cylinder around every segment, clipped to the segment's length.
+    if len(poly) > 1:
+        seg = poly[1:] - poly[:-1]
+        length = np.linalg.norm(seg, axis=1)
+        axis = normalize_vectors(seg)
+        w = p0 - poly[:-1]
+        d_perp = d - (axis @ d)[:, None] * axis
+        w_perp = w - np.einsum("ij,ij->i", w, axis)[:, None] * axis
+        qa = np.einsum("ij,ij->i", d_perp, d_perp)
+        qb = 2.0 * np.einsum("ij,ij->i", w_perp, d_perp)
+        qc = np.einsum("ij,ij->i", w_perp, w_perp) - r2
+        disc = qb**2 - 4.0 * qa * qc
+        ok = (qa > 1e-12 * max(float(d @ d), 1e-300)) & (disc >= 0) & (length > 0)
+        sq = np.sqrt(disc[ok])
+        for t in ((-qb[ok] + sq) / (2.0 * qa[ok]), (-qb[ok] - sq) / (2.0 * qa[ok])):
+            s = np.einsum("ij,ij->i", w[ok] + t[:, None] * d, axis[ok])
+            candidates.append(t[(s >= 0) & (s <= length[ok])])
+
+    _, inside_dist, _, inside_beyond = _tube_nearest(p0, poly)
+    is_inside = bool(inside_dist[0] < radius and not inside_beyond[0])
+    roots = np.concatenate(candidates) if candidates else np.empty(0)
+    if roots.size == 0:
+        return roots, is_inside
+
+    # Keep only hits on the outer boundary between the ends, then merge hits shared by adjacent pieces.
+    tol = 1e-6 * max(float(radius), 1.0)
+    _, dist, _, beyond = _tube_nearest(p0 + roots[:, None] * d, poly)
+    roots = np.sort(roots[(dist >= radius - tol) & ~beyond])
+    if roots.size > 1:
+        keep = np.concatenate(([True], np.diff(roots) * np.linalg.norm(d) > tol))
+        roots = roots[keep]
+    return roots, is_inside
+
+
+def sample_spline_by_arc_length(tck: Any, spacing: float) -> tuple[np.ndarray, np.ndarray]:
+    """Sample a parametric 3-D spline at even steps of arc length.
+
+    Arc length is measured on a dense evaluation of the spline and inverted by
+    linear interpolation, so the steps are even to within the chord error of
+    that evaluation.
+
+    Parameters
+    ----------
+    tck : tuple or list
+        Spline representation ``(t, c, k)`` as returned by
+        :func:`scipy.interpolate.splprep`.
+    spacing : float
+        Largest allowed arc-length step between consecutive samples.
+
+    Returns
+    -------
+    points : ndarray
+        Shape (M, 3) with ``M = max(2, ceil(L / spacing) + 1)`` for spline
+        length ``L``; consecutive points are ``L / (M - 1)`` apart along the
+        curve, and the first and last are the spline ends.
+    tangents : ndarray
+        Unit tangents at *points*, shape (M, 3).
+
+    Raises
+    ------
+    UserInputError
+        When *spacing* is not positive.
+    """
+    if spacing <= 0:
+        raise UserInputError(f"spacing must be positive, got {spacing}.")
+    n_dense = 2001
+    while True:
+        u_dense = np.linspace(0.0, 1.0, n_dense)
+        dense = np.array(splev(u_dense, tck)).T
+        arc = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(dense, axis=0), axis=1))))
+        n_samples = max(2, int(np.ceil(arc[-1] / spacing)) + 1)
+        if 10 * n_samples <= n_dense:
+            break
+        n_dense = 10 * n_samples + 1
+    u = np.interp(np.linspace(0.0, arc[-1], n_samples), arc, u_dense)
+    points = np.array(splev(u, tck)).T
+    tangents = normalize_vectors(np.array(splev(u, tck, der=1)).T)
+    return points, tangents
+
+
+def sample_tube_surface(
+    centers: ArrayLike,
+    tangents: ArrayLike,
+    radius: float,
+    spacing: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample points on a tube wall around a sampled centerline, with their outward normals.
+
+    A ring of points is placed around every centerline sample in the plane
+    normal to its tangent. The ring frame is carried from one sample to the
+    next by parallel transport, so rings on a curved centerline do not twist.
+    The tube ends are left open.
+
+    Parameters
+    ----------
+    centers : ArrayLike
+        Centerline samples in order, shape (M, 3).
+    tangents : ArrayLike
+        Centerline tangents at *centers*, shape (M, 3); need not be unit length.
+    radius : float
+        Tube radius.
+    spacing : float
+        Target distance between neighbouring samples around each ring.
+
+    Returns
+    -------
+    points : ndarray
+        Shape (M * K, 3) with ``K = max(3, ceil(2 * pi * radius / spacing))``
+        points per ring.
+    normals : ndarray
+        Outward unit normals, shape (M * K, 3).
+
+    Raises
+    ------
+    UserInputError
+        When *spacing* or *radius* is not positive, or a tangent is zero.
+    """
+    centers = np.atleast_2d(np.asarray(centers, dtype=float))
+    tangents = normalize_vectors(np.atleast_2d(np.asarray(tangents, dtype=float)))
+    if spacing <= 0 or radius <= 0:
+        raise UserInputError(f"spacing and radius must be positive, got {spacing} and {radius}.")
+    if np.any(np.linalg.norm(tangents, axis=1) == 0):
+        raise UserInputError("Tangents must be non-zero.")
+
+    n_ring = max(3, int(np.ceil(2 * np.pi * radius / spacing)))
+    phi = 2 * np.pi * np.arange(n_ring) / n_ring
+    cos_phi, sin_phi = np.cos(phi)[:, None], np.sin(phi)[:, None]
+
+    e1 = _any_perpendicular(tangents[:1])[0]
+    rings = []
+    for t in tangents:
+        e1_next = normalize_vectors(e1 - (e1 @ t) * t)
+        if not np.any(e1_next):
+            e1_next = _any_perpendicular(t[None, :])[0]
+        e1 = e1_next
+        rings.append(cos_phi * e1 + sin_phi * np.cross(t, e1))
+    normals = np.concatenate(rings)
+    points = np.repeat(centers, n_ring, axis=0) + radius * normals
+    return points, normals
+
+
+def rigid_transform_parts(
+    transformation_matrix: ArrayLike,
+    atol: float = 1e-6,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Split a 4x4 homogeneous rigid transformation into its rotation and translation.
+
+    Parameters
+    ----------
+    transformation_matrix : ArrayLike
+        Shape (4, 4). Normalized via :func:`numpy.asarray`.
+    atol : float, default=1e-6
+        Tolerance for the orthonormality, determinant and bottom-row checks.
+
+    Returns
+    -------
+    rotation : ndarray
+        The 3x3 part, shape (3, 3).
+    translation : ndarray
+        The translation, shape (3,).
+
+    Raises
+    ------
+    UserInputError
+        When the matrix is not 4x4, its bottom row is not ``[0, 0, 0, 1]``, or
+        its 3x3 part is not a proper rotation (orthonormal with determinant +1).
+        Scaling, shearing and reflection are rejected.
+    """
+    M = np.asarray(transformation_matrix, dtype=float)
+    if M.shape != (4, 4):
+        raise UserInputError(f"Expected a 4x4 transformation matrix, got shape {M.shape}.")
+    if not np.allclose(M[3], [0.0, 0.0, 0.0, 1.0], atol=atol):
+        raise UserInputError(f"The bottom row of a rigid transformation must be [0, 0, 0, 1], got {M[3]}.")
+    R = M[:3, :3]
+    if not np.allclose(R.T @ R, np.eye(3), atol=atol) or abs(np.linalg.det(R) - 1.0) > atol:
+        raise UserInputError(
+            "Only rigid transformations are supported: the 3x3 part must be a rotation "
+            f"(orthonormal, determinant +1); got determinant {np.linalg.det(R):.6g}."
+        )
+    return R, M[:3, 3]
 
 
 def construct_rays(
@@ -4349,29 +4848,18 @@ def oversample_spline(coords: np.ndarray, target_spacing: float) -> np.ndarray:
     coords : ndarray
         Array of shape (n, 3) representing the input points.
     target_spacing : float
-        Desired distance between points on the spline.
+        Largest arc-length step between consecutive points; the spline length
+        is divided into equal steps (:func:`sample_spline_by_arc_length`).
 
     Returns
     -------
     ndarray
-        Oversampled coordinates along the spline.
+        Oversampled coordinates along the spline, evenly spaced by arc length.
     """
     # Fit a parametric spline to the data
     tck, u = splprep(coords.T, s=0)  # `s=0` ensures an exact fit to the input points
 
-    # Compute cumulative arc length
-    distances = np.sqrt(np.sum(np.diff(coords, axis=0) ** 2, axis=1))
-    total_length = np.sum(distances)
-
-    # Determine number of samples based on target spacing
-    num_samples = int(total_length / target_spacing) + 1
-
-    # Generate evenly spaced parameter values along the spline
-    u_fine = np.linspace(0, 1, num_samples)
-
-    # Evaluate the spline to get oversampled points
-    oversampled_points = np.array(splev(u_fine, tck)).T
-
+    oversampled_points, _ = sample_spline_by_arc_length(tck, target_spacing)
     return oversampled_points
 
 
