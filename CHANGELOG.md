@@ -115,6 +115,20 @@ Complete mesh and point-cloud processing stack:
 - `DiscreteSurface` — base class for both
 - Backends: Open3D and PyVista (new dependencies)
 
+#### `surface` — screened Poisson midplane meshes
+
+One surface through the middle of a segmented membrane (unlike marching cubes
+in `Mesh.from_mrc`, which gives both faces):
+
+- `Mesh.from_mrc_screened_poisson(input_path, label, pixel_size, ...)` —
+  voxels of one label → normals → screened Poisson → trim → isotropic remeshing
+- `Mesh.from_screened_poisson(points, normals=None, ...)` — Poisson surface
+  through any point cloud, trimmed to the points by default
+- `Mesh.trim_by_distance(reference_points, max_distance)`
+- `Mesh.remesh_isotropic(target_edge_length)` — Botsch & Kobbelt remeshing via
+  gpytoolbox (optional, installed separately with `--no-deps`, see installing docs)
+- `OrientedPointCloud.smooth_normals(k, iterations)`
+
 #### New module: `cryocat.utils.symmetry`
 
 Point-group rotation library for all symmetries used in cryo-ET:
@@ -293,6 +307,13 @@ to reflect new APIs.
   now spans [0, n_rows − 1]
 - **`cryomask.generate_mask`** — icosahedral mask support added
 - **Tango / NN GUI** — loading and display bugs fixed
+- **`OrientedPointCloud.downsample_pixel`** — called the non-existent Open3D
+  method `pixel_down_sample`; now `voxel_down_sample`
+- **Copying a `Mesh` after a distance query** — `copy.deepcopy` and pickling
+  failed once `distance_to_points`, `cast_rays` or `to_segmentation` had cached an Open3D
+  `RaycastingScene`, which broke `inplace=False` methods such as
+  `refine_normals` and `crop`. `Mesh.__getstate__` now leaves the cached scene
+  out; copies rebuild it on first use.
 
 ---
 
@@ -303,6 +324,12 @@ New required packages:
 - `pyvista` — mesh I/O and visualization in `cryocat.core.surface`
 - `ipywidgets` —  in `cryocat.analysis.visplot` for motl browsing
 - `IPython` — in `cryocat.analysis.visplot` for motl browsing
+- `scs` — imported by gpytoolbox
+
+Optional, installed separately with `pip install --no-deps "gpytoolbox==0.3.8"`:
+- `gpytoolbox` — isotropic remeshing (`Mesh.remesh_isotropic`). Not listed in
+  `pyproject.toml` because its metadata caps scipy (`<=1.17.1`) and numpy
+  (`<=2.4.6`) below cryoCAT's versions.
 
 ---
 

@@ -33,6 +33,7 @@ dependencies = [
     "numpydoc>=1.10",
     "open3d>=0.19",
     "pyvista>=0.48",
+    "scs>=3.3",   # imported by gpytoolbox, which is installed separately with --no-deps (installing.rst)
     "ipywidgets>=8.0",
     "IPython>=8.0",
 ]

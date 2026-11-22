@@ -8,6 +8,7 @@ from pathlib import Path
 import copy
 import logging
 import numbers
+import os
 import warnings
 from tqdm import tqdm
 import multiprocessing as mp
@@ -34,6 +35,27 @@ def _axis_aligned_bbox_from_input(bbox: o3d.geometry.AxisAlignedBoundingBox | di
             max_bound=bbox["max_bound"],
         )
     return bbox
+
+
+def _import_gpytoolbox():
+    """Import gpytoolbox on demand; it is installed separately (see installing.rst)."""
+    try:
+        import gpytoolbox
+    except ImportError as e:
+        raise ImportError(
+            "Isotropic remeshing needs gpytoolbox. Install it without its dependencies "
+            '(its scipy/numpy caps are not needed): pip install --no-deps "gpytoolbox==0.3.8". '
+            "Not available on Linux ARM; there, skip remeshing with remesh_edge_length=None."
+        ) from e
+    return gpytoolbox
+
+
+def _n_available_cpus() -> int:
+    """CPUs this process may use (respects SLURM/cgroup limits, unlike os.cpu_count())."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:  # macOS, Windows
+        return os.cpu_count() or 1
 
 class Surface(ABC):
     """Common root for all surface representations (discrete and analytic)."""
@@ -842,7 +864,17 @@ class Mesh(DiscreteSurface):
         # Curvature computation parameters
         self._min_triangle_area = 1e-12
         self._lstsq_rcond = 1e-12
-    
+
+    def __getstate__(self):
+        """State for copy.deepcopy and pickle, without the cached Open3D RaycastingScene.
+
+        The scene (built by :meth:`_get_raycasting_scene`) cannot be copied or pickled; it is
+        a cache, so the copy rebuilds its own on first use.
+        """
+        state = self.__dict__.copy()
+        state.pop("_raycasting_scene", None)
+        return state
+
     def get_vertices(self):
         return self.vertices
     
@@ -2322,6 +2354,103 @@ class Mesh(DiscreteSurface):
         result.compute_normals()
         return result
 
+    def trim_by_distance(self, reference_points: ArrayLike | "OrientedPointCloud", max_distance: float,
+                         inplace: bool = False) -> "Mesh | None":
+        """Remove vertices further than ``max_distance`` from a set of reference points.
+
+        Used after screened Poisson reconstruction, which closes open surfaces with sheets far
+        from the data. Faces that lose a vertex are removed as well.
+
+        Parameters
+        ----------
+        reference_points : ArrayLike, shape (N, 3) or OrientedPointCloud
+            Points the mesh must stay close to (e.g. the segmentation voxels).
+        max_distance : float
+            Largest allowed vertex-to-point distance, in mesh units.
+        inplace : bool, default=False
+            Modify this mesh, or return a trimmed copy.
+
+        Returns
+        -------
+        Mesh or None
+            Trimmed copy if ``inplace=False``, else None.
+        """
+        ref = reference_points.vertices if isinstance(reference_points, OrientedPointCloud) \
+            else np.asarray(reference_points, dtype=float)
+        d, _ = cKDTree(ref).query(np.asarray(self.vertices), k=1, workers=_n_available_cpus(),
+                                  distance_upper_bound=2.0 * max_distance)   # inf beyond the bound
+        o3d_mesh = self._to_open3d()
+        o3d_mesh.remove_vertices_by_mask(d > max_distance)
+        o3d_mesh.remove_degenerate_triangles()
+        o3d_mesh.remove_duplicated_triangles()
+        o3d_mesh.remove_unreferenced_vertices()
+        target = self if inplace else copy.deepcopy(self)
+        target._from_open3d(o3d_mesh)
+        target._invalidate_cache()
+        target._invalidate_neighbor_cache()
+        return None if inplace else target
+
+    def remesh_isotropic(self, target_edge_length: float, iterations: int = 10, project: bool = True,
+                         inplace: bool = False) -> "Mesh | None":
+        """Isotropic remeshing to a uniform edge length (Botsch & Kobbelt 2004, via gpytoolbox).
+
+        Uses ``gpytoolbox``, which is installed separately because its package metadata caps
+        scipy and numpy below the versions cryoCAT uses:
+        ``pip install --no-deps "gpytoolbox==0.3.8"`` (see the installation docs).
+        Gives near-equilateral triangles with mostly 6 neighbours per vertex, which makes
+        curvature estimates comparable between meshes.
+
+        Parameters
+        ----------
+        target_edge_length : float
+            Desired edge length in mesh units. Half the voxel size worked well for 7.84 Å data.
+        iterations : int, default=10
+            Split/collapse/flip/relax rounds.
+        project : bool, default=True
+            Project the vertices back onto the input surface after each round.
+        inplace : bool, default=False
+            Modify this mesh, or return a remeshed copy.
+
+        Returns
+        -------
+        Mesh or None
+            Remeshed copy if ``inplace=False``, else None. Vertex normals are recomputed;
+            any curvature values are discarded.
+
+        Raises
+        ------
+        ImportError
+            If gpytoolbox is not installed (the message gives the install command).
+
+        Notes
+        -----
+        Boundary vertices stay where they are, so triangles at open edges keep their input size.
+        Remove them (:meth:`remove_boundary_vertices`) before computing curvature. Non-manifold
+        edges are removed first because gpytoolbox rejects them.
+
+        References
+        ----------
+        Botsch, M., Kobbelt, L. (2004). A remeshing approach to multiresolution modeling.
+        Proc. Eurographics Symposium on Geometry Processing, 185-192.
+        """
+        gpy = _import_gpytoolbox()
+        o3d_mesh = self._to_open3d()
+        o3d_mesh.remove_non_manifold_edges()
+        o3d_mesh.remove_unreferenced_vertices()
+        V, F = gpy.remesh_botsch(np.asarray(o3d_mesh.vertices, dtype=np.float64),
+                                 np.asarray(o3d_mesh.triangles, dtype=np.int32),
+                                 i=int(iterations), h=float(target_edge_length), project=project)
+        target = self if inplace else copy.deepcopy(self)
+        target.vertices = np.asarray(V, dtype=float)
+        target.faces = np.asarray(F, dtype=np.int64)
+        target.normals = None
+        o3d_new = target._to_open3d()
+        o3d_new.compute_vertex_normals()
+        target.normals = np.asarray(o3d_new.vertex_normals)
+        target._invalidate_cache()
+        target._invalidate_neighbor_cache()
+        return None if inplace else target
+
     def remove_disconnected_components(self, min_component_size: int = 100, logger: logging.Logger | None = None) -> "Mesh":
         """Remove small disconnected components that are likely artifacts.
 
@@ -3312,6 +3441,218 @@ class Mesh(DiscreteSurface):
         mesh.pixel_size = DiscreteSurface._coerce_pixel_size_array(pixel_size)
         mesh.seg_transposed = transpose
 
+        return mesh
+
+    @classmethod
+    def from_screened_poisson(
+        cls,
+        points: ArrayLike | "OrientedPointCloud",
+        normals: ArrayLike | None = None,
+        *,
+        depth: int = 9,
+        scale: float = 1.2,
+        samples_per_node: float = 5.0,
+        point_weight: float = 0.1,
+        full_depth: int = 5,
+        n_threads: int = 1,
+        knn: int = 500,
+        tangent_plane_knn: int = 50,
+        normal_smoothing_iterations: int = 1,
+        trim_distance: float | str | None = "auto",
+    ) -> "Mesh":
+        """Surface through a point cloud by screened Poisson reconstruction (Kazhdan & Hoppe 2013).
+
+        For a membrane segmentation (points = voxels of one label), the surface runs through the
+        middle of the membrane, unlike :meth:`from_mrc`, which gives both faces.
+
+        Parameters
+        ----------
+        points : ArrayLike, shape (N, 3) or OrientedPointCloud
+            Point coordinates. An OrientedPointCloud with normals is used as-is (not modified).
+        normals : ArrayLike, shape (N, 3), optional
+            Per-point normals. If None, they are estimated from ``knn`` neighbours, oriented
+            consistently (``tangent_plane_knn``) and smoothed ``normal_smoothing_iterations`` times.
+            For a segmented membrane, ``knn`` must cover a patch wider than the membrane is thick,
+            or the normals follow the voxel steps instead of the membrane.
+        depth : int, default=9
+            Octree depth. Higher gives finer meshes but reproduces voxel steps.
+        scale : float, default=1.2
+            Reconstruction cube size relative to the bounding cube of the points.
+        samples_per_node : float, default=5.0
+            Minimum points per octree node; higher values smooth noisy data.
+        point_weight : float, default=0.1
+            Screening weight: 0 is smoothest, larger values follow the points more closely.
+        full_depth : int, default=5
+            Depth up to which the octree is complete.
+        n_threads : int, default=1
+            Threads for the Poisson solver. Open3D 0.20's multi-threaded solver crashed
+            (segmentation fault) intermittently in testing; single-threaded never did.
+        knn : int, default=500
+            Neighbours for normal estimation and smoothing (only used when normals are not given).
+        tangent_plane_knn : int, default=50
+            Neighbours for consistent normal orientation (only used when normals are not given).
+        normal_smoothing_iterations : int, default=1
+            Rounds of :meth:`OrientedPointCloud.smooth_normals` (only used when normals are not
+            given). 0 disables smoothing.
+        trim_distance : float, "auto" or None, default="auto"
+            Remove vertices further than this from the points. "auto" uses twice the median
+            nearest-neighbour spacing of the points (2 voxels for a segmentation). None keeps the
+            closed Poisson surface.
+
+        Returns
+        -------
+        Mesh
+            The trimmed Poisson surface. Its triangles are irregular; call
+            :meth:`remesh_isotropic` before computing curvature.
+
+        Notes
+        -----
+        The orientation of the output surface is arbitrary: Poisson reconstruction picks one side
+        of the membrane, and which one depends on the estimated normals. The sign of the mean
+        curvature (and of the shape index) can therefore differ between meshes. Compare signed
+        curvature values only after orienting the normals consistently (e.g. with
+        :meth:`orient_normals_globally` or :meth:`flip_normals`), or use sign-independent
+        measures such as curvedness.
+
+        References
+        ----------
+        Kazhdan, M., Hoppe, H. (2013). Screened Poisson surface reconstruction. ACM TOG 32(3).
+
+        Barad, B. A. et al. (2023). Quantifying organellar ultrastructure in cryo-electron
+        tomography using a surface morphometrics pipeline. J. Cell Biol. 222(4).
+        """
+        if isinstance(points, OrientedPointCloud):
+            pcd = copy.deepcopy(points)
+            if normals is not None:
+                pcd.normals = np.asarray(normals, dtype=float)
+        else:
+            pcd = OrientedPointCloud()
+            pcd.vertices = np.asarray(points, dtype=float)
+            pcd.normals = None if normals is None else np.asarray(normals, dtype=float)
+
+        if pcd.vertices is None or len(pcd.vertices) == 0:
+            raise ValueError("from_screened_poisson needs at least one point")
+
+        if pcd.normals is None:
+            pcd.compute_normals(knn=knn, orient_normals=True, tangent_plane_knn=tangent_plane_knn)
+            if normal_smoothing_iterations:
+                pcd.smooth_normals(k=knn, iterations=normal_smoothing_iterations)
+
+        o3d_mesh, _densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+            pcd._to_open3d(), depth=depth, width=0, scale=scale, linear_fit=False,
+            n_threads=n_threads, full_depth=full_depth, samples_per_node=samples_per_node,
+            point_weight=point_weight,
+        )
+        mesh = cls()
+        mesh._from_open3d(o3d_mesh)
+        mesh.inherit_coordinate_metadata(pcd)
+
+        if isinstance(trim_distance, str):
+            if trim_distance != "auto":
+                raise ValueError(f"trim_distance must be a number, 'auto' or None, got {trim_distance!r}")
+            pts = np.asarray(pcd.vertices)
+            sample = pts[np.random.default_rng(0).choice(len(pts), min(len(pts), 10_000), replace=False)]
+            spacing = float(np.median(cKDTree(pts).query(sample, k=2)[0][:, 1]))
+            trim_distance = 2.0 * spacing
+        if trim_distance is not None:
+            mesh.trim_by_distance(pcd.vertices, trim_distance, inplace=True)
+        return mesh
+
+    @classmethod
+    def from_mrc_screened_poisson(
+        cls,
+        input_path: MapSource,
+        label: int = 1,
+        pixel_size: float | np.ndarray = 1.0,
+        transpose: bool = True,
+        remesh_edge_length: float | str | None = "auto",
+        remesh_iterations: int = 10,
+        **poisson_kwargs,
+    ) -> "Mesh":
+        """Midplane mesh of one segmentation label: screened Poisson, trim, isotropic remeshing.
+
+        :meth:`from_mrc` meshes a segmentation with marching cubes, which gives both faces of a
+        segmented membrane. This method gives one surface through the middle of the membrane:
+
+        1. voxels of ``label`` → points (voxel index × ``pixel_size``)
+        2. normals estimated from ``knn`` neighbours and smoothed once
+        3. screened Poisson reconstruction (:meth:`from_screened_poisson`)
+        4. trim vertices far from the voxels (Poisson closes open membranes)
+        5. isotropic remeshing to a fixed edge length (:meth:`remesh_isotropic`, needs gpytoolbox)
+
+        Coordinates follow :meth:`from_mrc`: voxel index × ``pixel_size``, XYZ order if
+        ``transpose=True``. The MRC header origin is ignored.
+
+        Parameters
+        ----------
+        input_path : MapSource
+            Path to an MRC/EM segmentation or an already-loaded array.
+        label : int, default=1
+            Label value of the structure to mesh.
+        pixel_size : float or array of 3, default=1.0
+            Voxel size; 1 gives voxel units. All distances in ``poisson_kwargs`` use these units.
+        transpose : bool, default=True
+            Whether to transpose the segmentation when loading from file.
+            Ignored when ``input_path`` is an ndarray (the array is used as-is), as in
+            :meth:`from_mrc`.
+        remesh_edge_length : float, "auto" or None, default="auto"
+            Edge length of the isotropic remeshing. "auto" = half the (mean) voxel size.
+            None skips remeshing (no gpytoolbox needed).
+        remesh_iterations : int, default=10
+            Passed to :meth:`remesh_isotropic`.
+        **poisson_kwargs
+            Passed to :meth:`from_screened_poisson` (e.g. ``trim_distance``, ``depth``, ``knn``).
+
+        Returns
+        -------
+        Mesh
+            Midplane mesh with ``seg_shape``, ``pixel_size`` and ``seg_transposed`` set as in
+            :meth:`from_mrc`.
+
+        Raises
+        ------
+        ValueError
+            If ``label`` does not occur in the segmentation.
+        ImportError
+            If remeshing is requested and gpytoolbox is not installed
+            (``pip install --no-deps "gpytoolbox==0.3.8"``).
+
+        Notes
+        -----
+        The orientation of the surface is arbitrary (see :meth:`from_screened_poisson`), so the
+        sign of the mean curvature can differ between meshes.
+
+        Examples
+        --------
+        Settings used for 7.84 Å data with coordinates in nm:
+
+        >>> mesh = Mesh.from_mrc_screened_poisson(
+        ...     "segmentation.mrc", label=3, pixel_size=0.784,
+        ...     trim_distance=1.5, remesh_edge_length=0.392)  # doctest: +SKIP
+        >>> mesh.smooth(iterations=2)  # doctest: +SKIP
+        >>> mesh.refine_normals(radius_hit=3.0, n_iter=1)  # doctest: +SKIP
+        >>> mesh = mesh.remove_boundary_vertices(erosion_layers=2)  # doctest: +SKIP
+        >>> mesh.compute_curvatures(smoothing_iterations=3, smoothing_kernel_rings=2)  # doctest: +SKIP
+        """
+        if isinstance(input_path, np.ndarray):
+            segmentation = input_path
+            transpose = False  # already in memory — no transposition applied (as in from_mrc)
+        else:
+            segmentation = cryomap.read(input_path, transpose=transpose)
+        px = DiscreteSurface._coerce_pixel_size_array(pixel_size)
+        points = np.argwhere(segmentation == label) * px
+        if len(points) == 0:
+            raise ValueError(f"label {label} not found in the segmentation")
+
+        mesh = cls.from_screened_poisson(points, **poisson_kwargs)
+        if remesh_edge_length == "auto":
+            remesh_edge_length = float(np.mean(px)) / 2.0
+        if remesh_edge_length is not None:
+            mesh = mesh.remesh_isotropic(remesh_edge_length, iterations=remesh_iterations)
+
+        mesh.seg_shape = segmentation.shape
+        mesh.pixel_size = px
+        mesh.seg_transposed = transpose
         return mesh
 
     @staticmethod
@@ -5302,6 +5643,59 @@ class OrientedPointCloud(DiscreteSurface):
             print(f"Created new point cloud with updated normals")
             return new_pcd
 
+    def smooth_normals(self, k: int = 500, iterations: int = 1, chunk_size: int = 100_000,
+                       inplace: bool = True) -> "OrientedPointCloud | None":
+        """Average each normal over its k nearest points (signs aligned to the point's own normal).
+
+        Parameters
+        ----------
+        k : int, default=500
+            Neighbours averaged per point (including the point itself).
+        iterations : int, default=1
+            Number of smoothing rounds.
+        chunk_size : int, default=100000
+            Points processed per KD-tree query; memory use is about chunk_size * k * 32 bytes.
+        inplace : bool, default=True
+            Update this point cloud, or return a smoothed copy.
+
+        Returns
+        -------
+        OrientedPointCloud or None
+            Smoothed copy if ``inplace=False``, else None.
+
+        Raises
+        ------
+        ValueError
+            If the point cloud has no normals.
+        """
+        if self.normals is None:
+            raise ValueError("smooth_normals needs normals; call compute_normals() first")
+        pts = np.asarray(self.vertices, dtype=float)
+        nrm = np.asarray(self.normals, dtype=float)
+        k = int(min(max(k, 2), len(pts)))
+        tree = cKDTree(pts)
+        workers = _n_available_cpus()
+        for _ in range(iterations):
+            out = np.empty_like(nrm)
+            for s in range(0, len(pts), chunk_size):
+                _, idx = tree.query(pts[s:s + chunk_size], k=k, workers=workers)
+                idx = np.asarray(idx).reshape(len(pts[s:s + chunk_size]), -1)
+                nb = nrm[idx]                                           # (chunk, k, 3)
+                ref = nrm[s:s + chunk_size, None, :]
+                nb = nb * np.where(np.sum(nb * ref, axis=-1, keepdims=True) < 0, -1.0, 1.0)
+                m = nb.sum(axis=1)
+                norm = np.linalg.norm(m, axis=1, keepdims=True)
+                # keep the original normal where the neighbours cancel out exactly
+                out[s:s + chunk_size] = np.where(norm > 0, m / np.where(norm > 0, norm, 1.0),
+                                                 nrm[s:s + chunk_size])
+            nrm = out
+        if inplace:
+            self.normals = nrm
+            return None
+        new = copy.deepcopy(self)
+        new.normals = nrm
+        return new
+
     @classmethod
     def read(cls, input_path: PathOrStr, recompute_normals: bool = False, knn: int = 30, 
                 orient_normals: bool = True, tangent_plane_knn: int = 50) -> "OrientedPointCloud":
@@ -6410,7 +6804,7 @@ class OrientedPointCloud(DiscreteSurface):
         pcd_o3d = self._to_open3d()
         
         # Downsample
-        downsampled_o3d = pcd_o3d.pixel_down_sample(pixel_size)
+        downsampled_o3d = pcd_o3d.voxel_down_sample(pixel_size)
         
         original_count = len(self.vertices)
         downsampled_count = len(downsampled_o3d.points)

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import io
+import pickle
 
 import numpy as np
 import pytest
@@ -1911,3 +1913,309 @@ def test_scale_and_its_inverse_restore_the_mesh(curved_mesh):
 def test_scale_rejects_a_factor_that_is_not_a_positive_scalar(curved_mesh, factor):
     with pytest.raises(ValueError):
         curved_mesh.scale(factor)
+
+
+# =============================================================================
+# Screened Poisson midplane meshing — tests
+# =============================================================================
+
+def _shell_segmentation(n: int = 64, radius: float = 20.0, thickness: float = 4.0,
+                        open_below: float | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Binary spherical shell of a given thickness; optionally cut open below ``z = open_below``."""
+    g = np.indices((n, n, n)).transpose(1, 2, 3, 0) - n // 2
+    r = np.linalg.norm(g, axis=-1)
+    seg = (r > radius - thickness / 2) & (r < radius + thickness / 2)
+    if open_below is not None:
+        seg &= g[..., 2] > open_below
+    return seg.astype(np.uint8), np.full(3, n // 2, dtype=float)
+
+
+def _plane_mesh(n: int = 30, spacing: float = 1.0) -> Mesh:
+    """Triangulated square grid in the z=0 plane."""
+    xs = np.arange(n) * spacing
+    X, Y = np.meshgrid(xs, xs, indexing="ij")
+    verts = np.column_stack([X.ravel(), Y.ravel(), np.zeros(X.size)])
+    idx = np.arange(n * n).reshape(n, n)
+    a, b, c, d = idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()
+    faces = np.vstack([np.column_stack([a, b, c]), np.column_stack([a, c, d])])
+    mesh = Mesh()
+    mesh.vertices = verts
+    mesh.faces = faces
+    mesh.normals = np.tile([0.0, 0.0, 1.0], (len(verts), 1))
+    return mesh
+
+
+def _min_triangle_angles(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    """Smallest interior angle (degrees) of every triangle."""
+    p = vertices[faces]
+    angles = []
+    for i in range(3):
+        u = p[:, (i + 1) % 3] - p[:, i]
+        v = p[:, (i + 2) % 3] - p[:, i]
+        cos = np.sum(u * v, axis=1) / (np.linalg.norm(u, axis=1) * np.linalg.norm(v, axis=1))
+        angles.append(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
+    return np.min(angles, axis=0)
+
+
+def _edge_lengths(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    p = vertices[faces]
+    return np.linalg.norm(p - p[:, [1, 2, 0]], axis=-1).ravel()
+
+
+@pytest.fixture(scope="module")
+def closed_shell_points():
+    seg, center = _shell_segmentation()
+    return np.argwhere(seg == 1).astype(float), center
+
+
+@pytest.fixture(scope="module")
+def open_shell_seg():
+    return _shell_segmentation(open_below=-8)
+
+
+@pytest.fixture(scope="module")
+def open_shell_poisson(open_shell_seg):
+    """Untrimmed and auto-trimmed Poisson meshes of the half-open shell."""
+    seg, _ = open_shell_seg
+    pts = np.argwhere(seg == 1).astype(float)
+    with contextlib.redirect_stdout(io.StringIO()):
+        untrimmed = Mesh.from_screened_poisson(pts, knn=200, trim_distance=None)
+        trimmed = Mesh.from_screened_poisson(pts, knn=200)
+    return pts, untrimmed, trimmed
+
+
+class TestSmoothNormals:
+
+    @pytest.fixture
+    def noisy_plane_opc(self):
+        rng = np.random.default_rng(0)
+        pts = np.column_stack([rng.uniform(0, 20, 4000), rng.uniform(0, 20, 4000), np.zeros(4000)])
+        nrm = np.array([0.0, 0.0, 1.0]) + rng.normal(scale=0.3, size=(4000, 3))
+        nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
+        opc = OrientedPointCloud()
+        opc.vertices = pts
+        opc.normals = nrm
+        return opc
+
+    def test_normals_move_towards_plane_normal(self, noisy_plane_opc):
+        before = np.abs(noisy_plane_opc.normals[:, 2]).mean()
+        noisy_plane_opc.smooth_normals(k=50)
+        after = np.abs(noisy_plane_opc.normals[:, 2]).mean()
+        assert after > before
+        assert after > 0.99
+
+    def test_unit_length(self, noisy_plane_opc):
+        noisy_plane_opc.smooth_normals(k=50, iterations=2)
+        np.testing.assert_allclose(np.linalg.norm(noisy_plane_opc.normals, axis=1), 1.0, atol=1e-10)
+
+    def test_each_normal_keeps_its_side(self, noisy_plane_opc):
+        noisy_plane_opc.normals[::2] *= -1  # mixed orientation
+        before = noisy_plane_opc.normals.copy()
+        noisy_plane_opc.smooth_normals(k=50)
+        assert np.all(np.sum(noisy_plane_opc.normals * before, axis=1) > 0)
+
+    def test_not_inplace_leaves_original(self, noisy_plane_opc):
+        original = noisy_plane_opc.normals.copy()
+        smoothed = noisy_plane_opc.smooth_normals(k=50, inplace=False)
+        np.testing.assert_array_equal(noisy_plane_opc.normals, original)
+        assert isinstance(smoothed, OrientedPointCloud)
+        assert not np.allclose(smoothed.normals, original)
+
+    def test_chunking_gives_same_result(self, noisy_plane_opc):
+        a = noisy_plane_opc.smooth_normals(k=50, inplace=False)
+        b = noisy_plane_opc.smooth_normals(k=50, chunk_size=333, inplace=False)
+        np.testing.assert_allclose(a.normals, b.normals)
+
+    def test_requires_normals(self):
+        opc = OrientedPointCloud()
+        opc.vertices = np.zeros((10, 3))
+        with pytest.raises(ValueError, match="compute_normals"):
+            opc.smooth_normals()
+
+
+class TestTrimByDistance:
+
+    def test_trimmed_mesh_stays_close_to_reference(self):
+        mesh = _plane_mesh()
+        ref = mesh.vertices[mesh.vertices[:, 0] < 10]  # left third of the plane
+        trimmed = mesh.trim_by_distance(ref, max_distance=2.0)
+        from scipy.spatial import cKDTree
+        d, _ = cKDTree(ref).query(trimmed.vertices)
+        assert d.max() <= 2.0
+        assert 0 < len(trimmed.vertices) < len(mesh.vertices)
+        assert trimmed.faces.max() < len(trimmed.vertices)
+
+    def test_not_inplace_leaves_original(self):
+        mesh = _plane_mesh()
+        n = len(mesh.vertices)
+        mesh.trim_by_distance(mesh.vertices[:10], max_distance=1.0)
+        assert len(mesh.vertices) == n
+
+    def test_inplace(self):
+        mesh = _plane_mesh()
+        assert mesh.trim_by_distance(mesh.vertices[:100], max_distance=1.0, inplace=True) is None
+        assert len(mesh.vertices) < 900
+
+    def test_accepts_oriented_point_cloud(self):
+        mesh = _plane_mesh()
+        opc = OrientedPointCloud()
+        opc.vertices = mesh.vertices[mesh.vertices[:, 0] < 10]
+        a = mesh.trim_by_distance(opc, max_distance=2.0)
+        b = mesh.trim_by_distance(opc.vertices, max_distance=2.0)
+        np.testing.assert_array_equal(a.vertices, b.vertices)
+
+
+class TestFromScreenedPoisson:
+
+    def test_closed_shell_gives_midplane(self, closed_shell_points):
+        pts, center = closed_shell_points
+        with contextlib.redirect_stdout(io.StringIO()):
+            mesh = Mesh.from_screened_poisson(pts, knn=200)
+        r = np.linalg.norm(mesh.vertices - center, axis=1)
+        assert abs(np.median(r) - 20.0) < 0.5
+
+    def test_open_shell_auto_trim_removes_closing_surface(self, open_shell_poisson):
+        from scipy.spatial import cKDTree
+        pts, untrimmed, trimmed = open_shell_poisson
+        tree = cKDTree(pts)
+        assert tree.query(untrimmed.vertices)[0].max() > 4.0  # Poisson closed the opening
+        assert tree.query(trimmed.vertices)[0].max() <= 2.0 + 1e-9
+
+    def test_given_normals_are_used_and_input_not_modified(self, closed_shell_points):
+        pts, center = closed_shell_points
+        nrm = (pts - center) / np.linalg.norm(pts - center, axis=1, keepdims=True)
+        opc = OrientedPointCloud()
+        opc.vertices = pts.copy()
+        opc.normals = nrm.copy()
+        mesh = Mesh.from_screened_poisson(opc)
+        np.testing.assert_array_equal(opc.normals, nrm)
+        r = np.linalg.norm(mesh.vertices - center, axis=1)
+        assert abs(np.median(r) - 20.0) < 0.5
+
+    def test_invalid_trim_distance_string(self, closed_shell_points):
+        pts, center = closed_shell_points
+        nrm = (pts - center) / np.linalg.norm(pts - center, axis=1, keepdims=True)
+        with pytest.raises(ValueError, match="trim_distance"):
+            Mesh.from_screened_poisson(pts, nrm, trim_distance="far")
+
+
+class TestRemeshIsotropic:
+
+    def test_edge_length_angles_and_geometry(self, open_shell_poisson):
+        pytest.importorskip("gpytoolbox")
+        _, _, trimmed = open_shell_poisson
+        target = 0.5
+        remeshed = trimmed.remesh_isotropic(target)
+        edges = _edge_lengths(remeshed.vertices, remeshed.faces)
+        assert abs(np.median(edges) - target) <= 0.15 * target
+        assert np.median(_min_triangle_angles(remeshed.vertices, remeshed.faces)) > 45.0
+        # surface stays within half an edge of the input surface
+        d = np.abs(trimmed.distance_to_points(remeshed.vertices)["distances"])
+        assert np.max(d) <= target / 2
+        assert remeshed.normals.shape == remeshed.vertices.shape
+
+    def test_not_inplace_leaves_original(self, open_shell_poisson):
+        pytest.importorskip("gpytoolbox")
+        _, _, trimmed = open_shell_poisson
+        n = len(trimmed.vertices)
+        trimmed.remesh_isotropic(0.5, iterations=2)
+        assert len(trimmed.vertices) == n
+
+    def test_missing_gpytoolbox_raises_with_install_hint(self, monkeypatch):
+        import sys
+        monkeypatch.setitem(sys.modules, "gpytoolbox", None)
+        with pytest.raises(ImportError, match=r'pip install --no-deps "gpytoolbox=='):
+            _plane_mesh(5).remesh_isotropic(0.5)
+
+
+class TestFromMrcScreenedPoisson:
+
+    def test_without_remeshing_needs_no_gpytoolbox(self, open_shell_seg, monkeypatch):
+        import sys
+        monkeypatch.setitem(sys.modules, "gpytoolbox", None)
+        seg, _ = open_shell_seg
+        with contextlib.redirect_stdout(io.StringIO()):
+            mesh = Mesh.from_mrc_screened_poisson(seg, label=1, remesh_edge_length=None, knn=200)
+        assert len(mesh.vertices) > 0
+        assert mesh.seg_shape == seg.shape
+        assert mesh.seg_transposed is False  # ndarray input is used as-is, as in from_mrc
+        np.testing.assert_array_equal(mesh.pixel_size, [1.0, 1.0, 1.0])
+
+    def test_default_remeshing_without_gpytoolbox_raises(self, open_shell_seg, monkeypatch):
+        import sys
+        monkeypatch.setitem(sys.modules, "gpytoolbox", None)
+        seg, _ = open_shell_seg
+        with contextlib.redirect_stdout(io.StringIO()):
+            with pytest.raises(ImportError, match="--no-deps"):
+                Mesh.from_mrc_screened_poisson(seg, label=1, knn=200)
+
+    def test_pixel_size_scales_coordinates(self, open_shell_seg):
+        seg, center = open_shell_seg
+        with contextlib.redirect_stdout(io.StringIO()):
+            mesh = Mesh.from_mrc_screened_poisson(seg, label=1, pixel_size=0.5,
+                                                  remesh_edge_length=None, knn=200)
+        r = np.linalg.norm(mesh.vertices - center * 0.5, axis=1)
+        assert abs(np.median(r) - 10.0) < 0.25
+
+    def test_default_remeshes_to_half_voxel(self, open_shell_seg):
+        pytest.importorskip("gpytoolbox")
+        seg, _ = open_shell_seg
+        with contextlib.redirect_stdout(io.StringIO()):
+            mesh = Mesh.from_mrc_screened_poisson(seg, label=1, knn=200)
+        assert abs(np.median(_edge_lengths(mesh.vertices, mesh.faces)) - 0.5) <= 0.075
+
+    def test_missing_label_raises(self, open_shell_seg):
+        seg, _ = open_shell_seg
+        with pytest.raises(ValueError, match="label 7"):
+            Mesh.from_mrc_screened_poisson(seg, label=7)
+
+
+def test_opc_downsample_pixel_runs():
+    """Regression: downsample_pixel used a non-existent Open3D method (pixel_down_sample)."""
+    rng = np.random.default_rng(0)
+    opc = OrientedPointCloud()
+    opc.vertices = rng.uniform(0, 10, size=(5000, 3))
+    with contextlib.redirect_stdout(io.StringIO()):
+        small = opc.downsample_pixel(2.0, recompute_normals=False)
+    # one point per occupied 2x2x2 cell; the grid starts at the min bound, so at most 6 cells per axis
+    assert 0 < len(small.vertices) <= 6 ** 3
+    assert len(small.vertices) < len(opc.vertices) / 10
+
+
+class TestCopyWithCachedRaycastingScene:
+    """A cached RaycastingScene (built by distance queries) cannot be copied or pickled; copies of
+    the mesh must leave it out and rebuild their own."""
+
+    @pytest.fixture
+    def queried_sphere(self, unit_sphere_mesh):
+        mesh = copy.deepcopy(unit_sphere_mesh)
+        mesh.distance_to_points(np.zeros((1, 3)))
+        assert hasattr(mesh, "_raycasting_scene")
+        return mesh
+
+    def test_deepcopy(self, queried_sphere):
+        new = copy.deepcopy(queried_sphere)
+        assert not hasattr(new, "_raycasting_scene")
+        assert hasattr(queried_sphere, "_raycasting_scene")  # the original keeps its cache
+        np.testing.assert_array_equal(new.vertices, queried_sphere.vertices)
+        # the copy rebuilds its own scene and gives the same distances
+        pts = np.array([[0.0, 0.0, 2.0], [0.5, 0.0, 0.0]])
+        np.testing.assert_allclose(new.distance_to_points(pts)["distances"],
+                                   queried_sphere.distance_to_points(pts)["distances"])
+
+    def test_pickle_roundtrip(self, queried_sphere):
+        new = pickle.loads(pickle.dumps(queried_sphere))
+        np.testing.assert_array_equal(new.faces, queried_sphere.faces)
+
+    def test_refine_normals_not_inplace(self, queried_sphere):
+        with contextlib.redirect_stdout(io.StringIO()):
+            new = queried_sphere.refine_normals(radius_hit=0.5, inplace=False)
+        assert new is not queried_sphere
+
+    def test_crop(self, queried_sphere):
+        cropped = queried_sphere.crop({"min_bound": [-2, -2, 0], "max_bound": [2, 2, 2]})
+        assert 0 < len(cropped.vertices) < len(queried_sphere.vertices)
+
+    def test_trim_by_distance(self, queried_sphere):
+        trimmed = queried_sphere.trim_by_distance(queried_sphere.vertices[:20], max_distance=0.3)
+        assert len(trimmed.vertices) < len(queried_sphere.vertices)
