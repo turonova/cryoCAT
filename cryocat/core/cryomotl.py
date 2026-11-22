@@ -10,11 +10,7 @@ import warnings
 import copy
 import ast
 import inspect
-import pydoc
-import textwrap
-import types
 import typing
-from dataclasses import dataclass
 from typing import Any, Callable
 
 from cryocat.utils.exceptions import UserInputError
@@ -46,7 +42,16 @@ from cryocat._types import (
     RelionVersion,
 )
 from cryocat.utils import classutils
-from cryocat.utils.classutils import cli_exposed, gui_exposed
+from cryocat.utils.classutils import (
+    DerivedParameter,
+    call_targets,
+    cli_exposed,
+    derived_parameters,
+    explicit_keywords,
+    gui_exposed,
+    positional_parameters,
+    source_tree,
+)
 from typing import Literal
 
 from math import ceil
@@ -54,7 +59,6 @@ from pathlib import Path
 
 from scipy.spatial import KDTree
 from scipy.spatial.transform import Rotation as rot
-from numpydoc.docscrape import NumpyDocString
 
 type MotlSource = Motl | pd.DataFrame | PathOrStr
 """Anything that can be used to construct or load a :class:`Motl`.
@@ -6768,33 +6772,17 @@ def motl_converter_kwargs(
 #
 # Reading is :meth:`Motl.load` itself.  Writing builds the class that
 # :meth:`Motl.write_out` writes the type with and calls that class's
-# ``write_out``.  Which class each type uses, and which arguments ``Motl.load``,
-# ``Motl.write_out`` or a converter pass themselves, are read from their source
-# with :mod:`ast`; the options are read from the signatures and numpydoc
-# docstrings of the constructors and writers.
+# ``write_out``.  Which class each type uses, and which arguments ``Motl.load``
+# and ``Motl.write_out`` pass themselves, are read from their source with
+# :mod:`ast`; the options are derived from the signatures and numpydoc
+# docstrings of the constructors and writers (see
+# :func:`cryocat.utils.classutils.derived_parameters`).
 
 _MOTL_IO_EXTRA_TABLES: dict[type, str] = {RelionMotl: "relion_df", StopgapMotl: "sg_df", DynamoMotl: "dynamo_df"}
 """The attribute in which a motl class keeps its own format's table.
 
 The one hand-written list of this section: nothing in the classes names it.
 """
-
-
-@dataclass(frozen=True)
-class MotlIOParameter:
-    """One option of a motl constructor or writer.
-
-    ``source`` says where ``annotation`` came from: ``"annotation"``,
-    ``"docstring"`` (the numpydoc type), ``"default"`` (the type of a non-None
-    default) or ``"text"`` (nothing gave a type).
-    """
-
-    name: str
-    annotation: Any
-    default: Any
-    description: str
-    source: str
-    owner: Callable
 
 
 def relion_version_to_type(version: float) -> str:
@@ -6811,21 +6799,11 @@ def motl_io_types() -> tuple[str, ...]:
     return typing.get_args(MotlType.__value__)
 
 
-def _motl_io_tree(fn: Callable) -> ast.AST:
-    return ast.parse(textwrap.dedent(inspect.getsource(fn)))
-
-
-def _motl_io_class(name: str) -> type | None:
-    """The motl class of this module called *name*, or None."""
-    obj = globals().get(name)
-    return obj if inspect.isclass(obj) and obj.__module__ == __name__ else None
-
-
 def _motl_io_branches(fn: Callable) -> dict[str, list[ast.stmt]]:
     """The body of each ``if``/``elif`` branch of *fn* that compares a name with motl type names, by type."""
     types_ = set(motl_io_types())
     branches: dict[str, list[ast.stmt]] = {}
-    for node in ast.walk(_motl_io_tree(fn)):
+    for node in ast.walk(source_tree(fn)):
         if not (isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1):
             continue
         test, comparator = node.test, node.test.comparators[0]
@@ -6846,25 +6824,25 @@ def _motl_io_branches(fn: Callable) -> dict[str, list[ast.stmt]]:
     return branches
 
 
-def _motl_io_class_call(body: list[ast.stmt]) -> tuple[type, ast.Call]:
-    """The first call to a motl class in *body*, and the class."""
+def _motl_io_class_call(fn: Callable, body: list[ast.stmt]) -> tuple[type, ast.Call]:
+    """The first call in *body* (a branch of *fn*) to a motl class of this module, and the class."""
     for stmt in body:
         for node in ast.walk(stmt):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                cls = _motl_io_class(node.func.id)
-                if cls is not None:
-                    return cls, node
-    raise RuntimeError("branch without a motl class call")
+                targets = call_targets(fn, node, {})
+                if not isinstance(targets, str) and inspect.isclass(targets[0]) and targets[0].__module__ == __name__:
+                    return targets[0], node
+    raise RuntimeError(f"{fn.__qualname__}: branch without a motl class call")
 
 
 @lru_cache(maxsize=None)
 def _motl_io_load_dispatch() -> dict[str, tuple[type, frozenset[str], bool]]:
     """Per type: the class :meth:`Motl.load` reads with, the keywords it passes itself, and whether it passes ``**kwargs`` on."""
+    load = Motl.load.__func__
     dispatch = {}
-    for motl_type, body in _motl_io_branches(Motl.load.__func__).items():
-        cls, call = _motl_io_class_call(body)
-        passed = frozenset(k.arg for k in call.keywords if k.arg is not None)
-        dispatch[motl_type] = (cls, passed, any(k.arg is None for k in call.keywords))
+    for motl_type, body in _motl_io_branches(load).items():
+        cls, call = _motl_io_class_call(load, body)
+        dispatch[motl_type] = (cls, frozenset(explicit_keywords(call)), any(k.arg is None for k in call.keywords))
     return dispatch
 
 
@@ -6873,67 +6851,14 @@ def _motl_io_write_dispatch() -> dict[str, tuple[type, dict[str, Any]]]:
     """Per type: the class :meth:`Motl.write_out` writes with, and the constant keywords it builds that class with."""
     dispatch = {}
     for motl_type, body in _motl_io_branches(Motl.write_out).items():
-        cls, call = _motl_io_class_call(body)
+        cls, call = _motl_io_class_call(Motl.write_out, body)
         fixed = {k.arg: k.value.value for k in call.keywords if k.arg is not None and isinstance(k.value, ast.Constant)}
         dispatch[motl_type] = (cls, fixed)
     return dispatch
 
 
-def _motl_io_documented_type(doc_type: str) -> Any:
-    """The type a numpydoc entry names (``float, optional`` → ``float``), a union for ``a or b``, or None."""
-    spec = re.sub(r",\s*(optional|default\s*[=:].*)$", "", doc_type.strip())
-    spec = re.sub(r",\s*(optional|default\s*[=:].*)$", "", spec)
-    members = []
-    for token in re.split(r"\s+or\s+|\s*\|\s*", spec):
-        try:
-            member = eval(token, globals())  # noqa: S307 - library docstring, not user input
-        except Exception:
-            member = pydoc.locate(token)
-        if inspect.isclass(member) or isinstance(member, (typing.TypeAliasType, types.GenericAlias)):
-            members.append(member)
-    if not members:
-        return None
-    return members[0] if len(members) == 1 else typing.Union[tuple(members)]
-
-
-def _motl_io_parameters(fn: Callable, skip: set[str]) -> dict[str, MotlIOParameter]:
-    """The parameters of *fn* (a class: its constructor) except *skip*, with their types and descriptions."""
-    doc = inspect.getdoc(fn) or ""
-    documented = {p.name.split(":")[0].strip(): p.type for p in NumpyDocString(doc)["Parameters"]} if doc else {}
-    descriptions = classutils.process_method_docstring(fn)
-    parameters = {}
-    for name, param in inspect.signature(fn).parameters.items():
-        if name in skip or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
-            continue
-        annotation, source = param.annotation, "annotation"
-        if annotation is inspect.Parameter.empty:
-            annotation, source = _motl_io_documented_type(documented.get(name, "")), "docstring"
-            if annotation is None and param.default not in (None, inspect.Parameter.empty):
-                annotation, source = type(param.default), "default"
-            if annotation is None:
-                annotation, source = str, "text"
-        while isinstance(annotation, str):
-            annotation = eval(annotation, globals())  # noqa: S307 - library source, not user input
-        parameters[name] = MotlIOParameter(name, annotation, param.default, descriptions.get(name, ""), source, fn)
-    return parameters
-
-
-def _motl_io_first_parameters(fn: Callable, count: int) -> set[str]:
-    """The names of the first *count* parameters of *fn* after ``self``: the ones a call fills positionally."""
-    names = [n for n in inspect.signature(fn).parameters if n != "self"]
-    return set(names[:count])
-
-
-def _motl_io_merged(declarations: list[MotlIOParameter]) -> MotlIOParameter:
-    """One option declared by several constructors or writers: the union of their types, the first description."""
-    annotations = list(dict.fromkeys(d.annotation for d in declarations))
-    annotation = annotations[0] if len(annotations) == 1 else typing.Union[tuple(annotations)]
-    first = declarations[0]
-    return MotlIOParameter(first.name, annotation, first.default, first.description, first.source, first.owner)
-
-
 @lru_cache(maxsize=None)
-def motl_read_parameters(motl_type: str) -> dict[str, MotlIOParameter]:
+def motl_read_parameters(motl_type: str) -> dict[str, DerivedParameter]:
     """The options :meth:`Motl.load` takes for *motl_type*, by name.
 
     These are the parameters of the class it reads that type with, except the
@@ -6944,11 +6869,11 @@ def motl_read_parameters(motl_type: str) -> dict[str, MotlIOParameter]:
     cls, passed, passes_on = _motl_io_load_dispatch()[motl_type]
     if not passes_on:
         return {}
-    return _motl_io_parameters(cls, _motl_io_first_parameters(cls, 1) | passed)
+    return derived_parameters(cls, positional_parameters(cls, 1) | passed)
 
 
 @lru_cache(maxsize=None)
-def motl_write_parameters(motl_type: str) -> tuple[dict[str, MotlIOParameter], dict[str, MotlIOParameter]]:
+def motl_write_parameters(motl_type: str) -> tuple[dict[str, DerivedParameter], dict[str, DerivedParameter]]:
     """The constructor options of :func:`build_motl_writer` and the ``write_out`` options for *motl_type*.
 
     Both exclude the data, the output path and the keywords
@@ -6956,8 +6881,8 @@ def motl_write_parameters(motl_type: str) -> tuple[dict[str, MotlIOParameter], d
     shared: do not change them.
     """
     cls, fixed = _motl_io_write_dispatch()[motl_type]
-    constructor = _motl_io_parameters(cls, _motl_io_first_parameters(cls, 1) | set(fixed))
-    writer = _motl_io_parameters(cls.write_out, _motl_io_first_parameters(cls.write_out, 1) | set(fixed) | {"self"})
+    constructor = derived_parameters(cls, positional_parameters(cls, 1) | set(fixed))
+    writer = derived_parameters(cls.write_out, positional_parameters(cls.write_out, 1) | set(fixed))
     return constructor, writer
 
 
@@ -6979,7 +6904,7 @@ def build_motl_writer(
     if motl_type not in motl_io_types():
         raise ValueError(f"Unknown motl type {motl_type!r}; supported: {', '.join(motl_io_types())}")
     cls, fixed = _motl_io_write_dispatch()[motl_type]
-    (data_argument,) = _motl_io_first_parameters(cls, 1)
+    (data_argument,) = positional_parameters(cls, 1)
     motl = cls(**{data_argument: motl_df}, **fixed, **constructor_kwargs)
     if extra_df is not None:
         for owner, attribute in _MOTL_IO_EXTRA_TABLES.items():
@@ -6995,58 +6920,3 @@ def motl_extra_table(motl: Motl) -> pd.DataFrame | None:
         if isinstance(motl, owner):
             return getattr(motl, attribute)
     return None
-
-
-@lru_cache(maxsize=None)
-def motl_kwargs_parameters(fn: Callable) -> dict[str, tuple[str, dict[str, MotlIOParameter]]]:
-    """The parameters *fn* passes on as ``**name`` to motl constructors or writers, and their options.
-
-    For each such parameter: ``"constructor"`` or ``"writer"``, and the
-    options of every constructor or writer it reaches (a variable's class is
-    read from its assignments), merged by name.  A name *fn* passes to one of
-    those calls itself, by keyword or position, is not an option.  The
-    returned dict is shared: do not change it.
-    """
-    tree = _motl_io_tree(fn)
-    own = set(inspect.signature(fn).parameters)
-    assigned: dict[str, list[type]] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
-            cls = _motl_io_class(node.value.func.id)
-            for target in node.targets:
-                if cls is not None and isinstance(target, ast.Name):
-                    assigned.setdefault(target.id, []).append(cls)
-
-    reached: dict[str, tuple[str, list[Callable], set[str]]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        for keyword in node.keywords:
-            if keyword.arg is not None or not isinstance(keyword.value, ast.Name) or keyword.value.id not in own:
-                continue
-            if isinstance(node.func, ast.Name) and _motl_io_class(node.func.id) is not None:
-                role, targets = "constructor", [_motl_io_class(node.func.id)]
-            elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-                role = "writer"
-                classes = assigned.get(node.func.value.id, [])
-                targets = [getattr(c, node.func.attr) for c in classes if inspect.isfunction(getattr(c, node.func.attr, None))]
-            else:
-                continue
-            if not targets:
-                continue
-            entry = reached.setdefault(keyword.value.id, (role, [], set()))
-            if entry[0] != role:
-                raise RuntimeError(f"{fn.__qualname__} passes {keyword.value.id} to constructors and writers")
-            for target in targets:
-                entry[1].append(target)
-                entry[2].update(_motl_io_first_parameters(target, len(node.args)))
-            entry[2].update(k.arg for k in node.keywords if k.arg is not None)
-
-    result = {}
-    for name, (role, targets, passed) in reached.items():
-        declarations: dict[str, list[MotlIOParameter]] = {}
-        for target in dict.fromkeys(targets):
-            for option in _motl_io_parameters(target, passed | {"self"}).values():
-                declarations.setdefault(option.name, []).append(option)
-        result[name] = (role, {n: _motl_io_merged(d) for n, d in declarations.items()})
-    return result

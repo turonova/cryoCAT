@@ -12,14 +12,19 @@ This module is the single type authority shared by the Dash form generator
 """
 
 import argparse
+import ast
 import importlib
 import inspect
+import pydoc
+import re
 import sys
+import textwrap
 import typing
 import types as _stdtypes
 from collections.abc import Callable
 from dataclasses import dataclass, field as _field
 from enum import StrEnum
+from functools import lru_cache
 from typing import Any, Literal
 
 from numpydoc.docscrape import NumpyDocString
@@ -651,6 +656,346 @@ def resolve_param_type(annotation: Any) -> tuple[str, dict]:
         return (annotation.__name__, {})
 
     return ("str", {})
+
+
+# ===========================================================================
+# Derived parameters — options read from signatures, docstrings and source
+# ===========================================================================
+#
+# Used by the shared motl IO of cryocat.core.cryomotl and by cryocat.cli to
+# offer the parameters of constructors and writers, and of the functions a
+# callable passes ``**kwargs`` on to, without listing them by hand.
+
+
+@dataclass(frozen=True)
+class DerivedParameter:
+    """One parameter of a function or class, with a type derived for it.
+
+    ``source`` says where ``annotation`` came from: ``"annotation"``,
+    ``"docstring"`` (the numpydoc type), ``"default"`` (the type of a non-None
+    default) or ``"text"`` (nothing gave a type).
+    """
+
+    name: str
+    annotation: Any
+    default: Any
+    description: str
+    source: str
+    owner: Callable
+
+
+@dataclass(frozen=True)
+class ForwardedKeywords:
+    """A parameter a function passes on as ``**name``, where it goes, and the options this gives.
+
+    ``targets`` are the functions or classes the function's own calls pass it
+    to; ``chained`` the functions reached after them, through a single target
+    that passes its own ``**kwargs`` on.  ``unresolved`` says why the chain
+    stops before a function with an explicit signature, or is None.
+    """
+
+    name: str
+    targets: tuple[Callable, ...]
+    chained: tuple[Callable, ...]
+    options: dict[str, DerivedParameter]
+    unresolved: str | None
+
+
+def source_tree(fn: Callable) -> ast.Module:
+    """The :mod:`ast` tree of the source of *fn* (a function, method or class)."""
+    return ast.parse(textwrap.dedent(inspect.getsource(fn)))
+
+
+def _namespace(obj: Any) -> dict:
+    """The globals of the module that defines *obj*."""
+    return vars(sys.modules[obj.__module__])
+
+
+def documented_type(doc_type: str, namespace: dict) -> Any:
+    """The type a numpydoc entry names (``float, optional`` → ``float``), a union for ``a or b``, or None.
+
+    Names are evaluated in *namespace*, dotted names (``pandas.DataFrame``)
+    located by import path; a name that is neither (``array-like``) is left out.
+    """
+    spec = re.sub(r",\s*(optional|default\s*[=:].*)$", "", doc_type.strip())
+    spec = re.sub(r",\s*(optional|default\s*[=:].*)$", "", spec)
+    members = []
+    for token in re.split(r"\s+or\s+|\s*\|\s*", spec):
+        try:
+            member = eval(token, namespace)  # noqa: S307 - library docstring, not user input
+        except Exception:
+            member = pydoc.locate(token)
+        if inspect.isclass(member) or isinstance(member, (typing.TypeAliasType, _stdtypes.GenericAlias)):
+            members.append(member)
+    if not members:
+        return None
+    return members[0] if len(members) == 1 else typing.Union[tuple(members)]
+
+
+def positional_parameters(fn: Callable, count: int) -> set[str]:
+    """The names of the first *count* parameters of *fn* (``self`` / ``cls`` aside): the ones a call fills by position."""
+    names = [n for n in inspect.signature(fn).parameters if n not in ("self", "cls")]
+    return set(names[:count])
+
+
+def derived_parameters(fn: Callable, skip: set[str]) -> dict[str, DerivedParameter]:
+    """The named parameters of *fn* (a class: its constructor) except *skip*, with derived types.
+
+    The type is the annotation; else the numpydoc type of the parameter's
+    docstring entry; else the type of a non-None default; else ``str``.
+    """
+    doc = inspect.getdoc(fn) or ""
+    documented = {p.name.split(":")[0].strip(): p.type for p in NumpyDocString(doc)["Parameters"]} if doc else {}
+    descriptions = process_method_docstring(fn)
+    namespace = _namespace(fn)
+    parameters = {}
+    for name, param in inspect.signature(fn).parameters.items():
+        if name in skip or name in ("self", "cls") or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        annotation, source = param.annotation, "annotation"
+        if annotation is inspect.Parameter.empty:
+            annotation, source = documented_type(documented.get(name, ""), namespace), "docstring"
+            if annotation is None and param.default not in (None, inspect.Parameter.empty):
+                annotation, source = type(param.default), "default"
+            if annotation is None:
+                annotation, source = str, "text"
+        while isinstance(annotation, str):
+            annotation = eval(annotation, namespace)  # noqa: S307 - library source, not user input
+        parameters[name] = DerivedParameter(name, annotation, param.default, descriptions.get(name, ""), source, fn)
+    return parameters
+
+
+def merged_parameter(declarations: list[DerivedParameter]) -> DerivedParameter:
+    """One parameter declared by several functions: the union of their types, the first description."""
+    annotations = list(dict.fromkeys(d.annotation for d in declarations))
+    annotation = annotations[0] if len(annotations) == 1 else typing.Union[tuple(annotations)]
+    first = declarations[0]
+    return DerivedParameter(first.name, annotation, first.default, first.description, first.source, first.owner)
+
+
+def _unpacks(call: ast.Call, name: str) -> bool:
+    """True when *call* passes *name* on as ``**name`` or inside an unpacked dict literal ``**{..., **name}``."""
+    for keyword in call.keywords:
+        if keyword.arg is not None:
+            continue
+        if isinstance(keyword.value, ast.Name) and keyword.value.id == name:
+            return True
+        if isinstance(keyword.value, ast.Dict) and any(
+            key is None and isinstance(value, ast.Name) and value.id == name
+            for key, value in zip(keyword.value.keys, keyword.value.values)
+        ):
+            return True
+    return False
+
+
+def explicit_keywords(call: ast.Call) -> set[str]:
+    """The names *call* passes itself: its keywords and the constant keys of a dict literal it unpacks."""
+    names = {k.arg for k in call.keywords if k.arg is not None}
+    for keyword in call.keywords:
+        if keyword.arg is None and isinstance(keyword.value, ast.Dict):
+            names |= {k.value for k in keyword.value.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    return names
+
+
+def assigned_classes(fn: Callable, tree: ast.AST) -> dict[str, list[type]]:
+    """The classes each variable of *fn* is assigned an instance of (``var = Cls(...)``)."""
+    namespace = _namespace(fn)
+    assigned: dict[str, list[type]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+            cls = namespace.get(node.value.func.id)
+            if inspect.isclass(cls):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        assigned.setdefault(target.id, []).append(cls)
+    return assigned
+
+
+def call_targets(fn: Callable, call: ast.Call, assigned: dict[str, list[type]]) -> tuple[Callable, ...] | str:
+    """The cryoCAT functions or classes *call* in *fn* reaches, or why they cannot be determined.
+
+    Resolved: a name of *fn*'s module (``write(...)``, ``Cls(...)``), a module
+    or class attribute (``cryomap.write(...)``, ``Motl.load(...)``), a method
+    of ``self`` / ``cls``, of a variable assigned an instance of a class (see
+    :func:`assigned_classes`), or of an instance built in place
+    (``Cls(...).write_out(...)``).
+    """
+    namespace = _namespace(fn)
+    func = call.func
+    if isinstance(func, ast.Name):
+        candidates = [namespace.get(func.id)]
+    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        base = func.value.id
+        owner = namespace.get(fn.__qualname__.split(".")[0])
+        if base in ("self", "cls") and inspect.isclass(owner):
+            candidates = [getattr(owner, func.attr, None)]
+        elif base in assigned:
+            candidates = [getattr(c, func.attr) for c in assigned[base] if callable(getattr(c, func.attr, None))]
+        elif inspect.ismodule(namespace.get(base)) or inspect.isclass(namespace.get(base)):
+            candidates = [getattr(namespace[base], func.attr, None)]
+        else:
+            return f"{ast.unparse(func)} is called through the variable {base!r}"
+    elif (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Call) and isinstance(func.value.func, ast.Name)
+          and inspect.isclass(namespace.get(func.value.func.id))):
+        candidates = [getattr(namespace[func.value.func.id], func.attr, None)]
+    else:
+        return f"{ast.unparse(func)} cannot be resolved"
+    if not candidates or any(c is None or not callable(c) for c in candidates):
+        return f"{ast.unparse(func)} cannot be resolved"
+    for candidate in candidates:
+        module = getattr(candidate, "__module__", None) or ""
+        if module != "cryocat" and not module.startswith("cryocat."):
+            return f"{ast.unparse(func)} is outside cryoCAT ({module or 'built-in'})"
+    return tuple(candidates)
+
+
+def _is_dict(node: ast.AST) -> bool:
+    """True for a dict literal or a ``dict(...)`` call."""
+    return isinstance(node, ast.Dict) or (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "dict"
+    )
+
+
+def _dict_keys(node: ast.AST) -> set[str]:
+    """The constant keys a dict literal or ``dict(...)`` call writes."""
+    if isinstance(node, ast.Dict):
+        return {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    return {k.arg for k in node.keywords if k.arg is not None}
+
+
+def _merges(node: ast.AST, name: str) -> bool:
+    """True when a dict literal or ``dict(...)`` call merges *name* in (``{**name}``, ``dict(name)``, ``dict(**name)``)."""
+    if isinstance(node, ast.Dict):
+        return any(
+            key is None and isinstance(value, ast.Name) and value.id == name for key, value in zip(node.keys, node.values)
+        )
+    return any(isinstance(a, ast.Name) and a.id == name for a in node.args) or any(
+        k.arg is None and isinstance(k.value, ast.Name) and k.value.id == name for k in node.keywords
+    )
+
+
+def _local_dicts(tree: ast.AST, name: str) -> dict[str, set[str]]:
+    """The local dicts *name* is merged into, with the constant keys written into each.
+
+    A local dict is a name bound to a dict literal, ``dict(...)`` or ``{}``;
+    *name* is merged in through the binding (``{**name}``, ``dict(name)``) or
+    ``local.update(name)``.  Its constant keys come from the binding, from
+    ``local.update(...)`` and from ``local["key"] = ...``.
+    """
+    bound: dict[str, set[str]] = {}
+    carries: set[str] = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and _is_dict(node.value)):
+            local = node.targets[0].id
+            bound.setdefault(local, set()).update(_dict_keys(node.value))
+            if _merges(node.value, name):
+                carries.add(local)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "update"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id in bound):
+            local = node.func.value.id
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id == name:
+                    carries.add(local)
+                elif _is_dict(arg):
+                    bound[local] |= _dict_keys(arg)
+                    if _merges(arg, name):
+                        carries.add(local)
+            bound[local] |= {k.arg for k in node.keywords if k.arg is not None}
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and target.value.id in bound
+                        and isinstance(target.slice, ast.Constant) and isinstance(target.slice.value, str)):
+                    bound[target.value.id].add(target.slice.value)
+    return {local: bound[local] for local in carries}
+
+
+def _reach(fn: Callable, tree: ast.AST, name: str) -> tuple[list[tuple[Callable, ast.Call]], str | None, set[str]]:
+    """Every (target, call) of the calls in *fn* that pass *name* on, or why one cannot be determined.
+
+    A call passes *name* on when it unpacks it, or unpacks a local dict it is
+    merged into (see :func:`_local_dicts`).  The third value holds the constant
+    keys of those local dicts: names *fn* passes itself.
+    """
+    assigned = assigned_classes(fn, tree)
+    carriers = _local_dicts(tree, name)
+    reached, keys = [], set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        through = [local for local in carriers if _unpacks(node, local)]
+        if not (_unpacks(node, name) or through):
+            continue
+        targets = call_targets(fn, node, assigned)
+        if isinstance(targets, str):
+            return [], targets, set()
+        reached += [(target, node) for target in targets]
+        for local in through:
+            keys |= carriers[local]
+    return reached, None, keys
+
+
+@lru_cache(maxsize=None)
+def forwarded_keywords(fn: Callable) -> dict[str, ForwardedKeywords]:
+    """The parameters *fn* passes on as ``**name``, by name, with where they go and the options this gives.
+
+    The options are the named parameters of every target, except those the
+    calls fill by position or name themselves, or write as constant keys of a
+    local dict the keywords are merged into first.  A single target that
+    passes its own ``**kwargs`` on is followed the same way, as long as that
+    again reaches a single cryoCAT function; the names passed explicitly along
+    the chain stay excluded.  The returned dict is shared: do not change it.
+    """
+    tree = source_tree(fn)
+    result = {}
+    for name in inspect.signature(fn).parameters:
+        reached, unresolved, explicit = _reach(fn, tree, name)
+        if not reached and unresolved is None:
+            continue
+        for target, call in reached:
+            explicit |= explicit_keywords(call)
+        declarations: dict[str, list[DerivedParameter]] = {}
+
+        def declare(target: Callable, calls: list[ast.Call]) -> None:
+            skip = set(explicit)
+            for call in calls:
+                skip |= positional_parameters(target, len(call.args))
+            for option in derived_parameters(target, skip).values():
+                declarations.setdefault(option.name, []).append(option)
+
+        targets = tuple(dict.fromkeys(target for target, _ in reached))
+        for target in targets:
+            declare(target, [call for t, call in reached if t is target])
+
+        chained: list[Callable] = []
+        current = targets[0] if len(targets) == 1 else None
+        while current is not None and unresolved is None:
+            var_keyword = [p.name for p in inspect.signature(current).parameters.values() if p.kind == p.VAR_KEYWORD]
+            if not var_keyword:
+                break
+            inner, unresolved, keys = _reach(current, source_tree(current), var_keyword[0])
+            if unresolved is not None:
+                break
+            explicit |= keys
+            following = tuple(dict.fromkeys(target for target, _ in inner))
+            if not following:
+                unresolved = f"{current.__qualname__} passes **{var_keyword[0]} on only through a variable"
+            elif len(following) > 1:
+                names = ", ".join(t.__qualname__ for t in following)
+                unresolved = f"{current.__qualname__} passes **{var_keyword[0]} on to more than one target ({names})"
+            else:
+                for _, call in inner:
+                    explicit |= explicit_keywords(call)
+                current = following[0]
+                chained.append(current)
+                declare(current, [call for _, call in inner])
+                continue
+            break
+
+        options = {n: merged_parameter(d) for n, d in declarations.items()}
+        result[name] = ForwardedKeywords(name, targets, tuple(chained), options, unresolved)
+    return result
 
 
 # ===========================================================================

@@ -40,7 +40,15 @@ from cryocat.core import cryomotl as cryomotl_module
 from cryocat.core import cryowedge as cryowedge_module
 from cryocat.core import mdoc as mdoc_module
 from cryocat.core import tiltstack as tiltstack_module
-from cryocat.utils.classutils import TYPE_HANDLERS, process_method_docstring, resolve_param_type
+from cryocat.utils.classutils import (
+    TYPE_HANDLERS,
+    DerivedParameter,
+    call_targets,
+    forwarded_keywords,
+    process_method_docstring,
+    resolve_param_type,
+    source_tree,
+)
 
 _LIST_TAGS = frozenset({"ListLike", "ArrayLike", "TripletLike"})
 """Handler tags whose values are given as several tokens (``nargs="+"``)."""
@@ -257,14 +265,14 @@ def _argument(fn: Callable, name: str, annotation: Any) -> dict:
     return spec
 
 
-def _motl_options(declarations: list[tuple[str, str, cryomotl_module.MotlIOParameter]]) -> dict[str, _MotlOption]:
-    """Options by name from ``(target, destination, parameter)`` declarations of the shared motl IO.
+def _motl_options(declarations: list[tuple[str, str, DerivedParameter]]) -> dict[str, _MotlOption]:
+    """Options by name from ``(target, destination, parameter)`` declarations of derived parameters.
 
     A declaration whose type has no command-line form (a ``dict``, a
     DataFrame) is not offered; an option declared several times takes the
     union of their types.
     """
-    grouped: dict[str, list[tuple[str, str, cryomotl_module.MotlIOParameter]]] = {}
+    grouped: dict[str, list[tuple[str, str, DerivedParameter]]] = {}
     for target, destination, parameter in declarations:
         try:
             _argument(parameter.owner, parameter.name, parameter.annotation)
@@ -306,47 +314,96 @@ def _write_options() -> dict[str, _MotlOption]:
     return _motl_options(declarations)
 
 
-@functools.cache
-def _passed_on(fn: Callable) -> dict[str, tuple[str, dict[str, _MotlOption]]]:
-    """The dict parameters a motl function passes on to motl constructors or writers, with option prefix and options.
+@dataclass(frozen=True)
+class _Forwarded:
+    """The options of a parameter a callable passes on as ``**name`` (see :func:`~cryocat.utils.classutils.forwarded_keywords`).
 
-    Constructor options are offered as ``--input_<name>``, writer options as
-    ``--output_<name>`` (see :func:`cryocat.core.cryomotl.motl_kwargs_parameters`).
+    ``flags`` maps each option to its command-line flag (without ``--``).  For
+    the callable's own ``**kwargs`` (``unpacked``) a given option becomes one
+    of its keyword arguments; for a dict parameter it goes into that dict, and
+    ``prefix`` is ``"input"`` (constructors) or ``"output"``.
     """
-    if fn.__module__ != cryomotl_module.__name__:
-        return {}
-    return {
-        name: ("input" if role == "constructor" else "output", _motl_options([(name, role, p) for p in table.values()]))
-        for name, (role, table) in cryomotl_module.motl_kwargs_parameters(fn).items()
-    }
+
+    parameter: str
+    unpacked: bool
+    prefix: str | None
+    options: dict[str, _MotlOption]
+    flags: dict[str, str]
+
+
+def _added_names(command: _Command) -> set[str]:
+    """The options the command line adds to *command* besides its parameters (without ``--``)."""
+    names = {"help", "h"}
+    if command.kind == "method":
+        names |= {"input_motl", "input_type"} | {f"input_{n}" for n in _read_options()}
+    if command.output == "motl":
+        names |= {"output_motl", "output_type"} | {f"output_{n}" for n in _write_options()}
+    elif command.output is not None:
+        names.add(f"output_{command.output}")
+    return names
 
 
 @functools.cache
-def _version_parameter(fn: Callable) -> str | None:
-    """The parameter of a motl converter that sets the RELION version, or None.
+def _forwarded(command: _Command) -> dict[str, _Forwarded]:
+    """The parameters *command* passes on as ``**name`` to cryoCAT functions, with their options and flags.
+
+    A dict parameter (a converter's ``load_kwargs`` / ``write_kwargs``) is
+    offered as ``--input_<name>`` when it goes to classes (constructors) and
+    as ``--output_<name>`` otherwise.  The callable's own ``**kwargs`` is
+    offered as ``--<name>``, or ``--<kwargs>_<name>`` where ``<name>`` clashes
+    with an option the command line adds.  A name that is also one of the
+    callable's own parameters is not offered: Python binds it to that
+    parameter, so it can never reach the ``**kwargs``.
+    """
+    parameters = inspect.signature(command.fn).parameters
+    added = _added_names(command)
+    forwarded = {}
+    for name, keywords in forwarded_keywords(command.fn).items():
+        options = _motl_options([(name, "forwarded", p) for p in keywords.options.values()])
+        unpacked = parameters[name].kind == inspect.Parameter.VAR_KEYWORD
+        if unpacked:
+            options = {n: o for n, o in options.items() if n not in parameters}
+        if not options:
+            continue
+        if unpacked:
+            prefix = None
+            flags = {n: f"{name}_{n}" if n in added else n for n in options}
+        else:
+            prefix = "input" if all(inspect.isclass(t) for t in keywords.targets) else "output"
+            flags = {n: f"{prefix}_{n}" for n in options}
+        forwarded[name] = _Forwarded(name, unpacked, prefix, options, flags)
+    return forwarded
+
+
+@functools.cache
+def _version_parameter(command: _Command) -> str | None:
+    """The parameter of a converter that sets the RELION version, or None.
 
     Read from the converter's source with :mod:`ast`, as the names it passes
-    itself are: the parameter it passes as ``version=`` to a motl class, or
-    compares in an ``if`` whose branch builds a motl class with a dict it
-    passes on.
+    itself are: the parameter it passes as ``version=`` to a class, or
+    compares in an ``if`` whose branch builds a class with a dict it passes on.
 
     Raises
     ------
     ValueError
         If more than one parameter qualifies.
     """
-    passed_on = _passed_on(fn)
-    if not passed_on:
+    dicts = {name for name, f in _forwarded(command).items() if not f.unpacked}
+    if not dicts:
         return None
+    fn = command.fn
     own = set(inspect.signature(fn).parameters)
-    tree = cryomotl_module._motl_io_tree(fn)
+    tree = source_tree(fn)
 
     def class_calls(nodes: list[ast.AST]) -> list[ast.Call]:
-        return [
-            call for node in nodes for call in ast.walk(node)
-            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
-            and cryomotl_module._motl_io_class(call.func.id) is not None
-        ]
+        calls = []
+        for node in nodes:
+            for call in ast.walk(node):
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name):
+                    targets = call_targets(fn, call, {})
+                    if not isinstance(targets, str) and inspect.isclass(targets[0]):
+                        calls.append(call)
+        return calls
 
     found = set()
     for call in class_calls([tree]):
@@ -358,7 +415,7 @@ def _version_parameter(fn: Callable) -> str | None:
                 and isinstance(node.test.left, ast.Name) and node.test.left.id in own):
             continue
         if any(
-            k.arg is None and isinstance(k.value, ast.Name) and k.value.id in passed_on
+            k.arg is None and isinstance(k.value, ast.Name) and k.value.id in dicts
             for call in class_calls(node.body) for k in call.keywords
         ):
             found.add(node.test.left.id)
@@ -368,12 +425,17 @@ def _version_parameter(fn: Callable) -> str | None:
 
 
 def _given_options(
-    parser: argparse.ArgumentParser, args: dict, prefix: str, options: dict[str, _MotlOption], target: str
+    parser: argparse.ArgumentParser,
+    args: dict,
+    prefix: str,
+    options: dict[str, _MotlOption],
+    target: str,
+    flags: dict[str, str] | None = None,
 ) -> dict[str, dict]:
-    """Pop the ``--<prefix>_<name>`` options given in *args*; their values by destination for *target*."""
+    """Pop the options given in *args* (flag ``<prefix>_<name>``, or ``flags[name]``); their values by destination for *target*."""
     by_destination: dict[str, dict] = {}
     for name, option in options.items():
-        flag = f"{prefix}_{name}"
+        flag = flags[name] if flags else f"{prefix}_{name}"
         if flag not in args:
             continue
         value = args.pop(flag)
@@ -391,17 +453,24 @@ def _add_subcommand(subparsers: argparse._SubParsersAction, command: _Command) -
     required = parser.add_argument_group("Required arguments")
     optional = parser.add_argument_group("Optional arguments")
     formats = parser.add_argument_group("Motl format arguments")
+    forwarding = parser.add_argument_group("Forwarded arguments")
     descriptions = process_method_docstring(command.fn)
 
     added: dict[str, tuple[argparse._ArgumentGroup, dict]] = {}
     motl_types = cryomotl_module.motl_io_types()
 
-    def add_options(prefix: str, options: dict[str, _MotlOption], typed: bool) -> None:
+    def add_options(
+        prefix: str,
+        options: dict[str, _MotlOption],
+        typed: bool,
+        flags: dict[str, str] | None = None,
+        group: argparse._ArgumentGroup = formats,
+    ) -> None:
         for option in options.values():
             only = ""
             if typed and len(option.targets) < len(motl_types):
                 only = f" (--{prefix}_type {' or '.join(option.targets)})"
-            added[f"{prefix}_{option.name}"] = (formats, {
+            added[flags[option.name] if flags else f"{prefix}_{option.name}"] = (group, {
                 **_argument(option.owner, option.name, option.annotation),
                 "default": argparse.SUPPRESS,
                 "help": option.help + only,
@@ -422,12 +491,12 @@ def _add_subcommand(subparsers: argparse._SubParsersAction, command: _Command) -
         added["output_csv"] = (required, {"required": True, "type": str, "help": "Path the resulting table is written to, as CSV."})
     elif command.output == "map":
         added["output_map"] = (required, {"required": True, "type": str, "help": "Path the resulting map is written to."})
-    passed_on = _passed_on(command.fn) if command.kind == "function" else {}
-    for prefix, options in passed_on.values():
-        add_options(prefix, options, typed=False)
+    forwarded = _forwarded(command)
+    for passed in forwarded.values():
+        add_options("", passed.options, typed=False, flags=passed.flags, group=forwarding)
 
     for name, param in inspect.signature(command.fn).parameters.items():
-        if name in command.hide or name in passed_on or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+        if name in command.hide or name in forwarded or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
             continue
         if name in added:
             raise ValueError(f"{command.qualname}: parameter {name!r} clashes with the option the command line adds")
@@ -512,24 +581,25 @@ def _invocation(parser: argparse.ArgumentParser, command: _Command, args: dict) 
         else:
             written = _given_options(parser, args, "output", _write_options(), output_type)
             write = (output_type, written.get("constructor", {}), written.get("writer", {}))
-    if command.kind == "function":
-        passed_on = _passed_on(command.fn)
-        version_parameter = _version_parameter(command.fn)
-        version = args.get(version_parameter) if version_parameter else None
-        relion_type = cryomotl_module.relion_version_to_type(version) if version is not None else None
-        for name, (prefix, options) in passed_on.items():
-            given = _given_options(parser, args, prefix, options, name)
-            values = {k: v for destination in given.values() for k, v in destination.items()}
-            if relion_type is not None:
-                accepted = (
-                    cryomotl_module.motl_read_parameters(relion_type) if prefix == "input"
-                    else cryomotl_module.motl_write_parameters(relion_type)[1]
-                )
-                for option in values:
-                    if option not in accepted:
-                        parser.error(f"--{prefix}_{option} does not apply to --{version_parameter} {version}")
-            if values:
-                args[name] = values
+    version_parameter = _version_parameter(command)
+    version = args.get(version_parameter) if version_parameter else None
+    relion_type = cryomotl_module.relion_version_to_type(version) if version is not None else None
+    for name, passed in _forwarded(command).items():
+        given = _given_options(parser, args, "", passed.options, name, passed.flags)
+        values = {k: v for destination in given.values() for k, v in destination.items()}
+        if passed.unpacked:
+            args.update(values)
+            continue
+        if relion_type is not None:
+            accepted = (
+                cryomotl_module.motl_read_parameters(relion_type) if passed.prefix == "input"
+                else cryomotl_module.motl_write_parameters(relion_type)[1]
+            )
+            for option in values:
+                if option not in accepted:
+                    parser.error(f"--{passed.flags[option]} does not apply to --{version_parameter} {version}")
+        if values:
+            args[name] = values
     return _Invocation(args, destination, read, write, writes_itself)
 
 

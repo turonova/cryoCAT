@@ -271,13 +271,102 @@ def test_writes_itself_rejects_constructor_only_option(monkeypatch):
 def test_version_parameter_is_derived():
     import re
 
-    from cryocat.core import cryomotl
-
     source = Path(cli.__file__).read_text(encoding="utf-8")
     assert not re.search(r"\brelion_version\b", source)
-    checked = {name for name in MOTL_CONVERTERS if cli._version_parameter(getattr(cryomotl, name)) is not None}
+    commands = _subcommands("cc_cryomotl")[1]
+    checked = {name for name in MOTL_CONVERTERS if cli._version_parameter(commands[name]) is not None}
     assert checked == {"emmotl2relion", "relion2emmotl", "relion2stopgap", "stopgap2relion"}
-    assert {cli._version_parameter(getattr(cryomotl, name)) for name in checked} == {"relion_version"}
+    assert {cli._version_parameter(commands[name]) for name in checked} == {"relion_version"}
+
+
+# ---------------------------------------------------------------------------
+# Forwarded keyword arguments
+# ---------------------------------------------------------------------------
+
+
+def _forwarded_flags(command, subcommand):
+    exposed = _subcommands(command)[1][subcommand]
+    return {flag for passed in cli._forwarded(exposed).values() for flag in passed.flags.values()}
+
+
+def test_em2mrc_offers_write_options():
+    dests = {a.dest for a in _subcommands("cc_cryomap")[0]["em2mrc"]._actions}
+    assert {"pixel_size", "transpose", "overwrite"} <= dests
+    assert "output_kwargs" not in dests
+
+
+def test_forwarded_option_reaches_call_keywords():
+    invocation = _invocation("cc_cryomap", [
+        "em2mrc", "--input_path", "in.em", "--output_path", "out.mrc", "--pixel_size", "2.5", "--transpose", "false",
+    ])
+    assert invocation.kwargs["pixel_size"] == 2.5
+    assert invocation.kwargs["transpose"] is False
+
+
+def test_forwarded_option_not_given_is_not_passed():
+    invocation = _invocation("cc_cryomap", ["em2mrc", "--input_path", "in.em", "--output_path", "out.mrc"])
+    assert not {"pixel_size", "transpose", "overwrite"} & set(invocation.kwargs)
+
+
+def test_name_passed_by_the_function_is_not_offered():
+    # deconvolve passes pixel_size=pixel_size_a to cryomap.write itself.
+    assert _forwarded_flags("cc_cryomap", "deconvolve") == {"transpose", "overwrite"}
+
+
+def test_name_of_own_parameter_is_not_offered():
+    # lowpass has its own pixel_size, so pixel_size can never reach **output_kwargs.
+    assert _forwarded_flags("cc_cryomap", "lowpass") == {"transpose", "overwrite"}
+
+
+@pytest.mark.parametrize("command, subcommand, flags", [
+    ("cc_cryomap", "em2mrc", {"pixel_size", "transpose", "overwrite"}),
+    ("cc_cryomask", "spherical_mask", {"pixel_size", "transpose", "overwrite"}),
+    ("cc_cryomotl", "save_to", {"motl_type"}),
+    ("cc_tmana", "scores_extract_particles", {"relion_version"}),
+    ("cc_tiltstack", "bin", {"pixel_size", "overwrite"}),
+])
+def test_forwarding_functions_offer_target_options(command, subcommand, flags):
+    assert _forwarded_flags(command, subcommand) == flags
+
+
+_BIN = ["bin", "--tilt_stack", "stack.mrc", "--binning_factor", "2", "--output_path", "out.mrc"]
+
+
+def test_tiltstack_reaches_write_through_local_dict():
+    # TiltStack.write_out merges **output_kwargs into a local dict and passes that on to cryomap.write.
+    from cryocat.core import cryomap
+    from cryocat.core.tiltstack import TiltStack
+
+    exposed = _subcommands("cc_tiltstack")[1]["bin"]
+    keywords = cli.forwarded_keywords(exposed.fn)["output_kwargs"]
+    assert keywords.targets == (TiltStack.write_out,)
+    assert keywords.chained == (cryomap.write,)
+    assert keywords.unresolved is None
+
+
+def test_tiltstack_forwarded_option_reaches_call_keywords():
+    invocation = _invocation("cc_tiltstack", [*_BIN, "--pixel_size", "1.7", "--overwrite", "false"])
+    assert invocation.kwargs["pixel_size"] == 1.7
+    assert invocation.kwargs["overwrite"] is False
+
+
+def test_constant_key_of_local_dict_is_not_offered():
+    # write_kw = {"data_type": ..., "transpose": False} in TiltStack.write_out.
+    dests = {a.dest for a in _subcommands("cc_tiltstack")[0]["bin"]._actions}
+    assert "transpose" not in dests
+    assert "data_type" not in dests
+
+
+def test_converter_flags_unchanged():
+    assert _forwarded_flags("cc_cryomotl", "emmotl2relion") == {
+        "input_pixel_size", "input_binning", "input_tomo_format", "input_subtomo_format", "input_input_tomograms",
+        "input_tomo_idx", "output_write_optics", "output_tomo_format", "output_subtomo_format",
+        "output_use_original_entries", "output_keep_all_entries", "output_version", "output_binning",
+        "output_pixel_size", "output_optics_data", "output_subtomo_size", "output_convert",
+    }
+    assert _forwarded_flags("cc_cryomotl", "relion2emmotl") == {
+        "input_tomo_format", "input_subtomo_format", "input_input_tomograms", "input_tomo_idx",
+    }
 
 
 def _in_memory_relion(cls, **kwargs):
