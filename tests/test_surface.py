@@ -1840,3 +1840,74 @@ class TestAnalyticSurfacesM:
         AnalyticSurfacesM({(1, 1): _tilted_ellipsoid()}).write_out(out)
         with pytest.raises(ValueError, match="does not match"):
             AnalyticSurfacesM(str(out), surface_type="tube")
+
+
+# =============================================================================
+# Mesh.scale — uniform scaling that keeps the stored curvatures
+# =============================================================================
+
+SCALE_FACTOR = 0.784
+
+
+@pytest.fixture
+def curved_mesh():
+    """A torus with curvatures computed and a pixel size set."""
+    o3m = o3d.geometry.TriangleMesh.create_torus(
+        torus_radius=20.0, tube_radius=5.0, radial_resolution=40, tubular_resolution=20)
+    m = _quiet_curvatures(_mesh_from_o3d(o3m))
+    m.pixel_size = np.array([1.0, 1.0, 1.0])
+    return m
+
+
+def _curvature_state(m):
+    return {
+        "mean": m.get_mean_curvature().copy(),
+        "gaussian": m.get_gaussian_curvature().copy(),
+        "principal": m.get_principal_curvatures().copy(),
+        "curvedness": m.get_curvedness().copy(),
+        "shape_index": m.get_shape_index().copy(),
+        "surface_type": m.get_surface_type().copy(),
+        "directions": m.get_curvature_directions().copy(),
+        "normals": m.normals.copy(),
+        "vertices": m.vertices.copy(),
+        "pixel_size": np.asarray(m.pixel_size, dtype=float).copy(),
+    }
+
+
+def test_scale_multiplies_vertices_and_pixel_size(curved_mesh):
+    before = _curvature_state(curved_mesh)
+    assert curved_mesh.scale(SCALE_FACTOR) is curved_mesh
+    np.testing.assert_allclose(curved_mesh.vertices, before["vertices"] * SCALE_FACTOR)
+    np.testing.assert_allclose(curved_mesh.pixel_size, before["pixel_size"] * SCALE_FACTOR)
+
+
+def test_scale_converts_curvatures(curved_mesh):
+    before = _curvature_state(curved_mesh)
+    curved_mesh.scale(SCALE_FACTOR)
+    np.testing.assert_allclose(curved_mesh.get_mean_curvature(), before["mean"] / SCALE_FACTOR)
+    np.testing.assert_allclose(curved_mesh.get_principal_curvatures(), before["principal"] / SCALE_FACTOR)
+    np.testing.assert_allclose(curved_mesh.get_curvedness(), before["curvedness"] / SCALE_FACTOR)
+    np.testing.assert_allclose(curved_mesh.get_gaussian_curvature(), before["gaussian"] / SCALE_FACTOR**2)
+
+
+def test_scale_keeps_scale_free_values(curved_mesh):
+    before = _curvature_state(curved_mesh)
+    curved_mesh.scale(SCALE_FACTOR)
+    np.testing.assert_array_equal(curved_mesh.get_shape_index(), before["shape_index"])
+    np.testing.assert_array_equal(curved_mesh.get_surface_type(), before["surface_type"])
+    np.testing.assert_array_equal(curved_mesh.normals, before["normals"])
+    np.testing.assert_array_equal(curved_mesh.get_curvature_directions(), before["directions"])
+
+
+def test_scale_and_its_inverse_restore_the_mesh(curved_mesh):
+    before = _curvature_state(curved_mesh)
+    curved_mesh.scale(SCALE_FACTOR).scale(1.0 / SCALE_FACTOR)
+    after = _curvature_state(curved_mesh)
+    for key, value in before.items():
+        np.testing.assert_allclose(after[key], value, rtol=1e-12, atol=1e-12, err_msg=key)
+
+
+@pytest.mark.parametrize("factor", [0.0, -2.0, np.nan, np.inf, [2.0, 2.0, 2.0], "2", True])
+def test_scale_rejects_a_factor_that_is_not_a_positive_scalar(curved_mesh, factor):
+    with pytest.raises(ValueError):
+        curved_mesh.scale(factor)

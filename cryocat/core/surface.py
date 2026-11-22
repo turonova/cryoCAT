@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 import copy
 import logging
+import numbers
 import warnings
 from tqdm import tqdm
 import multiprocessing as mp
@@ -896,8 +897,68 @@ class Mesh(DiscreteSurface):
         # Build 4x4 transformation matrix
         T = np.eye(4)
         T[:3, :3] = rotation_matrix
-        
+
         return self.transform(T)
+
+    def scale(self, factor: float) -> "Mesh":
+        """
+        Scale the mesh uniformly by *factor*, in place.
+
+        Unlike :meth:`transform`, which drops every stored curvature, this keeps
+        the stored curvature values and converts them to the new units.
+
+        - Vertices are multiplied by *factor*, and so is ``pixel_size`` when it
+          is set, so it stays the voxel spacing in the units of the vertices.
+        - Mean and principal curvatures, curvedness and the curvature tensors
+          are divided by *factor*; Gaussian curvature by its square.
+        - Shape index, surface type, normals and principal directions do not
+          change under uniform scaling and are kept.
+        - Cached edge vectors, edge lengths, face and vertex areas and the
+          spatial search structures are cleared; they are rebuilt on demand.
+          The connectivity is kept.
+
+        Parameters
+        ----------
+        factor : float
+            Positive scale factor.
+
+        Returns
+        -------
+        Mesh
+            ``self``.
+
+        Raises
+        ------
+        ValueError
+            If *factor* is not a positive, finite real number (strings,
+            booleans, ``NaN`` and infinity included).
+        """
+        if (not isinstance(factor, numbers.Real) or isinstance(factor, (bool, np.bool_))
+                or not np.isfinite(factor) or factor <= 0):
+            raise ValueError(f"factor must be a positive, finite real number, got {factor!r}")
+        factor = float(factor)
+
+        self.vertices = self.vertices * factor
+        if self.pixel_size is not None:
+            self.pixel_size = self.pixel_size * factor
+
+        for name in ("_mean_curvature", "_principal_curvatures", "_curvedness", "_curvature_tensors"):
+            value = getattr(self, name)
+            if value is not None:
+                setattr(self, name, value / factor)
+        if self._gaussian_curvature is not None:
+            self._gaussian_curvature = self._gaussian_curvature / factor**2
+
+        self._edge_vectors = None
+        self._edge_lengths = None
+        self._face_areas = None
+        self._vertex_areas = None
+        if hasattr(self, "_raycasting_scene"):
+            delattr(self, "_raycasting_scene")
+        if getattr(self, "o3d_mesh", None) is not None:
+            self.o3d_mesh = None
+        self._invalidate_neighbor_cache()
+        return self
 
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Flip normals", group="Mesh/OPC", order=35, hide=("inplace",), returns="none")
     def flip_normals(self, inplace: bool = True, flip_faces: bool = True) -> Mesh | None:

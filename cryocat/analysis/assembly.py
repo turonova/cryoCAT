@@ -1,3 +1,12 @@
+"""Analysis of particle assemblies: chains, symmetric complexes, block lattices and parametric surfaces.
+
+Pixel size is used only to report values in physical units. All computation runs in voxels, every input given in units of length (radii, distance thresholds) is in voxels, and every output motl comes out in the same units as the input motl. When a pixel size is set, it scales only the reported values: lengths (distances, radii, diameters, circumferences, dilations) are multiplied by the pixel size, areas by its square, and curvatures are divided by it. Angles, counts and ids are never scaled.
+
+EM, STOPGAP and Dynamo motls are not scaled when they are loaded; their coordinates are taken to be in voxels. Set the pixel size to the voxel size in physical units to get reported values in those units. If the coordinates of such a motl are already in physical units, set the pixel size to 1; any other value scales every reported value a second time.
+
+RELION motls from versions that store coordinates in physical units are converted to voxels when they are loaded, using the pixel size given at loading, so they too are in voxels internally. For these, set the pixel size here to that same value: the conversion on loading removed the physical units, and the pixel size is what brings them back in the reported values. With a pixel size of 1, the values are reported in voxels.
+"""
+
 from __future__ import annotations
 import copy
 import functools
@@ -617,6 +626,7 @@ def complex_centers(
                 affiliation_column: np.array(object_ids),
             }
         )
+        out.update_coordinates()
         out.renumber_particles()
     out.df.fillna(0.0, inplace=True)
     return out
@@ -1002,10 +1012,9 @@ class MultiSubunitComplex:
         Column that identifies the tomogram.
     subtomo_id_column : MotlColumn, default='subtomo_id'
         Column that identifies each particle.
+    pixel_size : float, default=1.0
+        Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
     """
-
-    _pixel_size: float = 1.0
-    """Pixel size of the subunit, parent and state motls; set by the constructors that take one."""
 
     def __init__(
         self,
@@ -1016,6 +1025,7 @@ class MultiSubunitComplex:
         subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
         subtomo_id_column: MotlColumn = "subtomo_id",
+        pixel_size: float = 1.0,
     ) -> None:
         self._setup(
             motl,
@@ -1024,6 +1034,7 @@ class MultiSubunitComplex:
             subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
             subtomo_id_column=subtomo_id_column,
+            pixel_size=pixel_size,
         )
 
     def _setup(
@@ -1035,6 +1046,7 @@ class MultiSubunitComplex:
         subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
         subtomo_id_column: MotlColumn = "subtomo_id",
+        pixel_size: float = 1.0,
     ) -> None:
         """Shared constructor body; called by :meth:`__init__` and subclass constructors."""
         self.motl = cryomotl.Motl.load(motl)
@@ -1043,6 +1055,7 @@ class MultiSubunitComplex:
         self.subunit_index_column: MotlColumn = subunit_index_column
         self.tomo_id_column: MotlColumn = tomo_id_column
         self.subtomo_id_column: MotlColumn = subtomo_id_column
+        self.pixel_size: float = float(pixel_size)
         # State-tracking machinery.
         self._states: list[_SubunitState] = []
         self._parent_motl: cryomotl.Motl | None = None
@@ -1097,6 +1110,7 @@ class MultiSubunitComplex:
                     self.affiliation_column: np.array(object_ids),
                 }
             )
+            out.update_coordinates()
             out.renumber_particles()
         out.df.fillna(0.0, inplace=True)
         return out
@@ -1695,7 +1709,7 @@ class MultiSubunitComplex:
         subtomo_id_column : MotlColumn, default='subtomo_id'
             Column that identifies each particle, in the parent and the subunits.
         pixel_size : float, default=1.0
-            Pixel size.
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
 
         Returns
         -------
@@ -1724,8 +1738,8 @@ class MultiSubunitComplex:
             len(shift_array),
             affiliation_column=affiliation_column,
             subunit_index_column=subunit_index_column,
+            pixel_size=pixel_size,
         )
-        obj._pixel_size = float(pixel_size)
         obj._parent_motl = pm
         obj._shifts = shift_array
         obj._original_subtomo_id_column = original_subtomo_id_column
@@ -1763,21 +1777,11 @@ class MultiSubunitComplex:
                 "or call add_parent() first."
             )
 
-    def _check_pixel_size_pair(self, motl_pixel_size: float, who: str) -> None:
-        """Raise if the two pixel sizes disagree."""
-        if not np.isclose(float(self._pixel_size), float(motl_pixel_size)):
-            raise ValueError(
-                f"Pixel size mismatch: instance has {self._pixel_size}, "
-                f"{who} has {motl_pixel_size}."
-            )
-
     @_pooled_over_complex
     def add_parent(
         self,
         parent_motl: MotlSource,
         parent_id_column: MotlColumn,
-        *,
-        pixel_size: float | None = None,
     ) -> None:
         """Link a parent motl to a path-(a) constructed instance.
 
@@ -1795,14 +1799,7 @@ class MultiSubunitComplex:
         parent_id_column :
             Column in ``self.motl`` that holds the parent ``subtomo_id``
             for each subunit.
-        pixel_size :
-            Pixel size declared by *parent_motl*.  ``None`` (default) uses
-            the instance pixel size without checking.  An explicit value is
-            validated against the instance pixel size and raises
-            :class:`ValueError` on mismatch.
         """
-        if pixel_size is not None:
-            self._check_pixel_size_pair(pixel_size, "parent motl")
         pm = cryomotl.Motl.load(parent_motl)
         if parent_id_column not in self.motl.df.columns:
             raise ValueError(
@@ -1833,8 +1830,6 @@ class MultiSubunitComplex:
         motl: MotlSource,
         position: int | None = None,
         label: int | str | None = None,
-        *,
-        pixel_size: float | None = None,
     ) -> None:
         """Add a subunit motl as a named, ordered state.
 
@@ -1863,14 +1858,7 @@ class MultiSubunitComplex:
             Stable identifier for this state.  Defaults to the position
             it occupies at the moment of insertion and is never changed
             afterwards.
-        pixel_size :
-            Pixel size declared by this state's motl.  ``None`` (default)
-            uses the instance pixel size without checking.  An explicit
-            value is validated against the instance pixel size and raises
-            :class:`ValueError` on mismatch.
         """
-        if pixel_size is not None:
-            self._check_pixel_size_pair(pixel_size, "state motl")
         m = cryomotl.Motl.load(motl)
         matched, missing, extra = _match_counts(
             self.motl.df, m.df, tomo_id_column=self.tomo_id_column, subtomo_id_column=self.subtomo_id_column
@@ -1933,7 +1921,7 @@ class MultiSubunitComplex:
                 i += 1
             label = i
         derived_motl = self._split_parent()
-        self.add_subunit_state(derived_motl, position=0, label=label, pixel_size=self._pixel_size)
+        self.add_subunit_state(derived_motl, position=0, label=label)
 
     def _split_parent(self) -> "cryomotl.Motl":
         """Re-run the shift-list split of :meth:`from_parent` on the stored parent."""
@@ -2214,13 +2202,13 @@ class MultiSubunitComplex:
 
             out_row: dict = {
                 "subtomo_id": sid_val,
-                "len_a": len_a,
-                "len_b": len_b,
+                "len_a": len_a * self.pixel_size,
+                "len_b": len_b * self.pixel_size,
                 "angle_ab": angle_ab,
                 "angle_in_plane": angle_in_plane,
                 "angle_out_of_plane": angle_out_of_plane,
-                "axis_component": axis_component,
-                "plane_component": plane_component,
+                "axis_component": axis_component * self.pixel_size,
+                "plane_component": plane_component * self.pixel_size,
                 "reference": reference,
                 "frame_element": label_a,
             }
@@ -2446,6 +2434,8 @@ class SymmetricComplex(MultiSubunitComplex):
         Column that identifies the tomogram.
     subtomo_id_column : MotlColumn, default='subtomo_id'
         Column that identifies each particle.
+    pixel_size : float, default=1.0
+        Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
     """
 
     def __init__(
@@ -2457,6 +2447,7 @@ class SymmetricComplex(MultiSubunitComplex):
         subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
         subtomo_id_column: MotlColumn = "subtomo_id",
+        pixel_size: float = 1.0,
     ) -> None:
         self._setup(
             motl,
@@ -2465,6 +2456,7 @@ class SymmetricComplex(MultiSubunitComplex):
             subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
             subtomo_id_column=subtomo_id_column,
+            pixel_size=pixel_size,
         )
 
     def _setup(
@@ -2476,6 +2468,7 @@ class SymmetricComplex(MultiSubunitComplex):
         subunit_index_column: MotlColumn = "geom1",
         tomo_id_column: MotlColumn = "tomo_id",
         subtomo_id_column: MotlColumn = "subtomo_id",
+        pixel_size: float = 1.0,
     ) -> None:
         """Shared constructor body; called by :meth:`__init__` and subclass constructors.
 
@@ -2490,6 +2483,7 @@ class SymmetricComplex(MultiSubunitComplex):
             subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
             subtomo_id_column=subtomo_id_column,
+            pixel_size=pixel_size,
         )
 
     # ------------------------------------------------------------------
@@ -2561,12 +2555,17 @@ class CnComplex(SymmetricComplex):
     center_method : {'circle_fit', 'barycentric'}, default='circle_fit'
         Algorithm used by :meth:`get_centers_as_motl` and related helpers.
         ``'circle_fit'`` falls back to barycentric when the fit fails.
+    pixel_size : float, default=1.0
+        Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
 
     Raises
     ------
     ValueError
         When *symmetry* is not a cyclic Cn group.
     """
+
+    _SYMMETRY_GROUP: str = "C"
+    """Group letter that :meth:`from_subunit_motl` and :meth:`from_parent` put before the fold."""
 
     def __init__(
         self,
@@ -2587,12 +2586,12 @@ class CnComplex(SymmetricComplex):
             subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
             subtomo_id_column=subtomo_id_column,
+            pixel_size=pixel_size,
         )
         if self.group != "C":
             raise ValueError(f"CnComplex requires cyclic Cn symmetry, got {symmetry!r}.")
         self.center_method: Literal["circle_fit", "barycentric"] = center_method
         self._cyclic_setup()
-        self._pixel_size = float(pixel_size)
 
     def _cyclic_setup(self) -> None:
         """Initialise cyclic-ring attributes shared with :class:`DnComplex`.
@@ -2638,7 +2637,7 @@ class CnComplex(SymmetricComplex):
             n_pores = "?"
         components = list(getattr(self, "_components", {}).keys())
         return (
-            f"{type(self).__name__}(C{self.n}, rings={n_rings}, "
+            f"{type(self).__name__}({self._SYMMETRY_GROUP}{self.n}, rings={n_rings}, "
             f"pores={n_pores}, components={components!r})"
         )
 
@@ -2665,15 +2664,15 @@ class CnComplex(SymmetricComplex):
         subunit_motl :
             The split subunit particle list.
         n :
-            Cyclic fold.
+            Fold; the symmetry is ``"C{n}"`` (``"D{n}"`` on :class:`DnComplex`).
         affiliation_column :
             Column that groups the subunits of one complex.
         pixel_size :
-            Pixel size.  Defaults to 1.0.
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
         """
         return cls(
             subunit_motl,
-            f"C{int(n)}",
+            f"{cls._SYMMETRY_GROUP}{int(n)}",
             affiliation_column=affiliation_column,
             pixel_size=pixel_size,
         )
@@ -2709,7 +2708,8 @@ class CnComplex(SymmetricComplex):
         parent_motl :
             The unsplit complex particle list.
         n :
-            Cyclic fold; passed as ``"C{n}"`` to ``split_in_asymmetric_subunits``.
+            Fold; passed as ``"C{n}"`` (``"D{n}"`` on :class:`DnComplex`) to
+            ``split_in_asymmetric_subunits``.
         shift :
             Translation from the complex centre to a subunit, in the complex
             frame.  Passed verbatim to ``split_in_asymmetric_subunits``.
@@ -2726,11 +2726,12 @@ class CnComplex(SymmetricComplex):
             Optional re-expression of the symmetry group; forwarded to
             ``split_in_asymmetric_subunits`` and stored for reconstruction.
         pixel_size :
-            Pixel size.  Defaults to 1.0.
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
         """
         pm = cryomotl.Motl.load(parent_motl)
+        symmetry = f"{cls._SYMMETRY_GROUP}{int(n)}"
         subunit_motl = pm.split_in_asymmetric_subunits(
-            f"C{int(n)}",
+            symmetry,
             shift,
             symmetry_orientation=symmetry_orientation,
             subunit_index_column=subunit_index_column,
@@ -2741,7 +2742,7 @@ class CnComplex(SymmetricComplex):
         _move_split_objects_to(subunit_motl, affiliation_column, original_object_id_column)
         obj = cls(
             subunit_motl,
-            f"C{int(n)}",
+            symmetry,
             affiliation_column=affiliation_column,
             subunit_index_column=subunit_index_column,
             pixel_size=pixel_size,
@@ -2761,7 +2762,7 @@ class CnComplex(SymmetricComplex):
     def _split_parent(self) -> "cryomotl.Motl":
         """Re-run :meth:`~cryocat.core.cryomotl.Motl.split_in_asymmetric_subunits` with the arguments stored by :meth:`from_parent`."""
         derived = self._parent_motl.split_in_asymmetric_subunits(
-            f"C{self._n_for_split}",
+            f"{self._SYMMETRY_GROUP}{self._n_for_split}",
             self._shift,
             symmetry_orientation=self._symmetry_orientation,
             subunit_index_column=self.subunit_index_column,
@@ -2795,8 +2796,14 @@ class CnComplex(SymmetricComplex):
         When ``self.n == 3``:
             Cn-constrained fit and barycentre coincide for ideal data;
             a note is printed once and ``fit_centre`` is still returned.
+
+        The centres stay in voxels, like the motl.  ``fit_residual``,
+        ``bary_fit_distance`` and the three offsets are scaled by
+        :attr:`pixel_size`.
         """
         from scipy.spatial.transform import Rotation as _srot
+
+        ps = self.pixel_size
 
         has_parent = self._parent_motl is not None
         if not has_parent:
@@ -2832,39 +2839,36 @@ class CnComplex(SymmetricComplex):
                     "complex_id": aff_val,
                     "bary_centre": bary,
                     "fit_centre": fit_centre,
-                    "fit_residual": fit_residual,
+                    "fit_residual": fit_residual * ps,
                 }
 
                 if has_parent and self._original_subtomo_id_column in group_df.columns:
                     parent_sids = group_df[self._original_subtomo_id_column].dropna().unique()
                     if len(parent_sids) > 0:
                         parent_sid = parent_sids[0]
-                        parent_rows = self._parent_motl.df[
-                            self._parent_motl.df[self.subtomo_id_column] == parent_sid
-                        ]
+                        parent_mask = (self._parent_motl.df[self.subtomo_id_column] == parent_sid).to_numpy()
+                        parent_rows = self._parent_motl.df[parent_mask]
                         if len(parent_rows) > 0:
                             pr = parent_rows.iloc[0]
-                            parent_centre = np.array(
-                                [float(pr["x"]), float(pr["y"]), float(pr["z"])]
-                            )
+                            parent_centre = self._parent_motl.get_coordinates()[parent_mask][0].astype(float)
                             euler = np.array(
                                 [float(pr["phi"]), float(pr["theta"]), float(pr["psi"])]
                             )
                             R_inv = _srot.from_euler("zxz", euler, degrees=True).inv()
                             record["parent_centre"] = parent_centre
-                            record["parent_to_bary"] = R_inv.apply(bary - parent_centre)
-                            record["parent_to_fit"] = R_inv.apply(fit_centre - parent_centre)
-                            record["bary_to_fit"] = R_inv.apply(fit_centre - bary)
+                            record["parent_to_bary"] = R_inv.apply(bary - parent_centre) * ps
+                            record["parent_to_fit"] = R_inv.apply(fit_centre - parent_centre) * ps
+                            record["bary_to_fit"] = R_inv.apply(fit_centre - bary) * ps
                         else:
                             record["bary_fit_distance"] = float(
                                 np.linalg.norm(fit_centre - bary)
-                            )
+                            ) * ps
                     else:
                         record["bary_fit_distance"] = float(
                             np.linalg.norm(fit_centre - bary)
-                        )
+                        ) * ps
                 else:
-                    record["bary_fit_distance"] = float(np.linalg.norm(fit_centre - bary))
+                    record["bary_fit_distance"] = float(np.linalg.norm(fit_centre - bary)) * ps
 
                 state_records.append(record)
 
@@ -3038,6 +3042,13 @@ class CnComplex(SymmetricComplex):
             return pd.concat(parts, ignore_index=True)
         return parts
 
+    def _ensure_rings(self) -> None:
+        """Build the rings when the class builds them on demand; called first by every inter-ring method.
+
+        A :class:`CnComplex` holds the rings it was given, so this does
+        nothing here; :class:`DnComplex` splits itself into its two rings.
+        """
+
     def _require_pooled(self, method_name: str) -> None:
         """Raise when the complex holds two or more rings that are not merged.
 
@@ -3079,7 +3090,7 @@ class CnComplex(SymmetricComplex):
         return parts
 
     @gui_exposed(label="Ring spacing", group="Statistics", order=40, returns="dataframe")
-    def ring_spacing(self, *, pixel_size: float | None = None) -> pd.DataFrame:
+    def ring_spacing(self) -> pd.DataFrame:
         """Inter-ring spacing per NPC pore, computed from the merged motl.
 
         Between two rings the axis runs from the lower-numbered ring to the
@@ -3089,12 +3100,7 @@ class CnComplex(SymmetricComplex):
 
         For every unordered pair of rings, computes the 3-D Euclidean distance
         between the mean coordinates of the two ring centres for each pore and
-        scales by *pixel_size*.  Produces ``n*(n-1)/2`` columns for *n* rings.
-
-        Parameters
-        ----------
-        pixel_size : float, default=1.0
-            Ångström-per-voxel scale factor applied to the raw voxel distances.
+        scales by :attr:`pixel_size`.  Produces ``n*(n-1)/2`` columns for *n* rings.
 
         Returns
         -------
@@ -3104,7 +3110,7 @@ class CnComplex(SymmetricComplex):
             ``tomo_id``, ``object_id``
                 Pore identifiers.
             ``spacing_{r0}_{r1}``
-                Distance (Å when *pixel_size* given) between the centre of ring
+                Distance (scaled by :attr:`pixel_size`) between the centre of ring
                 *r0* and ring *r1*; one column per ring pair, including
                 non-adjacent pairs.  ``NaN`` when one or both ring centres are
                 absent for a pore.
@@ -3114,7 +3120,8 @@ class CnComplex(SymmetricComplex):
         ValueError
             If called before :meth:`merge`.
         """
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+        ps = self.pixel_size
+        self._ensure_rings()
         if not self._rings_merged or len(self.rings) < 2:
             raise ValueError(f"ring_spacing requires a merged {type(self).__name__} with at least two rings.")
         df = self.motl.df
@@ -3185,6 +3192,7 @@ class CnComplex(SymmetricComplex):
         ValueError
             If called before :meth:`merge`.
         """
+        self._ensure_rings()
         if not self._rings_merged or len(self.rings) < 2:
             raise ValueError(f"inter_ring_twist requires a merged {type(self).__name__} with at least two rings.")
         df = self.motl.df
@@ -3231,7 +3239,6 @@ class CnComplex(SymmetricComplex):
     def get_subunit_spacing(
         self,
         *,
-        pixel_size: float = 1.0,
         degrees: bool = True,
         reference_ring: int | None = None,
         include_flagged: bool = False,
@@ -3257,8 +3264,6 @@ class CnComplex(SymmetricComplex):
 
         Parameters
         ----------
-        pixel_size : float, default=1.0
-            Voxel size in physical units; distances are multiplied by this.
         degrees : bool, default=True
             Return twist angles in degrees when ``True``, radians otherwise.
         reference_ring : int or None, default=None
@@ -3276,13 +3281,14 @@ class CnComplex(SymmetricComplex):
             One row per (pore, subunit).  Columns:
 
             - ``tomo_id``, ``object_id``, ``subunit_index_column`` (subunit index)
-            - ``spacing_{r0}_{r1}`` — Euclidean distance (voxels × pixel_size)
+            - ``spacing_{r0}_{r1}`` — Euclidean distance (voxels × :attr:`pixel_size`)
               between subunit *k* in ring *r0* and ring *r1* for each ring pair,
               including non-adjacent pairs
             - ``twist_{r0}_{r1}`` — signed azimuthal angle (degrees) of
               subunit *k* in ring *r1* relative to its position in ring *r0*,
               measured from the ring-pair axis; one column per ring pair
         """
+        self._ensure_rings()
         if not self._rings_merged or len(self.rings) < 2:
             raise ValueError(f"get_subunit_spacing requires a merged {type(self).__name__} with at least two rings.")
 
@@ -3333,7 +3339,7 @@ class CnComplex(SymmetricComplex):
                     key1 = (float(r1), _ring_slot(k, self.n))
                     if key0 in pos_map and key1 in pos_map:
                         p0, p1 = pos_map[key0], pos_map[key1]
-                        row[f"spacing_{r0}_{r1}"] = float(np.linalg.norm(p1 - p0)) * pixel_size
+                        row[f"spacing_{r0}_{r1}"] = float(np.linalg.norm(p1 - p0)) * self.pixel_size
                         # Azimuthal twist: angle of p1 relative to p0 around the pore axis
                         c0 = ring_centres.get(float(r0), np.zeros(3))
                         c1 = ring_centres.get(float(r1), np.zeros(3))
@@ -3406,6 +3412,7 @@ class CnComplex(SymmetricComplex):
             - ``inplane_{r0}_{r1}`` — in-plane (roll) angular difference;
               ``NaN`` when the subunit is absent in either ring
         """
+        self._ensure_rings()
         if not self._rings_merged or len(self.rings) < 2:
             raise ValueError(
                 f"get_subunit_orientation requires a merged {type(self).__name__} with at least two rings."
@@ -3602,6 +3609,7 @@ class CnComplex(SymmetricComplex):
                     self.affiliation_column: np.array(object_ids),
                 }
             )
+            out.update_coordinates()
             out.renumber_particles()
         out.df.fillna(0.0, inplace=True)
         return out
@@ -3638,18 +3646,12 @@ class CnComplex(SymmetricComplex):
         return float(np.mean(np.linalg.norm(coords - center, axis=1)))
 
     @gui_exposed(label="Circumference", group="Statistics", order=40, returns="dataframe")
-    def circumference(self, *, pixel_size: float | None = None, label=None) -> pd.DataFrame:
+    def circumference(self, *, label=None) -> pd.DataFrame:
         """Per-object circumference derived from the circumradius.
 
-        Computes ``2 π × circumradius × pixel_size`` for each object.
+        Computes ``2 π × circumradius ×`` :attr:`pixel_size` for each object.
         The circumradius is estimated via the Pratt circle fit (≥ 4 particles)
         or falls back to the mean particle–to–barycenter distance.
-
-        Parameters
-        ----------
-        pixel_size : float or None, default None
-            Ångström-per-voxel scale factor.  When ``None``, uses
-            ``self.pixel_size`` (defaulting to ``1.0`` when unset).
 
         Returns
         -------
@@ -3667,7 +3669,7 @@ class CnComplex(SymmetricComplex):
             self.motl = _state.motl
         try:
             self._require_affiliation()
-            ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+            ps = self.pixel_size
 
             coord = self.motl.get_coordinates()
             rows: list[dict] = []
@@ -3692,18 +3694,13 @@ class CnComplex(SymmetricComplex):
             self.motl = _orig_motl
 
     @_pooled_over_complex
-    def ring_summary(self, *, pixel_size: float | None = None, label=None) -> pd.DataFrame:
+    def ring_summary(self, *, label=None) -> pd.DataFrame:
         """One-row-per-ring summary of radius, occupancy, pore count, and subunit count.
 
         Radius is the mean circumradius across pores (via
-        :meth:`_circumradius_for_group`) multiplied by *pixel_size*.
+        :meth:`_circumradius_for_group`) multiplied by :attr:`pixel_size`, and
+        so is ``opposite_distance``.
         Occupancy is the mean per-pore fraction from :meth:`occupancy`.
-
-        Parameters
-        ----------
-        pixel_size : float or None, default None
-            Ångström-per-voxel scale factor.  ``None`` uses ``self.pixel_size``
-            (defaulting to ``1.0``).
 
         Returns
         -------
@@ -3721,7 +3718,7 @@ class CnComplex(SymmetricComplex):
             self.motl = _state.motl
         try:
             _resolved_label = _state.label if _state is not None else None
-            ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+            ps = self.pixel_size
             coord = self.motl.get_coordinates()
             tomo_col = self.tomo_id_column
             aff_col = self.affiliation_column
@@ -3828,7 +3825,7 @@ class CnComplex(SymmetricComplex):
             tomo_col = self.tomo_id_column
             aff_col = self.affiliation_column
             ring_col = getattr(self, "_ring_column", None)
-            ps: float = getattr(self, "pixel_size", 1.0)
+            ps = self.pixel_size
             order_col = self.subunit_index_column
             group_cols = self._ring_group_columns
             has_ring_group = len(group_cols) > 2
@@ -4366,14 +4363,12 @@ class CnComplex(SymmetricComplex):
                     "Ordered pairing is ambiguous with duplicate subunit index values."
                 )
 
-            coords = grp[["x", "y", "z"]].to_numpy(dtype=float) + grp[["shift_x", "shift_y", "shift_z"]].to_numpy(
-                dtype=float
-            )
             angles_euler = grp[["phi", "theta", "psi"]].to_numpy(dtype=float)
             subtomo_ids = grp[self.subtomo_id_column].to_numpy(dtype=float)
             n_present = len(grp)
 
             om = cryomotl.Motl(grp.reset_index(drop=True))
+            coords = om.get_coordinates().astype(float)
             center, _ = self._compute_object_center(om)
             vectors = coords - center[np.newaxis, :]
             _, _, Vt = np.linalg.svd(vectors, full_matrices=True)
@@ -4459,7 +4454,6 @@ class CnComplex(SymmetricComplex):
     def diameter(
         self,
         *,
-        pixel_size: float = 1.0,
         store_column: MotlColumn = "geom4",
     ) -> tuple[pd.DataFrame, "cryomotl.Motl"]:
         """Compute the mean diameter for each object.
@@ -4468,21 +4462,21 @@ class CnComplex(SymmetricComplex):
         ``(i, i + n//2)`` are matched (1-based, matching
         :meth:`assign_subunit_index`'s convention).  For odd *n* or when
         ``subunit_index_column`` is absent, the diameter is derived from the
-        circumradius (``2 × circumradius × pixel_size``).
+        circumradius (``2 × circumradius``).
 
         Parameters
         ----------
-        pixel_size : float, default=1.0
-            Ångström-per-voxel scale factor applied to all distances.
         store_column : MotlColumn, default='geom4'
             Column in the returned *motl_out* that carries each object's
-            mean diameter on every row; ``NaN`` for objects with no result.
+            mean diameter in voxels on every row; ``NaN`` for objects with
+            no result.
 
         Returns
         -------
         summary_df : pandas.DataFrame
             One row per ``(tomo_id, object_id)`` with columns
             ``tomo_id``, ``object_id``, ``mean_diameter``, ``n_pairs``.
+            ``mean_diameter`` is scaled by :attr:`pixel_size`.
             ``n_pairs`` is 0 for the circumradius fallback.
         motl_out : Motl
             Copy of ``self.motl`` with *store_column* populated.
@@ -4536,7 +4530,7 @@ class CnComplex(SymmetricComplex):
                 opp_dists = _opposite_distances(o2c, self.n)
                 valid = [d for d in opp_dists.values() if not np.isnan(d)]
                 if valid:
-                    mean_d = float(np.mean(valid)) * pixel_size
+                    mean_d = float(np.mean(valid))
                     n_pairs = len(valid) // 2
                 else:
                     warnings.warn(
@@ -4545,17 +4539,17 @@ class CnComplex(SymmetricComplex):
                         "paired subunit indices); diameter derived from 2 × circumradius.",
                         stacklevel=2,
                     )
-                    mean_d = 2.0 * self._circumradius_for_group(coords_grp) * pixel_size
+                    mean_d = 2.0 * self._circumradius_for_group(coords_grp)
                     n_pairs = 0
             else:
-                mean_d = 2.0 * self._circumradius_for_group(coords_grp) * pixel_size
+                mean_d = 2.0 * self._circumradius_for_group(coords_grp)
                 n_pairs = 0
 
             diameters_col[grp_idx] = mean_d
             row: dict = {
                 "tomo_id": float(tomo_id),
                 "object_id": float(object_id),
-                "mean_diameter": mean_d,
+                "mean_diameter": mean_d * self.pixel_size,
                 "n_pairs": n_pairs,
             }
             for extra_col, extra_val in zip(self._ring_group_columns[2:], keys[2:]):
@@ -4572,19 +4566,13 @@ class CnComplex(SymmetricComplex):
         return summary_df, motl_out
 
     @gui_exposed(label="Get object stats", group="Statistics", order=50, returns="dataframe")
-    def get_object_stats(self, *, pixel_size: float | None = None, label=None) -> pd.DataFrame:
+    def get_object_stats(self, *, label=None) -> pd.DataFrame:
         """Comprehensive per-object statistics table.
 
         Composes :meth:`occupancy`, :meth:`circumference`,
         :meth:`diameter`, and centre/radius computation into one row per
-        ``(tomo_id, object_id)`` group.
-
-        Parameters
-        ----------
-        pixel_size : float or None, default None
-            Ångström-per-voxel scale factor for distance columns.  When
-            ``None``, uses ``self.pixel_size`` (defaulting to ``1.0`` when
-            unset).
+        ``(tomo_id, object_id)`` group.  Lengths are scaled by
+        :attr:`pixel_size`; the centre stays in voxels, like the motl.
 
         Returns
         -------
@@ -4598,7 +4586,7 @@ class CnComplex(SymmetricComplex):
             ``x``, ``y``, ``z``
                 Object centre coordinates (voxels).
             ``radius``
-                Circumradius (voxels).
+                Circumradius, scaled by :attr:`pixel_size`.
             ``circumference``
                 From :meth:`circumference`.
             ``mean_diameter``, ``n_pairs``
@@ -4623,24 +4611,22 @@ class CnComplex(SymmetricComplex):
         if _state is not None:
             self.motl = _state.motl
         try:
-            return self._get_object_stats_impl(pixel_size=pixel_size, _state=_state)
+            return self._get_object_stats_impl(_state=_state)
         finally:
             self.motl = _orig_motl
 
     def _get_object_stats_impl(
         self,
         *,
-        pixel_size: float | None = None,
         _state: "_SubunitState | None" = None,
     ) -> pd.DataFrame:
         _resolved_label = _state.label if _state is not None else None
         self._require_affiliation()
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
 
         # Pass resolved label so internal calls do not re-swap self.motl.
         occ_df = self.occupancy(label=_resolved_label)
-        circ_df = self.circumference(pixel_size=ps, label=_resolved_label)
-        diam_df, _ = self.diameter(pixel_size=ps)
+        circ_df = self.circumference(label=_resolved_label)
+        diam_df, _ = self.diameter()
 
         coord = self.motl.get_coordinates()
         center_rows: list[dict] = []
@@ -4655,7 +4641,7 @@ class CnComplex(SymmetricComplex):
                     "x": float(center[0]),
                     "y": float(center[1]),
                     "z": float(center[2]),
-                    "radius": r,
+                    "radius": r * self.pixel_size,
                 }
             )
         geo_df = pd.DataFrame(center_rows)
@@ -4946,7 +4932,6 @@ class CnComplex(SymmetricComplex):
         self,
         name: str = "basket",
         *,
-        pixel_size: float | None = None,
         degrees: bool = True,
         gaps: str = "full",
         label=None,
@@ -4954,8 +4939,8 @@ class CnComplex(SymmetricComplex):
         """Per-particle geometry of a registered component relative to its reference ring.
 
         All geometry is measured against the reference ring's centre and pore
-        axis — never a component-fitted centre.  Positions are scaled by
-        ``self.pixel_size``.
+        axis — never a component-fitted centre.  ``radius``, ``axial_offset``
+        and ``distance_to_centre`` are scaled by :attr:`pixel_size`.
 
         Parameters
         ----------
@@ -4986,7 +4971,7 @@ class CnComplex(SymmetricComplex):
             self.motl = _state.motl
         try:
             return self._get_component_stats_impl(
-                name=name, pixel_size=pixel_size, degrees=degrees, gaps=gaps, _state=_state
+                name=name, degrees=degrees, gaps=gaps, _state=_state
             )
         finally:
             self.motl = _orig_motl
@@ -4995,7 +4980,6 @@ class CnComplex(SymmetricComplex):
         self,
         name: str = "basket",
         *,
-        pixel_size: float | None = None,
         degrees: bool = True,
         gaps: str = "full",
         _state: "_SubunitState | None" = None,
@@ -5012,7 +4996,7 @@ class CnComplex(SymmetricComplex):
         aff_col = self.affiliation_column
         order_col = self.subunit_index_column
         tomo_col = self.tomo_id_column
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+        ps = self.pixel_size
 
         _, ref_df = self._reference_ring(reference_ring)
 
@@ -5294,6 +5278,9 @@ class DnComplex(CnComplex):
         Column that identifies each particle.
     center_method : {'circle_fit', 'barycentric'}, default='circle_fit'
         Algorithm used by centre-computation helpers.
+    pixel_size : float, default=1.0
+        Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
+        The rings get the same pixel size.
 
     Raises
     ------
@@ -5312,6 +5299,8 @@ class DnComplex(CnComplex):
     1 … n and ring 2 subunits receive indices n+1 … 2n.
     """
 
+    _SYMMETRY_GROUP: str = "D"
+
     def __init__(
         self,
         motl: MotlSource,
@@ -5322,6 +5311,7 @@ class DnComplex(CnComplex):
         tomo_id_column: MotlColumn = "tomo_id",
         subtomo_id_column: MotlColumn = "subtomo_id",
         center_method: Literal["circle_fit", "barycentric"] = "circle_fit",
+        pixel_size: float = 1.0,
     ) -> None:
         self._setup(
             motl,
@@ -5330,6 +5320,7 @@ class DnComplex(CnComplex):
             subunit_index_column=subunit_index_column,
             tomo_id_column=tomo_id_column,
             subtomo_id_column=subtomo_id_column,
+            pixel_size=pixel_size,
         )
         if self.group != "D":
             raise ValueError(f"DnComplex requires dihedral Dn symmetry, got {symmetry!r}.")
@@ -5402,6 +5393,11 @@ class DnComplex(CnComplex):
         self._rings_merged = True
         return self.motl
 
+    def _ensure_rings(self) -> None:
+        """Split the complex into its two rings with the stored column and axis unless it is split already."""
+        if not self._rings_split:
+            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
+
     @property
     def rings(self) -> list[CnComplex]:
         """The two rings, built from ``self.motl`` on every access; empty before :meth:`split_rings`.
@@ -5422,6 +5418,7 @@ class DnComplex(CnComplex):
                 tomo_id_column=self.tomo_id_column,
                 subtomo_id_column=self.subtomo_id_column,
                 center_method=self.center_method,
+                pixel_size=self.pixel_size,
             )
             for r in (1, 2)
         ]
@@ -5442,8 +5439,7 @@ class DnComplex(CnComplex):
 
         Modifies ``self.motl.df`` in place.
         """
-        if not self._rings_split:
-            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
+        self._ensure_rings()
 
         super().assign_subunit_index()
 
@@ -5455,18 +5451,13 @@ class DnComplex(CnComplex):
     # ------------------------------------------------------------------
 
     @gui_exposed(label="Get object stats", group="Statistics", order=50, returns="dataframe")
-    def get_object_stats(self, *, pixel_size: float | None = None) -> pd.DataFrame:
+    def get_object_stats(self) -> pd.DataFrame:
         """Comprehensive per-object statistics for dihedral structures.
 
         Composes per-object occupancy, ring spacing, inter-ring twist, and
         per-ring diameter/circumference (averaged to one row per object).
-
-        Parameters
-        ----------
-        pixel_size : float or None, default None
-            Ångström-per-voxel scale factor for distance columns.  When
-            ``None``, uses ``self.pixel_size`` (defaulting to ``1.0`` when
-            unset).
+        Lengths are scaled by :attr:`pixel_size`; the barycentre stays in
+        voxels, like the motl.
 
         Returns
         -------
@@ -5480,15 +5471,16 @@ class DnComplex(CnComplex):
             ``x``, ``y``, ``z``
                 Object barycentre (voxels).
             ``radius``
-                Mean circumradius across both rings (voxels).
+                Mean circumradius across both rings (scaled by
+                :attr:`pixel_size`).
             ``spacing_1_2``
                 Distance between the two ring centres (scaled by
-                *pixel_size*), from :meth:`ring_spacing`.
+                :attr:`pixel_size`), from :meth:`ring_spacing`.
             ``twist_1_2``
                 Rotational twist between the rings (degrees), from
                 :meth:`inter_ring_twist`.
             ``circumference``
-                Mean per-ring circumference (scaled by *pixel_size*).
+                Mean per-ring circumference (scaled by :attr:`pixel_size`).
             ``mean_diameter``, ``n_pairs``
                 Mean per-ring diameter and total pair count.
 
@@ -5498,16 +5490,14 @@ class DnComplex(CnComplex):
             If ``affiliation_column`` is absent from ``self.motl.df``.
         """
         self._require_affiliation()
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
-        if not self._rings_split:
-            self.split_rings(ring_column=self._ring_column, axis=self._split_axis)
+        self._ensure_rings()
 
         occ_df = self.occupancy()
-        spacing_df = self.ring_spacing(pixel_size=ps)
+        spacing_df = self.ring_spacing()
         twist_df = self.inter_ring_twist(degrees=True)
 
-        circ_df_ring = self.circumference(pixel_size=ps)
-        diam_df_ring, _ = self.diameter(pixel_size=ps)
+        circ_df_ring = self.circumference()
+        diam_df_ring, _ = self.diameter()
 
         merge_cols = ["tomo_id", "object_id"]
         circ_agg = circ_df_ring.groupby(merge_cols)["circumference"].mean().reset_index()
@@ -5530,7 +5520,7 @@ class DnComplex(CnComplex):
                     "x": float(bary[0]),
                     "y": float(bary[1]),
                     "z": float(bary[2]),
-                    "radius": r,
+                    "radius": r * self.pixel_size,
                 }
             )
         geo_df = pd.DataFrame(center_rows)
@@ -5564,12 +5554,14 @@ class NPC(CnComplex):
        with ``ring_index`` to target one ring in the multi-motl list).
     3. :meth:`merge` — unify ``object_id`` across rings, stamp ring column,
        and reconcile IR orientations.  One-way irreversible.
+
+    *pixel_size* (default 1.0): Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
+    Every ring gets the same pixel size.
     """
 
     _DISPATCH_PER_RING: frozenset[str] = frozenset(
         {
             # Inherited from SymmetricComplex
-            "step_statistics",
             "occupancy",
             "clean_per_object",
             "merge_subunits",
@@ -5608,8 +5600,8 @@ class NPC(CnComplex):
             tomo_id_column=tomo_id_column,
             subtomo_id_column=subtomo_id_column,
             center_method=center_method,
+            pixel_size=pixel_size,
         )
-        self.pixel_size: float = float(pixel_size)
         self.radius: float | None = radius
         self._ring_column = ring_column
         self.rings = [
@@ -5621,6 +5613,7 @@ class NPC(CnComplex):
                 tomo_id_column=tomo_id_column,
                 subtomo_id_column=subtomo_id_column,
                 center_method=center_method,
+                pixel_size=pixel_size,
             )
             for m in loaded
         ]
@@ -5693,7 +5686,7 @@ class NPC(CnComplex):
             rows.append(row)
         return pd.DataFrame(rows)
 
-    def get_object_stats(self, *, pixel_size: float | None = None) -> pd.DataFrame:
+    def get_object_stats(self) -> pd.DataFrame:
         """Comprehensive per-object statistics for NPC structures.
 
         Pre-merge direct calls dispatch per-ring via :meth:`per_ring`;
@@ -5702,13 +5695,15 @@ class NPC(CnComplex):
         centre, radius and circumference row.
 
         Uses ``geom.barycenter`` and ``_circumradius_for_group``.
-        Circumference = 2π × circumradius × pixel_size.
+        Circumference = 2π × circumradius × :attr:`pixel_size`; radius,
+        diameter and spacing are scaled by :attr:`pixel_size` as well, while
+        the barycentre stays in voxels, like the motl.
         Spacing and twist (per adjacent ring pair, not per ring) are merged
         on ``(tomo_id, object_id)``.
         """
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+        ps = self.pixel_size
         if not self._rings_merged:
-            return self.per_ring("get_object_stats", pixel_size=ps)
+            return self.per_ring("get_object_stats")
         self._require_affiliation()
 
         tomo_col = self.tomo_id_column
@@ -5742,7 +5737,7 @@ class NPC(CnComplex):
                 "x": float(bary[0]),
                 "y": float(bary[1]),
                 "z": float(bary[2]),
-                "radius": r,
+                "radius": r * ps,
                 "circumference": 2.0 * np.pi * r * ps,
                 "mean_diameter": 2.0 * r * ps,
             }
@@ -5753,7 +5748,7 @@ class NPC(CnComplex):
 
         result = occ_df.merge(geo_df, on=group_cols, how="outer")
         if len(self._ring_motls) > 1:
-            spacing_df = self.ring_spacing(pixel_size=ps)
+            spacing_df = self.ring_spacing()
             result = result.merge(spacing_df, on=[tomo_col, aff_col], how="left")
             if hasattr(self, "inter_ring_twist"):
                 twist_df = self.inter_ring_twist(degrees=True)
@@ -6833,7 +6828,6 @@ class NPC(CnComplex):
     def get_subunit_stats(
         self,
         *,
-        pixel_size: float | None = None,
         degrees: bool = True,
         include_flagged: bool = False,
         flag_column: str = "geom5",
@@ -6856,7 +6850,7 @@ class NPC(CnComplex):
             - ``tomo_id``, ``object_id``, ring_column (post-merge),
               ``subunit_index_column``, ``subtomo_id``
             - ``distance_to_centre`` — distance from particle to ring
-              centre (voxels × *pixel_size*)
+              centre (voxels × :attr:`pixel_size`)
             - ``opposite_distance`` — 3-D Euclidean distance between
               diametrically opposite subunits (same ``object_id``/ring,
               indices differing by ``n // 2``); ``NaN`` when ``n`` is odd
@@ -6881,8 +6875,6 @@ class NPC(CnComplex):
 
         Parameters
         ----------
-        pixel_size : float, default=1.0
-            Voxel size; distances are multiplied by this.
         degrees : bool, default=True
             Return angles in degrees when ``True``, radians otherwise.
         include_flagged : bool, default=False
@@ -6908,7 +6900,7 @@ class NPC(CnComplex):
         if gaps not in ("full", "holey"):
             raise ValueError(f"gaps must be 'full' or 'holey', got {gaps!r}.")
         gaps_arg = gaps
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+        ps = self.pixel_size
 
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
@@ -7238,7 +7230,6 @@ class NPC(CnComplex):
     def ring_ellipticity(
         self,
         *,
-        pixel_size: float | None = None,
         flag_column: str = "geom5",
         include_flagged: bool = False,
     ) -> pd.DataFrame:
@@ -7255,8 +7246,6 @@ class NPC(CnComplex):
 
         Parameters
         ----------
-        pixel_size : float, default=1.0
-            Voxel size; ``major`` and ``minor`` are multiplied by this.
         flag_column : str, default ``'geom5'``
             Column checked for the per-pore ambiguity flag.
         include_flagged : bool, default=False
@@ -7272,12 +7261,12 @@ class NPC(CnComplex):
             - ``ellipticity`` — fractional 2-fold amplitude ``A / c0``
               (0 = circle)
             - ``axis_ratio`` — minor/major ratio ``(c0 − A) / (c0 + A)``
-            - ``major``, ``minor`` — semi-axes (voxels × *pixel_size*)
+            - ``major``, ``minor`` — semi-axes (voxels × :attr:`pixel_size`)
             - ``orientation`` — major-axis angle (°) in the ring plane,
               ``0.5 · atan2(s2, c2)``
             - ``partial_arc`` — 1 if coverage < 180° or n_used < 5, else 0
         """
-        ps: float = getattr(self, "pixel_size", 1.0) if pixel_size is None else float(pixel_size)
+        ps = self.pixel_size
         tomo_col = self.tomo_id_column
         aff_col = self.affiliation_column
         ring_col = self._ring_column
@@ -7563,10 +7552,11 @@ class NPC(CnComplex):
             for ring affiliation and *subunit_index_column* for the 1-based
             subunit index within each ring.
         pixel_size : float, default=1.0
-            Ångström-per-voxel scale factor applied to all distances.
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
         store_column : MotlColumn, default='geom4'
             Column in the returned motl that carries each ring's mean
-            diameter.  ``NaN`` for rings with no opposite-pair matches.
+            diameter in voxels.  ``NaN`` for rings with no opposite-pair
+            matches.
         symmetry : int, default=8
             Rotational symmetry order.  Determines the pair offset
             ``symmetry // 2``.
@@ -7614,14 +7604,14 @@ class NPC(CnComplex):
             if not pair_rows:
                 continue
             idx = np.asarray(pair_rows)
-            dists = geom.point_pairwise_dist(coord[idx[:, 0], :], coord[idx[:, 1], :]) * pixel_size
+            dists = geom.point_pairwise_dist(coord[idx[:, 0], :], coord[idx[:, 1], :])
             mean_d = float(np.mean(dists))
             diameters_col[grp_idx] = mean_d
             rows.append(
                 {
                     tomo_id_column: float(tomo_id),
                     affiliation_column: float(object_id),
-                    "mean_diameter": mean_d,
+                    "mean_diameter": mean_d * pixel_size,
                     "n_pairs": int(len(dists)),
                 }
             )
@@ -7699,6 +7689,7 @@ class NPC(CnComplex):
                     affiliation_column: object_ids,
                 }
             )
+            result.update_coordinates()
             result.renumber_particles()
         result.df.fillna(0.0, inplace=True)
         return result
@@ -8101,8 +8092,10 @@ class BlockLayer:
     source_block_count_column : MotlColumn, default="geom2"
         Column written with the number of distinct source blocks in the gaps
         motl (:meth:`~PleomorphicAssembly.get_gaps_as_motl`).
-    pixel_size : float, default=1.0
-        Ångström-per-voxel scale factor.
+    pixel_size : float or None, default=None
+        Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
+        ``None`` means not given; the assembly then resolves its pixel size
+        from the other values it is given, or uses 1.0.
     tomo_id_column : MotlColumn, default="tomo_id"
         Column identifying the tomogram each block belongs to.
     subtomo_id_column : MotlColumn, default="subtomo_id"
@@ -8156,7 +8149,7 @@ class BlockLayer:
         face_id_column: MotlColumn = "geom4",
         face_size_column: MotlColumn = "geom5",
         source_block_count_column: MotlColumn = "geom2",
-        pixel_size: float = 1.0,
+        pixel_size: float | None = None,
         tomo_id_column: MotlColumn = "tomo_id",
         subtomo_id_column: MotlColumn = "subtomo_id",
         class_column: MotlColumn = "class",
@@ -8191,7 +8184,7 @@ class BlockLayer:
         self.face_id_column: MotlColumn = face_id_column
         self.face_size_column: MotlColumn = face_size_column
         self.source_block_count_column: MotlColumn = source_block_count_column
-        self.pixel_size: float = float(pixel_size)
+        self.pixel_size: float | None = None if pixel_size is None else float(pixel_size)
         self.tomo_id_column: MotlColumn = tomo_id_column
         self.subtomo_id_column: MotlColumn = subtomo_id_column
         self.class_column: MotlColumn = class_column
@@ -8226,12 +8219,15 @@ class ContactGraph:
     :meth:`_init_block_layer` sets these attributes.
 
     * Block layer (:attr:`_BLOCK_LAYER_FIELDS`): ``blocks``,
-      ``block_definition``, the column names, ``_block_pixel_size``,
-      ``max_cycle_length``, the tolerances, ``site_type_codes`` and
-      ``_allowed_pairs``.
+      ``block_definition``, the column names, ``max_cycle_length``, the
+      tolerances, ``site_type_codes`` and ``_allowed_pairs``.
     * Graph state (:attr:`_GRAPH_STATE_FIELDS`), written by :meth:`connect`:
       ``_site_table``, ``_faces``, ``_max_distance``, ``_face_method``,
       ``_added`` and ``_all_state``.
+
+    ``pixel_size`` is not copied with the block layer: the subclass
+    constructor resolves it with :meth:`_set_pixel_size` from every value
+    it is given, the block layer's among them (:meth:`_given_pixel_size`).
     """
 
     _BLOCK_LAYER_FIELDS: tuple[tuple[str, str], ...] = (
@@ -8244,7 +8240,6 @@ class ContactGraph:
         ("face_id_column", "face_id_column"),
         ("face_size_column", "face_size_column"),
         ("source_block_count_column", "source_block_count_column"),
-        ("_block_pixel_size", "pixel_size"),
         ("tomo_id_column", "tomo_id_column"),
         ("affiliation_column", "affiliation_column"),
         ("subtomo_id_column", "subtomo_id_column"),
@@ -8273,7 +8268,8 @@ class ContactGraph:
         shares data with *source*: methods that rewrite the blocks motl
         (e.g. ``unify_polarity``) leave a :class:`BlockLayer` passed in
         unchanged.  When *source* is another assembly, the graph state is
-        copied with them; otherwise the graph state starts empty.
+        copied with them; otherwise the graph state starts empty.  The pixel
+        size is set to 1.0, not given; the constructor resolves it.
         """
         self.blocks: cryomotl.Motl | None = None
         self.block_definition: BlockDefinition | dict[float, BlockDefinition] | None = None
@@ -8284,7 +8280,8 @@ class ContactGraph:
         self.face_id_column: MotlColumn = "geom4"
         self.face_size_column: MotlColumn = "geom5"
         self.source_block_count_column: MotlColumn = "geom2"
-        self._block_pixel_size: float = 1.0
+        self.pixel_size: float = 1.0
+        self._pixel_size_given: bool = False
         self.tomo_id_column: MotlColumn = "tomo_id"
         self.affiliation_column: MotlColumn = "object_id"
         self.subtomo_id_column: MotlColumn = "subtomo_id"
@@ -8313,6 +8310,32 @@ class ContactGraph:
             for attr in self._GRAPH_STATE_FIELDS:
                 setattr(self, attr, copy.deepcopy(getattr(source, attr)))
 
+    @staticmethod
+    def _given_pixel_size(source: "BlockLayer | ContactGraph | None") -> float | None:
+        """The pixel size *source* was given, or ``None`` when it was given none."""
+        if source is None:
+            return None
+        if isinstance(source, ContactGraph):
+            return source.pixel_size if source._pixel_size_given else None
+        return source.pixel_size
+
+    def _set_pixel_size(self, given: list[tuple[str, float | None]]) -> None:
+        """Set :attr:`pixel_size` from the given ``(source, value)`` pairs; ``None`` values are not given.
+
+        With no value given the pixel size is 1.0.
+
+        Raises
+        ------
+        ValueError
+            If two of the given values differ; the message names them all.
+        """
+        named = [(source, float(value)) for source, value in given if value is not None]
+        values = [value for _, value in named]
+        if values and not np.allclose(values, values[0]):
+            raise ValueError("Pixel sizes differ: " + ", ".join(f"{source} {value}" for source, value in named) + ".")
+        self.pixel_size = values[0] if values else 1.0
+        self._pixel_size_given = bool(values)
+
     @classmethod
     def from_blocks(
         cls,
@@ -8322,7 +8345,7 @@ class ContactGraph:
         site_shift: TripletLike,
         symmetry_column: MotlColumn | None = None,
         affiliation_column: MotlColumn = "object_id",
-        pixel_size: float = 1.0,
+        pixel_size: float | None = None,
         tomo_id_column: MotlColumn = "tomo_id",
     ) -> Self:
         """Build the assembly from a block motl without constructing a :class:`BlockDefinition` directly.
@@ -8368,8 +8391,9 @@ class ContactGraph:
         affiliation_column : MotlColumn, default="object_id"
             Column whose value identifies which assembly each block belongs to.
             Blocks with different values are never connected by :meth:`connect`.
-        pixel_size : float, default=1.0
-            Pixel size of the block layer.
+        pixel_size : float or None, default=None
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
+            Given to the :class:`BlockLayer`; ``None`` means not given.
         tomo_id_column : MotlColumn, default="tomo_id"
             Column identifying the tomogram each block belongs to.
 
@@ -8436,16 +8460,6 @@ class ContactGraph:
     def has_blocks(self) -> bool:
         """True when a block layer is present."""
         return self.blocks is not None
-
-    @property
-    def block_pixel_size(self) -> float:
-        """Ångström-per-voxel scale factor for block-layer computations.
-
-        Block-layer methods (contact distances, face centroids, site
-        annotations) multiply voxel-space coordinates by this value.  It never
-        overwrites a surface's own scale.
-        """
-        return self._block_pixel_size
 
     @gui_exposed(label="Sites as motl", group="Lattice setup", order=40, returns="motl", category="pleomorphic-op")
     def get_sites_as_motl(self, scope: Literal["original", "inferred", "all"] = "original") -> "cryomotl.Motl":
@@ -8678,19 +8692,10 @@ class ContactGraph:
             return self.block_definition.effective_n_sites
 
         # Block centres
-        block_coords_by_id: dict[float, np.ndarray] = {}
-        for _, brow in _blks.df.iterrows():
-            bid = float(brow[self.subtomo_id_column])
-            sx = float(brow.get("shift_x", 0.0))
-            sy = float(brow.get("shift_y", 0.0))
-            sz = float(brow.get("shift_z", 0.0))
-            block_coords_by_id[bid] = np.array(
-                [
-                    float(brow["x"]) + sx,
-                    float(brow["y"]) + sy,
-                    float(brow["z"]) + sz,
-                ]
-            )
+        _blk_coords = _blks.get_coordinates().astype(float)
+        block_coords_by_id: dict[float, np.ndarray] = {
+            float(bid): _blk_coords[i] for i, bid in enumerate(_blks.df[self.subtomo_id_column].to_numpy())
+        }
 
         H = len(site_df)
         block_ids = site_df[self.block_id_column].values.astype(float)
@@ -9315,7 +9320,9 @@ class ContactGraph:
             ``partner_block_id``, ``partner_site``, ``patch_id``,
             ``face_id``, ``n_candidates``, ``site_distance``,
             ``block_distance``, ``bend_angle``, ``label_offset``,
-            ``mismatch_x``, ``mismatch_y``, ``mismatch_z``.
+            ``mismatch_x``, ``mismatch_y``, ``mismatch_z``.  The two
+            distances and the three mismatch components are scaled by
+            :attr:`pixel_size`.
 
         Raises
         ------
@@ -9370,8 +9377,8 @@ class ContactGraph:
             c_h = np.array([st.at[h, "cx"], st.at[h, "cy"], st.at[h, "cz"]])
             c_p = np.array([st.at[p, "cx"], st.at[p, "cy"], st.at[p, "cz"]])
 
-            site_dist = float(np.linalg.norm(P_p - P_h)) * self._block_pixel_size
-            block_dist = float(np.linalg.norm(c_p - c_h)) * self._block_pixel_size
+            site_dist = float(np.linalg.norm(P_p - P_h)) * self.pixel_size
+            block_dist = float(np.linalg.norm(c_p - c_h)) * self.pixel_size
 
             R_h = all_R[block_to_row[block_h]]
             R_p = all_R[block_to_row[block_p]]
@@ -9387,7 +9394,7 @@ class ContactGraph:
                 label_offset = float("nan")
 
             mismatch_world = P_p - P_h
-            mismatch_local = R_h.inv().apply(mismatch_world)
+            mismatch_local = R_h.inv().apply(mismatch_world) * self.pixel_size
 
             rows.append(
                 {
@@ -9941,6 +9948,7 @@ class PleomorphicAssembly(ContactGraph):
         surface: Mesh | OrientedPointCloud | "PleomorphicAssembly" | None = None,
         *,
         block_layer: "BlockLayer | None" = None,
+        pixel_size: float | None = None,
     ) -> None:
         """Create a :class:`PleomorphicAssembly`.
 
@@ -9950,17 +9958,26 @@ class PleomorphicAssembly(ContactGraph):
             Envelope surface.  When a :class:`PleomorphicAssembly` is passed,
             its ``_surface`` is extracted; if *block_layer* is also ``None``,
             the block layer is copied from it as well.  ``None`` means no
-            envelope.
+            envelope.  The assembly keeps a copy in voxels; see
+            :attr:`surface`.
         block_layer : BlockLayer or None, default=None
             Pre-built block layer carrying the blocks motl, block definition,
-            column names, and scale factor.  Use :meth:`from_blocks` to
+            column names, and pixel size.  Use :meth:`from_blocks` to
             construct one without building a :class:`BlockLayer` directly.
+        pixel_size : float or None, default=None
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
+            Given values are this argument, the pixel size of the block
+            layer, and the ``pixel_size`` of *surface* when it is set and not
+            1.0; with none given, 1.0 is used.
 
         Raises
         ------
         TypeError
             If neither *surface* nor *block_layer* is provided, or if
             *surface* has an unsupported type.
+        ValueError
+            If two given pixel sizes differ, or the ``pixel_size`` of
+            *surface* differs between its three axes.
 
         Notes
         -----
@@ -9982,8 +9999,9 @@ class PleomorphicAssembly(ContactGraph):
         self._block_class_non_unique: bool = False
 
         # --- Envelope ---
+        envelope = None
         if isinstance(surface, PleomorphicAssembly):
-            self._surface = surface._surface
+            envelope = surface._surface
             if copy_from is not None:
                 self._envelopes = copy.deepcopy(surface._envelopes)
                 self._envelope_scope = surface._envelope_scope
@@ -9993,31 +10011,65 @@ class PleomorphicAssembly(ContactGraph):
                     f"Unsupported surface type: {type(surface)}. "
                     "Must be Mesh, OrientedPointCloud, or PleomorphicAssembly."
                 )
-            self._surface = surface
+            envelope = surface
 
-        if self._surface is None and self.blocks is None and block_layer is None:
+        if envelope is None and self.blocks is None and block_layer is None:
             raise TypeError(
                 "PleomorphicAssembly requires at least a surface " "(Mesh or OrientedPointCloud) or a block_layer."
             )
 
-        # --- Block layer (adopted by _init_block_layer above) ---
-        if block_layer is not None:
-            surf_ps = getattr(self._surface, "pixel_size", None)
-            if surf_ps is not None:
-                surf_scalar = float(np.mean(np.asarray(surf_ps, dtype=float)))
-                if abs(self._block_pixel_size - surf_scalar) > 1e-9:
-                    import warnings as _warn
-
-                    _warn.warn(
-                        f"block_layer.pixel_size ({self._block_pixel_size}) differs from "
-                        f"surface pixel_size ({surf_scalar}). "
-                        f"Block-layer computations use {self._block_pixel_size}; "
-                        f"surface measurements use the mesh's own scale.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
+        # --- Pixel size: one value from everything given; the surface's is added by the setter ---
+        surface_assembly = surface if isinstance(surface, PleomorphicAssembly) else None
+        self._set_pixel_size(
+            [
+                ("pixel_size", pixel_size),
+                ("block layer", self._given_pixel_size(block_layer)),
+                ("surface assembly", self._given_pixel_size(surface_assembly)),
+            ]
+        )
+        if envelope is not None:
+            self.surface = envelope
 
         self._compute_block_class()
+
+    @staticmethod
+    def _surface_pixel_size(surface: Mesh | OrientedPointCloud) -> float | None:
+        """The ``pixel_size`` *surface* carries, or ``None`` when it is unset or 1.0 (vertices in voxels).
+
+        Raises
+        ------
+        ValueError
+            If the three values of ``surface.pixel_size`` differ.
+        """
+        if surface.pixel_size is None:
+            return None
+        values = np.asarray(surface.pixel_size, dtype=float).reshape(-1)
+        if not np.allclose(values, values[0]):
+            raise ValueError(f"The surface pixel size differs between axes ({values.tolist()}); one value is required.")
+        value = float(values[0])
+        return None if np.isclose(value, 1.0) else value
+
+    @staticmethod
+    def _scaled_copy(surface: Mesh | OrientedPointCloud, factor: float, pixel_size: float) -> Mesh | OrientedPointCloud:
+        """Deep copy of *surface* with its vertices multiplied by *factor* and ``pixel_size`` set to *pixel_size*.
+
+        A mesh is scaled with :meth:`~cryocat.core.surface.Mesh.scale`, which
+        keeps the curvatures it has computed or loaded and converts them to
+        the new units; a point cloud carries none and is transformed.
+        *surface* itself is not changed.
+        """
+        out = copy.deepcopy(surface)
+        if factor != 1.0:
+            if isinstance(out, Mesh):
+                out.scale(factor)
+            else:
+                out.transform(np.diag([factor, factor, factor, 1.0]))
+        out.pixel_size = Surface._coerce_pixel_size_array(pixel_size)
+        return out
+
+    def _physical_copy(self, surface: Mesh | OrientedPointCloud) -> Mesh | OrientedPointCloud:
+        """Deep copy of the voxel *surface* in physical units: vertices times :attr:`pixel_size`, which it carries."""
+        return self._scaled_copy(surface, self.pixel_size, self.pixel_size)
 
     def _compute_block_class(self) -> None:
         """Set ``_block_class`` and ``_block_class_non_unique`` from the blocks motl.
@@ -10052,12 +10104,26 @@ class PleomorphicAssembly(ContactGraph):
 
     @property
     def surface(self) -> Mesh | OrientedPointCloud:
-        """The wrapped :class:`Mesh` or :class:`OrientedPointCloud`.
+        """The wrapped :class:`Mesh` or :class:`OrientedPointCloud`, in voxels.
+
+        Setting it stores a deep copy, so the caller's surface is not
+        changed.  When the surface's ``pixel_size`` is set and not 1.0, its
+        vertices are taken to be in physical units: the copy's vertices are
+        divided by it and its ``pixel_size`` becomes 1.0, and the curvatures
+        it carries are converted to voxels.  That pixel size
+        must agree with a pixel size already given to the assembly, and
+        becomes the assembly's pixel size when none was given.  A surface
+        whose ``pixel_size`` is ``None`` or 1.0 is taken to be in voxels.
 
         Raises
         ------
         ValueError
-            If this instance has no envelope (was created with blocks only).
+            If this instance has no envelope (was created with blocks only);
+            on setting, if the surface's pixel size differs from the
+            assembly's or between its three axes.
+        TypeError
+            On setting, if the value is neither a Mesh nor an
+            OrientedPointCloud.
         """
         if self._surface is None:
             raise ValueError(
@@ -10068,7 +10134,14 @@ class PleomorphicAssembly(ContactGraph):
 
     @surface.setter
     def surface(self, value: Mesh | OrientedPointCloud | None) -> None:
-        self._surface = value
+        if value is None:
+            self._surface = None
+            return
+        if not isinstance(value, (Mesh, OrientedPointCloud)):
+            raise TypeError(f"Unsupported surface type: {type(value)}. Must be Mesh or OrientedPointCloud.")
+        surface_ps = self._surface_pixel_size(value)
+        self._set_pixel_size([("assembly", self._given_pixel_size(self)), ("surface", surface_ps)])
+        self._surface = self._scaled_copy(value, 1.0 if surface_ps is None else 1.0 / surface_ps, 1.0)
 
     @property
     def has_envelope(self) -> bool:
@@ -10882,6 +10955,7 @@ class PleomorphicAssembly(ContactGraph):
             return motl
         motl = cryomotl.Motl()
         motl.df = pd.DataFrame(rows)[cryomotl.Motl.motl_columns]
+        motl.update_coordinates()
         return motl
 
     def check_object_grouping(self, scope: Literal["original", "inferred", "all"] = "original") -> pd.DataFrame:
@@ -11664,7 +11738,7 @@ class PleomorphicAssembly(ContactGraph):
             sub = block_df[block_df[oc] == orig]
             if sub.empty:
                 continue
-            xyz = sub[["x", "y", "z"]].values + sub[["shift_x", "shift_y", "shift_z"]].values
+            xyz = cryomotl.Motl(sub).get_coordinates()
             fig.add_trace(_go.Scatter3d(
                 x=xyz[:, 0],
                 y=xyz[:, 1],
@@ -11874,6 +11948,7 @@ class PleomorphicAssembly(ContactGraph):
                 data[col][k] = val
         motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
         if out_rows:
+            motl.update_coordinates()
             motl.renumber_particles()
         diag_df = pd.DataFrame(diag_rows, columns=["n_source_blocks"])
         diag_df.insert(0, "gap_id", range(1, len(diag_df) + 1))
@@ -12546,6 +12621,7 @@ class PleomorphicAssembly(ContactGraph):
 
         motl = cryomotl.Motl(pd.DataFrame(data)[cryomotl.Motl.motl_columns])
         if out_rows:
+            motl.update_coordinates()
             self._update_added(motl.df.copy(), origin=2)
             _origin_2_mask = self._added.df[self._origin_column] == 2.0
             _assigned_sids = self._added.df.loc[_origin_2_mask, self.subtomo_id_column].values
@@ -12734,7 +12810,7 @@ class PleomorphicAssembly(ContactGraph):
 
         for cand_tomo in sorted(cand_df[tomo_col].unique()):
             cand_t = cand_df[cand_df[tomo_col] == cand_tomo].reset_index(drop=True)
-            cand_coords_t = (cand_t[["x", "y", "z"]].values + cand_t[["shift_x", "shift_y", "shift_z"]].values).astype(float)
+            cand_coords_t = cryomotl.Motl(cand_t).get_coordinates().astype(float)
 
             # Reference blocks restricted to this tomogram — tomo separation is structural
             ref_tomo_mask = (self.blocks.df[tomo_col] == cand_tomo).values
@@ -12867,6 +12943,7 @@ class PleomorphicAssembly(ContactGraph):
             return cryomotl.Motl(pd.DataFrame(columns=cryomotl.Motl.motl_columns)), diagnostics
 
         motl_out = cryomotl.Motl(pd.DataFrame(out_rows)[cryomotl.Motl.motl_columns])
+        motl_out.update_coordinates()
         return motl_out, diagnostics
 
     def adopt_recovered(
@@ -12975,14 +13052,8 @@ class PleomorphicAssembly(ContactGraph):
         _zero_mask = rec_df[self.class_column] == 0.0
         if _zero_mask.any():
             from scipy.spatial import cKDTree as _cKDTree
-            _real_xyz = (
-                real_df[["x", "y", "z"]].values.astype(float)
-                + real_df[["shift_x", "shift_y", "shift_z"]].values.astype(float)
-            )
-            _rec_xyz = (
-                rec_df.loc[_zero_mask, ["x", "y", "z"]].values.astype(float)
-                + rec_df.loc[_zero_mask, ["shift_x", "shift_y", "shift_z"]].values.astype(float)
-            )
+            _real_xyz = self.blocks.get_coordinates().astype(float)
+            _rec_xyz = cryomotl.Motl(rec_df).get_coordinates().astype(float)[_zero_mask.to_numpy()]
             _, _nn_idx = _cKDTree(_real_xyz).query(_rec_xyz, k=1)
             _nn_classes = real_df[self.class_column].values.astype(float)[_nn_idx]
             _nn_classes[_nn_classes == 0.0] = 1.0
@@ -13013,13 +13084,15 @@ class PleomorphicAssembly(ContactGraph):
         affiliation: int | float | None = None,
         tomo_id: float | None = None,
         scope: Literal["original", "inferred", "all"] = "original",
+        physical_units: bool = False,
     ) -> "dict[tuple[float, float], Mesh]":
         """Build one triangulated mesh envelope per (tomo_id, affiliation) object.
 
         Each object's mesh is built from its face polygon network: block
         positions become vertices, face centroids become hub vertices, and
         each face is fan-triangulated from its centroid.  Normals are computed
-        on the returned meshes.
+        on the returned meshes.  The meshes are in voxels, like the block
+        motl, with ``pixel_size`` 1.0.
 
         The result is also stored as :attr:`_envelopes` so that
         :meth:`get_shape_stats` can use it without rebuilding.
@@ -13033,6 +13106,11 @@ class PleomorphicAssembly(ContactGraph):
             Restrict to this tomogram.  ``None`` processes every tomogram.
         scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
             Block pool to use (see :meth:`_blocks_for_scope`).
+        physical_units : bool, default=False
+            Return deep copies whose vertices are multiplied by
+            :attr:`pixel_size` and whose ``pixel_size`` is set to it, as
+            :meth:`~cryocat.core.surface.Mesh.from_mrc` produces; the stored
+            envelopes stay in voxels.  Save one with its own ``save``.
 
         Returns
         -------
@@ -13081,16 +13159,8 @@ class PleomorphicAssembly(ContactGraph):
             block_id_to_vx: dict[float, int] = {bid: i for i, bid in enumerate(all_block_ids_ordered)}
             n_blocks = len(all_block_ids_ordered)
 
-            block_verts = np.array(
-                [
-                    _blks_coords[block_to_row[bid]] * self._block_pixel_size
-                    for bid in all_block_ids_ordered
-                ]
-            )
-
-            face_centroid_verts = (
-                grp[["centroid_x", "centroid_y", "centroid_z"]].values * self._block_pixel_size
-            )
+            block_verts = np.array([_blks_coords[block_to_row[bid]] for bid in all_block_ids_ordered])
+            face_centroid_verts = grp[["centroid_x", "centroid_y", "centroid_z"]].values
             vertices = np.vstack([block_verts, face_centroid_verts])
 
             triangles: list[list[int]] = []
@@ -13122,11 +13192,13 @@ class PleomorphicAssembly(ContactGraph):
             mesh.vertices = vertices
             mesh.faces = faces
             mesh.compute_normals()
-            mesh.pixel_size = self._block_pixel_size
+            mesh.pixel_size = Surface._coerce_pixel_size_array(1.0)
             result[(float(tval), float(aval))] = mesh
 
         self._envelopes = result
         self._envelope_scope = scope
+        if physical_units:
+            return {key: self._physical_copy(mesh) for key, mesh in result.items()}
         return result
 
     def envelope_from_blocks(
@@ -13136,6 +13208,7 @@ class PleomorphicAssembly(ContactGraph):
         tomo_id: float | None = None,
         min_blocks: int = 4,
         scope: Literal["original", "inferred", "all"] = "original",
+        physical_units: bool = False,
     ) -> "dict[tuple[float, float], Mesh]":
         """Build one triangulated mesh envelope per object using block positions.
 
@@ -13144,7 +13217,8 @@ class PleomorphicAssembly(ContactGraph):
         no normal re-estimation is performed.  When *radius* is ``None``, the
         pivot radius is estimated as the mean nearest-neighbour distance among
         the blocks of each object (via
-        :meth:`~cryocat.core.surface.Mesh.from_ball_pivoting`).
+        :meth:`~cryocat.core.surface.Mesh.from_ball_pivoting`).  The meshes
+        are in voxels, like the block motl, with ``pixel_size`` 1.0.
 
         Objects with fewer than *min_blocks* blocks, objects whose meshing
         raises, and meshes with fewer than 4 faces are skipped with a warning.
@@ -13155,7 +13229,8 @@ class PleomorphicAssembly(ContactGraph):
         Parameters
         ----------
         radius : float or None, default=None
-            Ball-pivoting radius.  ``None`` auto-estimates per object.
+            Ball-pivoting radius, in voxels like the block motl.  ``None``
+            auto-estimates per object.
         affiliation : int, float, or None, default=None
             Restrict to this affiliation value (matches the value in
             :attr:`affiliation_column`).  ``None`` processes every affiliation.
@@ -13165,6 +13240,11 @@ class PleomorphicAssembly(ContactGraph):
             Minimum number of blocks to attempt meshing an object.
         scope : {``'original'``, ``'inferred'``, ``'all'``}, default=``'original'``
             Block pool to use (see :meth:`_blocks_for_scope`).
+        physical_units : bool, default=False
+            Return deep copies whose vertices are multiplied by
+            :attr:`pixel_size` and whose ``pixel_size`` is set to it, as
+            :meth:`~cryocat.core.surface.Mesh.from_mrc` produces; the stored
+            envelopes stay in voxels.  Save one with its own ``save``.
 
         Returns
         -------
@@ -13217,15 +13297,9 @@ class PleomorphicAssembly(ContactGraph):
                     skipped.append((tval_f, aff_val_f))
                     continue
 
-                import copy as _copy
-                s = self._block_pixel_size
-                opc_scaled = _copy.deepcopy(opc)
-                opc_scaled.transform(np.diag([s, s, s, 1.0]))
-                opc_scaled.pixel_size = s
-
                 radii_arg = [float(radius), float(radius) * 2.0] if radius is not None else None
                 try:
-                    mesh = Mesh.from_ball_pivoting(opc_scaled, radii=radii_arg)
+                    mesh = Mesh.from_ball_pivoting(opc, radii=radii_arg)
                 except Exception:
                     skipped.append((tval_f, aff_val_f))
                     continue
@@ -13234,6 +13308,7 @@ class PleomorphicAssembly(ContactGraph):
                     skipped.append((tval_f, aff_val_f))
                     continue
 
+                mesh.pixel_size = Surface._coerce_pixel_size_array(1.0)
                 result[(tval_f, aff_val_f)] = mesh
 
         if skipped:
@@ -13253,6 +13328,8 @@ class PleomorphicAssembly(ContactGraph):
 
         self._envelopes = result
         self._envelope_scope = scope
+        if physical_units:
+            return {key: self._physical_copy(mesh) for key, mesh in result.items()}
         return result
 
     def get_shape_stats(self) -> pd.DataFrame:
@@ -13260,7 +13337,8 @@ class PleomorphicAssembly(ContactGraph):
 
         Call :meth:`envelope_from_faces` or :meth:`envelope_from_blocks` first
         to populate :attr:`_envelopes`.  Curvatures are computed internally on
-        each mesh.
+        each mesh, in voxels; ``radius`` and ``fit_residual`` are scaled by
+        :attr:`pixel_size` and ``area`` by its square.
 
         Returns
         -------
@@ -13298,6 +13376,7 @@ class PleomorphicAssembly(ContactGraph):
                 "envelope_from_blocks() first."
             )
 
+        ps = self.pixel_size
         rows: list[dict] = []
         for (tval, aval), mesh in self._envelopes.items():
             # Curvatures (also populates _face_areas and _vertex_areas)
@@ -13342,9 +13421,9 @@ class PleomorphicAssembly(ContactGraph):
                 self.tomo_id_column: tval,
                 self.affiliation_column: aval,
                 "scope": self._envelope_scope,
-                "radius": radius,
+                "radius": radius * ps,
                 "sphere_fraction": sphere_fraction,
-                "area": area,
+                "area": area * ps**2,
                 "b_a": b_a,
                 "c_a": c_a,
                 "long_axis_x": long_ax[0],
@@ -13353,7 +13432,7 @@ class PleomorphicAssembly(ContactGraph):
                 "short_axis_x": short_ax[0],
                 "short_axis_y": short_ax[1],
                 "short_axis_z": short_ax[2],
-                "fit_residual": fit_residual,
+                "fit_residual": fit_residual * ps,
             })
 
         return pd.DataFrame(rows)
@@ -13399,7 +13478,8 @@ class PleomorphicAssembly(ContactGraph):
             block.  Blocks whose ray misses the surface entirely return NaN for
             all output columns; the number of misses is printed to stdout.
         max_distance : float or None, default=None
-            Maximum ray travel length for ``method="intersection"``.
+            Maximum ray travel length for ``method="intersection"``, in
+            voxels like the block motl.
             When ``None`` the bounding-box diagonal of the envelope is used,
             which is always large enough to reach any point on the surface.
             Ignored for ``method="projection"``.
@@ -13411,6 +13491,9 @@ class PleomorphicAssembly(ContactGraph):
             ``closest_x``, ``closest_y``, ``closest_z``, ``primitive_id``,
             ``normal_angle``, ``mean_curvature``, ``gaussian_curvature``.
             For ``method="intersection"`` rows that missed are all-NaN.
+            ``envelope_distance`` is scaled by :attr:`pixel_size`,
+            ``mean_curvature`` is divided by it and ``gaussian_curvature`` by
+            its square; ``closest_x/y/z`` are positions and stay in voxels.
 
         Raises
         ------
@@ -13426,12 +13509,11 @@ class PleomorphicAssembly(ContactGraph):
             mask = self.blocks.df[tomo_col] == tomo_id
             blocks_df = self.blocks.df[mask].reset_index(drop=True)
             angles = self.blocks.get_angles()[mask.values].astype(float)
-            c = self.blocks.get_coordinates()[mask.values]
+            q = self.blocks.get_coordinates()[mask.values]
         else:
             blocks_df = self.blocks.df.reset_index(drop=True)
             angles = self.blocks.get_angles().astype(float)
-            c = self.blocks.get_coordinates()
-        q = c * self._block_pixel_size
+            q = self.blocks.get_coordinates()
         all_R = srot.from_euler("zxz", angles, degrees=True)
         z_unit = np.array([0.0, 0.0, 1.0])
         block_normals = np.array([R.apply(z_unit) for R in all_R])
@@ -13451,7 +13533,7 @@ class PleomorphicAssembly(ContactGraph):
                 return_closest_points=True,
             )
 
-            distances = np.asarray(result["distances"])
+            distances = np.asarray(result["distances"]) * self.pixel_size
             closest_pts = np.asarray(result["closest_points"])
             prim_ids = np.asarray(result["primitive_ids"], dtype=int)
 
@@ -13460,8 +13542,7 @@ class PleomorphicAssembly(ContactGraph):
             normal_angles = np.degrees(np.arccos(dots))
 
             try:
-                env_ps = PleomorphicAssembly(envelope)
-                curv_table = env_ps._mesh_triangle_curvature_table()
+                curv_table = self._mesh_triangle_curvature_table()
                 mean_curv = curv_table["mean_curvature"][prim_ids]
                 gauss_curv = curv_table["gaussian_curvature"][prim_ids]
             except Exception:
@@ -13486,9 +13567,11 @@ class PleomorphicAssembly(ContactGraph):
         # ── intersection branch ───────────────────────────────────────────────
         if max_distance is None:
             v = np.asarray(envelope.vertices)
-            max_distance = float(np.linalg.norm(v.max(axis=0) - v.min(axis=0)))
+            ray_length = float(np.linalg.norm(v.max(axis=0) - v.min(axis=0)))
+        else:
+            ray_length = float(max_distance)
 
-        directions = -block_normals * max_distance          # inverted normal, scaled
+        directions = -block_normals * ray_length          # inverted normal, scaled
         rays = np.hstack([q, directions]).astype(np.float32)  # (N, 6)
         cast = envelope.cast_rays(rays)
 
@@ -13506,8 +13589,8 @@ class PleomorphicAssembly(ContactGraph):
                 f"blocks missed the surface ({n_miss / n_total:.1%})."
             )
 
-        # envelope_distance: t_hit already in world units from cast_rays; inf → NaN
-        distances = np.where(hit_mask, t_hit, float("nan"))
+        # envelope_distance: t_hit is in voxels from cast_rays, reported scaled; inf → NaN
+        distances = np.where(hit_mask, t_hit * self.pixel_size, float("nan"))
 
         # closest points: hit_points already NaN for misses from cast_rays
         closest_pts = hit_points
@@ -13528,8 +13611,7 @@ class PleomorphicAssembly(ContactGraph):
         gauss_curv = np.full(n_total, float("nan"))
         if hit_mask.any():
             try:
-                env_ps = PleomorphicAssembly(envelope)
-                curv_table = env_ps._mesh_triangle_curvature_table()
+                curv_table = self._mesh_triangle_curvature_table()
                 mean_curv[hit_mask] = curv_table["mean_curvature"][prim_ids_raw[hit_mask].astype(int)]
                 gauss_curv[hit_mask] = curv_table["gaussian_curvature"][prim_ids_raw[hit_mask].astype(int)]
             except Exception:
@@ -13722,11 +13804,12 @@ class PleomorphicAssembly(ContactGraph):
         Returns
         -------
         np.ndarray, shape (N, 2)
-            Columns are the two principal curvature values k1 and k2 at each vertex.
+            Columns are the two principal curvature values k1 and k2 at each
+            vertex, divided by :attr:`pixel_size`.
         """
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
-        return self.surface.get_principal_curvatures()
+        return self.surface.get_principal_curvatures() / self.pixel_size
 
     def get_mean_curvature(self) -> np.ndarray:
         """Return per-vertex mean curvature for a mesh-backed surface.
@@ -13734,11 +13817,12 @@ class PleomorphicAssembly(ContactGraph):
         Returns
         -------
         np.ndarray, shape (N,)
-            Mean curvature H = (k1 + k2) / 2 at each vertex.
+            Mean curvature H = (k1 + k2) / 2 at each vertex, divided by
+            :attr:`pixel_size`.
         """
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
-        return self.surface.get_mean_curvature()
+        return self.surface.get_mean_curvature() / self.pixel_size
 
     def get_gaussian_curvature(self) -> np.ndarray:
         """Return per-vertex Gaussian curvature for a mesh-backed surface.
@@ -13746,11 +13830,12 @@ class PleomorphicAssembly(ContactGraph):
         Returns
         -------
         np.ndarray, shape (N,)
-            Gaussian curvature K = k1 * k2 at each vertex.
+            Gaussian curvature K = k1 * k2 at each vertex, divided by the
+            square of :attr:`pixel_size` (it is a product of two curvatures).
         """
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
-        return self.surface.get_gaussian_curvature()
+        return self.surface.get_gaussian_curvature() / self.pixel_size**2
 
     def get_curvature_directions(self) -> np.ndarray:
         """Return per-vertex principal curvature direction vectors for a mesh-backed surface.
@@ -13783,11 +13868,12 @@ class PleomorphicAssembly(ContactGraph):
         Returns
         -------
         np.ndarray, shape (N,)
-            Curvedness C = sqrt((k1^2 + k2^2) / 2) at each vertex, in [0, inf).
+            Curvedness C = sqrt((k1^2 + k2^2) / 2) at each vertex, in [0, inf),
+            divided by :attr:`pixel_size`.
         """
         if not isinstance(self.surface, Mesh):
             raise TypeError("Curvatures are only available for Mesh-backed PleomorphicAssembly")
-        return self.surface.get_curvedness()
+        return self.surface.get_curvedness() / self.pixel_size
 
     def get_surface_type(self, as_labels: bool = False) -> np.ndarray:
         """Return per-vertex categorical surface type for a mesh-backed surface.
@@ -13808,13 +13894,13 @@ class PleomorphicAssembly(ContactGraph):
         return self.surface.get_surface_type(as_labels=as_labels)
 
     def get_surface_area(self) -> float:
-        """Return total surface area of a mesh-backed surface."""
+        """Return total surface area of a mesh-backed surface, scaled by the square of :attr:`pixel_size`."""
         if not isinstance(self.surface, Mesh):
             raise TypeError(
                 "get_surface_area is only available for Mesh-backed PleomorphicAssembly. "
                 "An OrientedPointCloud has no face connectivity from which to compute area."
             )
-        return self.surface.get_surface_area()
+        return self.surface.get_surface_area() * self.pixel_size**2
 
     def save(
         self, output_path: PathOrStr, format: Literal["ply", "vtp", "motl", "em"] | None = None, **kwargs: Any
@@ -13885,7 +13971,7 @@ class PleomorphicAssembly(ContactGraph):
         out = self.surface.compute_normals(**kwargs)
         if out is None:
             return self
-        return PleomorphicAssembly(out)
+        return PleomorphicAssembly(out, pixel_size=self.pixel_size)
 
     def flip_normals(self, inplace: bool = True, **kwargs: Any) -> "PleomorphicAssembly" | None:
         """
@@ -13913,7 +13999,7 @@ class PleomorphicAssembly(ContactGraph):
         out = self.surface.flip_normals(inplace=inplace, **kwargs)
         if inplace:
             return self
-        return PleomorphicAssembly(out)
+        return PleomorphicAssembly(out, pixel_size=self.pixel_size)
 
     def refine_normals(
         self,
@@ -13934,7 +14020,7 @@ class PleomorphicAssembly(ContactGraph):
         Parameters
         ----------
         radius_hit : float, default=3.0
-            Neighborhood radius for normal averaging, in mesh/point-cloud units.
+            Neighborhood radius for normal averaging, in voxels.
         batch_size : int, default=2000
             Batch size for spatial neighbor queries.
         n_iter : int, default=1
@@ -13969,7 +14055,7 @@ class PleomorphicAssembly(ContactGraph):
         )
         if inplace:
             return self
-        return PleomorphicAssembly(out)
+        return PleomorphicAssembly(out, pixel_size=self.pixel_size)
 
     def remove_nonfinite_vertices(self, inplace: bool = True, **kwargs: Any) -> "PleomorphicAssembly":
         """
@@ -13996,7 +14082,7 @@ class PleomorphicAssembly(ContactGraph):
         out = self.surface.remove_nonfinite_vertices(inplace=inplace, **kwargs)
         if inplace:
             return self
-        return PleomorphicAssembly(out)
+        return PleomorphicAssembly(out, pixel_size=self.pixel_size)
 
     def oversample(self, **kwargs: Any) -> "PleomorphicAssembly":
         """
@@ -14009,8 +14095,8 @@ class PleomorphicAssembly(ContactGraph):
 
             - ``oversample_factor`` : float, optional — desired factor increase in vertices.
               Defaults to 1.0 (no change) when both this and ``point_spacing`` are None.
-            - ``point_spacing`` : float, optional — desired spacing between sampled points
-              (same units as mesh coordinates). Uses two-pass Poisson-disk calibration.
+            - ``point_spacing`` : float, optional — desired spacing between sampled points,
+              in voxels. Uses two-pass Poisson-disk calibration.
             - ``poisson_init_factor`` : int, default=5 — initial candidate factor for
               Poisson-disk sampling (larger → more uniform distribution).
 
@@ -14018,8 +14104,8 @@ class PleomorphicAssembly(ContactGraph):
 
             - ``oversample_factor`` : float, optional — desired factor increase in points.
               Defaults to 1.0 when both this and ``point_spacing`` are None.
-            - ``point_spacing`` : float, optional — desired spacing; uses greedy Poisson-disk
-              sampling to enforce spacing directly.
+            - ``point_spacing`` : float, optional — desired spacing, in voxels; uses greedy
+              Poisson-disk sampling to enforce spacing directly.
             - ``random_seed`` : int, optional — seed for reproducible sampling.
 
         Returns
@@ -14027,7 +14113,7 @@ class PleomorphicAssembly(ContactGraph):
         PleomorphicAssembly
             New wrapper around the resampled surface.
         """
-        return PleomorphicAssembly(self.surface.oversample(**kwargs))
+        return PleomorphicAssembly(self.surface.oversample(**kwargs), pixel_size=self.pixel_size)
 
     def crop(self, bbox: Any, inplace: bool = False) -> "PleomorphicAssembly | None":
         """
@@ -14049,7 +14135,7 @@ class PleomorphicAssembly(ContactGraph):
         out = self.surface.crop(bbox, inplace=inplace)
         if inplace:
             return None
-        return PleomorphicAssembly(out)
+        return PleomorphicAssembly(out, pixel_size=self.pixel_size)
 
     def extract_region(
         self,
@@ -14098,7 +14184,7 @@ class PleomorphicAssembly(ContactGraph):
             if element not in ("triangle", "triangles"):
                 raise ValueError("Mesh subregions currently support element='triangles'")
             out = self.surface.extract_submesh(indices, preserve_curvatures=preserve_curvatures)
-            return PleomorphicAssembly(out)
+            return PleomorphicAssembly(out, pixel_size=self.pixel_size)
 
         if isinstance(self.surface, OrientedPointCloud):
             if element in ("point", "points"):
@@ -14107,7 +14193,7 @@ class PleomorphicAssembly(ContactGraph):
                 out = self.surface.extract_points(mask=indices)
             else:
                 raise ValueError("Point-cloud subregions support element='points' or element='mask'")
-            return PleomorphicAssembly(out)
+            return PleomorphicAssembly(out, pixel_size=self.pixel_size)
 
         raise TypeError(f"Unsupported surface type: {type(self.surface)}")
 
@@ -14132,7 +14218,7 @@ class PleomorphicAssembly(ContactGraph):
             raise TypeError(f"Unsupported surface type: {type(self.surface)}")
         hull_mesh = Mesh.from_open3d(hull_o3d)
         print(f"Computed convex hull with {len(hull_mesh.vertices)} vertices")
-        return PleomorphicAssembly(hull_mesh)
+        return PleomorphicAssembly(hull_mesh, pixel_size=self.pixel_size)
 
     @gui_exposed(
         category="surface-op", label="[Mesh/OPC] Clean by normals angle", group="Mask", order=30, returns="none"
@@ -14290,7 +14376,7 @@ class PleomorphicAssembly(ContactGraph):
         filtered_surface = self.surface.apply_vertex_mask(mask, inplace=inplace)
         if inplace:
             return None
-        return PleomorphicAssembly(filtered_surface)
+        return PleomorphicAssembly(filtered_surface, pixel_size=self.pixel_size)
 
     @gui_exposed(category="surface-op", label="[Mesh/OPC] Distance to points", group="Analysis", order=50)
     def distance_to_points(
@@ -14306,7 +14392,7 @@ class PleomorphicAssembly(ContactGraph):
         Parameters
         ----------
         target : np.ndarray
-            Query points as (N, 3) array
+            Query points as (N, 3) array, in voxels.
         compute_occupancy : bool, default=True
             Compute occupancy (inside/outside). Only for Mesh.
         compute_signed : bool, default=False
@@ -14318,7 +14404,8 @@ class PleomorphicAssembly(ContactGraph):
         Returns
         -------
         dict
-            Dictionary containing:
+            Dictionary containing (``distances`` and ``closest_distances``
+            scaled by :attr:`pixel_size`; ``closest_points`` in voxels):
             - 'distances': unsigned or signed distances for each point
             - 'distance_type': 'signed' or 'unsigned'
             - 'n_total': total number of query points
@@ -14342,7 +14429,7 @@ class PleomorphicAssembly(ContactGraph):
         """
         target = np.atleast_2d(target).astype(np.float32)
         if isinstance(self.surface, Mesh):
-            return self.surface.distance_to_points(
+            result = self.surface.distance_to_points(
                 target=target,
                 compute_occupancy=compute_occupancy,
                 compute_signed=compute_signed,
@@ -14351,11 +14438,22 @@ class PleomorphicAssembly(ContactGraph):
         elif isinstance(self.surface, OrientedPointCloud):
             if compute_occupancy or compute_signed:
                 raise TypeError("OrientedPointCloud does not support occupancy or signed distance queries; use Mesh.")
-            return self.surface.distance_to_points(
+            result = self.surface.distance_to_points(
                 target=target,
                 return_closest_points=return_closest_points,
             )
-        raise TypeError(f"Unsupported surface type: {type(self.surface)}")
+        else:
+            raise TypeError(f"Unsupported surface type: {type(self.surface)}")
+        return self._scale_distances(result, ("distances", "closest_distances"))
+
+    def _scale_distances(self, result: dict, keys: tuple[str, ...]) -> dict:
+        """Copy of *result* with the entries *keys* (where present) multiplied by :attr:`pixel_size`."""
+        out = dict(result)
+        for key in keys:
+            if key in out:
+                value = out[key]
+                out[key] = value * self.pixel_size if np.isscalar(value) else np.asarray(value) * self.pixel_size
+        return out
 
     def get_points_within_distance(self, target: np.ndarray, threshold: float) -> dict:
         """
@@ -14364,16 +14462,17 @@ class PleomorphicAssembly(ContactGraph):
         Parameters
         ----------
         target : np.ndarray
-            Query points as (N, 3) array
+            Query points as (N, 3) array, in voxels.
         threshold : float
-            Distance threshold
+            Distance threshold, in voxels.
 
         Returns
         -------
         dict
             Dictionary containing:
             - 'mask': boolean array indicating points within threshold
-            - 'distances': unsigned distances for all points
+            - 'distances': unsigned distances for all points, scaled by
+              :attr:`pixel_size`
             - 'indices': indices of points within threshold
             - 'within_points': coordinates of points within threshold
             - 'n_within': number of points within threshold
@@ -14389,8 +14488,8 @@ class PleomorphicAssembly(ContactGraph):
 
         distances = dist_result["distances"]
 
-        # Find points within threshold
-        mask = distances <= threshold
+        # Find points within threshold; the distances are reported values, the threshold is in voxels
+        mask = distances <= threshold * self.pixel_size
         indices = np.where(mask)[0]
 
         result = {
@@ -14426,7 +14525,8 @@ class PleomorphicAssembly(ContactGraph):
         -------
         set or dict
             For 'edge-connected': set of triangle IDs
-            For 'radius': dict with 'neighbor_ids', 'distances', 'seed_centroid', 'n_neighbors'
+            For 'radius': dict with 'neighbor_ids', 'distances', 'seed_centroid', 'n_neighbors',
+            as :meth:`get_triangles_within_radius` returns it
 
         Raises
         ------
@@ -14447,7 +14547,7 @@ class PleomorphicAssembly(ContactGraph):
                 raise ValueError("'radius' parameter required for method='radius'")
             radius = kwargs["radius"]
             use_kdtree = kwargs.get("use_kdtree", True)
-            return self.surface.get_triangles_within_radius(triangle_id, radius, use_kdtree=use_kdtree)
+            return self.get_triangles_within_radius(triangle_id, radius, use_kdtree=use_kdtree)
 
         else:
             raise ValueError(f"Unknown method: {method}. Use 'topology' or 'radius'")
@@ -14475,13 +14575,21 @@ class PleomorphicAssembly(ContactGraph):
         triangle_id : int
             Seed triangle index.
         radius : float
-            Maximum centroid-to-centroid distance for a triangle to be included.
+            Maximum centroid-to-centroid distance for a triangle to be
+            included, in voxels.
         use_kdtree : bool, default=True
             Use a KDTree for fast radius queries (recommended for large meshes).
+
+        Returns
+        -------
+        dict
+            ``neighbor_ids``, ``distances`` (scaled by :attr:`pixel_size`),
+            ``seed_centroid`` (voxels) and ``n_neighbors``.
         """
         if not isinstance(self.surface, Mesh):
             raise TypeError(f"Triangle neighbors only available for Mesh, not {type(self.surface).__name__}")
-        return self.surface.get_triangles_within_radius(triangle_id, radius, use_kdtree=use_kdtree)
+        result = self.surface.get_triangles_within_radius(triangle_id, radius, use_kdtree=use_kdtree)
+        return self._scale_distances(result, ("distances",))
 
     def ray_intersections(
         self,
@@ -14500,13 +14608,14 @@ class PleomorphicAssembly(ContactGraph):
         Parameters
         ----------
         rays : np.ndarray, shape (N, 6)
-            Ray array where each row is [origin_x, origin_y, origin_z, dir_x, dir_y, dir_z]
+            Ray array where each row is [origin_x, origin_y, origin_z, dir_x, dir_y, dir_z],
+            in voxels.
         one_hit_per_target : bool, default=False
             If True and multiple rays are supplied, add ``shortest_distance`` and
             ``shortest_indices`` for the global shortest hit across all rays.
         knn_radius : float, default=10.0
             For OrientedPointCloud only: maximum search radius for finding
-            nearest points along ray trajectory
+            nearest points along ray trajectory, in voxels
         return_orientations : bool, default=False
             If True, compute relative orientations between ray directions and
             surface orientations at hit points. Returns additional fields:
@@ -14536,10 +14645,11 @@ class PleomorphicAssembly(ContactGraph):
         dict
             Always contains:
 
-            - ``t_hit`` (R,): ray travel distance to the intersection; ``inf`` for misses.
+            - ``t_hit`` (R,): ray travel distance to the intersection, scaled by
+              :attr:`pixel_size` (as is ``shortest_distance``); ``inf`` for misses.
             - ``primitive_ids`` (R,): triangle index (Mesh) or point index (OrientedPointCloud)
               of the hit; ``-1`` for misses.
-            - ``hit_points`` (R, 3): 3-D coordinates of hit points; NaN for misses.
+            - ``hit_points`` (R, 3): 3-D coordinates of hit points, in voxels; NaN for misses.
             - ``primitive_normals`` (R, 3): surface normals at hit points (Mesh only); NaN for
               misses or when the backing surface is an OrientedPointCloud.
             - ``geometry_ids`` (R,): geometry identifier (Mesh only).
@@ -14569,6 +14679,7 @@ class PleomorphicAssembly(ContactGraph):
             )
         else:
             raise TypeError(f"Unsupported surface type: {type(surface)}. Must be Mesh or OrientedPointCloud")
+        result = self._scale_distances(result, ("t_hit", "shortest_distance"))
 
         # Compute orientation metrics if requested
         if return_orientations:
@@ -14654,16 +14765,16 @@ class PleomorphicAssembly(ContactGraph):
         Parameters
         ----------
         target : PleomorphicAssembly or OrientedPointCloud
-            Target surface. Wrapped targets are unwrapped internally; the concrete
-            target must be an OrientedPointCloud.
+            Target surface, in voxels like :attr:`surface`. Wrapped targets are
+            unwrapped internally; the concrete target must be an OrientedPointCloud.
         method : {'nn_unoriented', 'nn', 'nearest', 'nn_oriented', 'ray'}, default='nn_unoriented'
             Distance computation method (only used if source is OrientedPointCloud).
             ``'nn_unoriented'`` (aliases ``'nn'``, ``'nearest'``) — KDTree nearest
             neighbour.  ``'nn_oriented'`` (alias ``'ray'``) — ray cast along normals.
         max_distance : float, optional
-            Maximum distance threshold. Points beyond this distance are excluded.
+            Maximum distance threshold, in voxels. Points beyond this distance are excluded.
         ray_length : float, optional
-            For raycasting: maximum ray length. If None, uses infinite rays.
+            For raycasting: maximum ray length, in voxels. If None, uses infinite rays.
             If max_distance is set and ray_length is None, ray_length = max_distance.
         reverse_normals : bool, default=False
             For normal: if True, cast rays opposite to normal direction
@@ -14673,13 +14784,16 @@ class PleomorphicAssembly(ContactGraph):
             For mesh sources: keep only the closest mesh vertex per target particle
             (deduplicate ``distance_to_pointcloud`` hits).
         knn_radius : float, default=10.0
-            For point cloud search along normals: search radius for finding points along ray trajectory
+            For point cloud search along normals: search radius for finding points along
+            ray trajectory, in voxels
         return_stats : bool, default=True
             If True, return stats dictionary. If False, return only distances array.
 
         Returns
         -------
         dict or np.ndarray
+            Distances and the distance statistics are scaled by :attr:`pixel_size`;
+            ``closest_points`` stay in voxels.
             If return_details=True, returns dictionary with:
                 'distances': np.ndarray (N,) - distance for each source point
                 'closest_points': np.ndarray (N, 3) - coordinates of closest/hit points
@@ -14717,6 +14831,11 @@ class PleomorphicAssembly(ContactGraph):
             )
         else:
             raise TypeError(f"Unsupported source surface type: {type(self.surface)}")
+        result = self._scale_distances(result, ("distances",))
+        if "stats" in result:
+            result["stats"] = self._scale_distances(
+                result["stats"], ("min_distance", "max_distance", "mean_distance", "median_distance", "std_distance")
+            )
 
         if return_stats:
             return result
@@ -14835,24 +14954,25 @@ class PleomorphicAssembly(ContactGraph):
         Expand seed triangles on the mesh using centroid-distance radii.
 
         Always includes the ``"hit triangles"`` key. For each radius ``r`` in ``radii``,
-        adds a cumulative ``"r <= {r} nm"`` key and an annulus band
-        ``"{r_inner} < r <= {r_outer} nm"`` between consecutive radii.
+        adds a cumulative ``"r <= {r}"`` key and an annulus band
+        ``"{r_inner} < r <= {r_outer}"`` between consecutive radii, with the
+        radii as given, in voxels.
 
         Parameters
         ----------
         seed_triangle_ids : np.ndarray
             Integer indices of the seed triangles to expand from.
         radii : ArrayLike
-            Expansion radii in the same units as the mesh coordinates. Each entry
-            produces a cumulative shell and (for consecutive pairs) an annulus band.
+            Expansion radii, in voxels. Each entry produces a cumulative shell and
+            (for consecutive pairs) an annulus band.
         use_kdtree : bool, default=True
             If True, use a KD-tree for centroid lookups; otherwise use brute-force search.
 
         Returns
         -------
         dict[str, np.ndarray]
-            Keys: ``"hit triangles"``, ``"r <= {r} nm"`` for each radius, and
-            ``"{r_inner} < r <= {r_outer} nm"`` for each consecutive pair.
+            Keys: ``"hit triangles"``, ``"r <= {r}"`` for each radius, and
+            ``"{r_inner} < r <= {r_outer}"`` for each consecutive pair.
             Values are sorted integer arrays of triangle indices.
         """
         if not isinstance(self.surface, Mesh):
@@ -14876,13 +14996,13 @@ class PleomorphicAssembly(ContactGraph):
                 ]
                 expanded.update(np.asarray(neighbors, dtype=np.intp).tolist())
             cumulative.append(expanded)
-            regions[f"r <= {radius:g} nm"] = np.array(sorted(expanded), dtype=int)
+            regions[f"r <= {radius:g}"] = np.array(sorted(expanded), dtype=int)
 
         for idx_inner, idx_outer in enumerate(range(len(radii) - 1)):
             r_inner = radii[idx_inner]
             r_outer = radii[idx_inner + 1]
             ring_set = cumulative[idx_inner + 1] - cumulative[idx_inner]
-            regions[f"{r_inner:g} < r <= {r_outer:g} nm"] = np.array(sorted(ring_set), dtype=int)
+            regions[f"{r_inner:g} < r <= {r_outer:g}"] = np.array(sorted(ring_set), dtype=int)
 
         return regions
 
@@ -14939,7 +15059,7 @@ class PleomorphicAssembly(ContactGraph):
         seed_point_ids : np.ndarray
             Integer indices of the seed points to expand from.
         radii : ArrayLike
-            Expansion radii in the same units as the point-cloud coordinates.
+            Expansion radii, in voxels.
 
         Returns
         -------
@@ -15080,13 +15200,13 @@ class PleomorphicAssembly(ContactGraph):
             set of aliases (``'rays'``, ``'distance'``, ``'pointcloud'``,
             ``'distance_to_point_cloud'``) for backward compatibility.
         min_distance_source_target, max_distance_source_target : float, optional
-            Keep hits whose source-target distance lies in this interval.
+            Keep hits whose source-target distance lies in this interval, in voxels.
         source_id_name, target_id_name : str
             Column names for source and target indices in the hit table.
         include_curvatures : bool, default=True
             Attach curvature columns for mesh-backed ``self``.
         surface_radii : sequence of float, optional
-            Radii for cumulative regions around hit seeds on ``self``.
+            Radii for cumulative regions around hit seeds on ``self``, in voxels.
         surface_element : {'triangles', 'vertices', 'points'}, optional
             Defaults: ray+mesh → triangles; distance+mesh → vertices; point
             cloud → points.
@@ -15098,7 +15218,9 @@ class PleomorphicAssembly(ContactGraph):
         Returns
         -------
         dict
-            - ``hits``: hit table
+            - ``hits``: hit table; its ``distance`` column is the source-target
+              distance of each hit, scaled by :attr:`pixel_size`, and
+              ``hit_point_x/y/z`` are in voxels
             - ``regions``: region name → index arrays (if ``surface_radii`` set)
             - ``region_summary``: per-region summary table
             - ``triangle_curvatures``: per-triangle arrays (mesh-backed ``self``)
@@ -15114,10 +15236,13 @@ class PleomorphicAssembly(ContactGraph):
         }
         query_type = aliases.get(query_type, query_type)
 
+        # The distances in *result* are reported values; the interval is in voxels.
+        low = None if min_distance_source_target is None else min_distance_source_target * self.pixel_size
+        high = None if max_distance_source_target is None else max_distance_source_target * self.pixel_size
         if query_type == "ray":
-            parsed = self._parse_ray_hits(result, min_distance_source_target, max_distance_source_target)
+            parsed = self._parse_ray_hits(result, low, high)
         elif query_type == "distance_to_pointcloud":
-            parsed = self._parse_distance_hits(result, min_distance_source_target, max_distance_source_target)
+            parsed = self._parse_distance_hits(result, low, high)
         else:
             raise ValueError(f"query_type must be 'ray' or 'distance_to_pointcloud', got '{query_type}'")
 
@@ -15127,7 +15252,7 @@ class PleomorphicAssembly(ContactGraph):
         hits_dict: dict[str, Any] = {
             source_id_name: parsed["source_ids"],
             target_id_name: parsed["target_ids"],
-            "distance_nm": parsed["distances"],
+            "distance": parsed["distances"],
         }
         if "hit_points" in parsed:
             hits_dict["hit_point_x"] = parsed["hit_points"][:, 0]
@@ -15226,11 +15351,18 @@ class ParametricAssembly(ContactGraph):
     block_layer : BlockLayer or None, default=None
         Pre-built block layer.  Use :meth:`from_blocks` to construct one
         without building a :class:`BlockLayer` directly.
+    pixel_size : float or None, default=None
+        Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
+        ``None`` means not given: the pixel size of *block_layer* is used
+        when it was given one, otherwise 1.0.
 
     Raises
     ------
     TypeError
         If neither *surfaces* nor *block_layer* is provided.
+    ValueError
+        If *pixel_size* and the pixel size of *block_layer* are both given
+        and differ.
     """
 
     def __init__(
@@ -15239,12 +15371,14 @@ class ParametricAssembly(ContactGraph):
         column_name: MotlColumn = "object_id",
         *,
         block_layer: BlockLayer | None = None,
+        pixel_size: float | None = None,
     ) -> None:
         if surfaces is None and block_layer is None:
             raise TypeError("ParametricAssembly requires at least surfaces (AnalyticSurfacesM) or a block_layer.")
         self._surfaces: AnalyticSurfacesM | None = surfaces
         self.column_name = column_name
         self._init_block_layer(block_layer)
+        self._set_pixel_size([("pixel_size", pixel_size), ("block layer", self._given_pixel_size(block_layer))])
 
     @property
     def surfaces(self) -> AnalyticSurfacesM:
@@ -15278,6 +15412,7 @@ class ParametricAssembly(ContactGraph):
         column_name: MotlColumn = "object_id",
         *,
         tomo_id_column: MotlColumn = "tomo_id",
+        pixel_size: float = 1.0,
     ) -> "ParametricAssembly":
         """Fit analytic surfaces to particle groups and return a ParametricAssembly.
 
@@ -15292,13 +15427,15 @@ class ParametricAssembly(ContactGraph):
             Column used to group particles.
         tomo_id_column : MotlColumn, default='tomo_id'
             Column that identifies the tomogram of each surface.
+        pixel_size : float, default=1.0
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
 
         Returns
         -------
         ParametricAssembly
         """
         surfaces = AnalyticSurfacesM(input_motl, surface_type=surface_type, feature_id=column_name, tomo_id_column=tomo_id_column)
-        return cls(surfaces, column_name=column_name)
+        return cls(surfaces, column_name=column_name, pixel_size=pixel_size)
 
     @classmethod
     def from_csv(
@@ -15308,6 +15445,7 @@ class ParametricAssembly(ContactGraph):
         column_name: MotlColumn = "object_id",
         *,
         tomo_id_column: MotlColumn = "tomo_id",
+        pixel_size: float = 1.0,
     ) -> "ParametricAssembly":
         """Load analytic surface parameters from a CSV file.
 
@@ -15321,13 +15459,15 @@ class ParametricAssembly(ContactGraph):
             Surface-object identifier column the file is keyed on.
         tomo_id_column : MotlColumn, default='tomo_id'
             Column that identifies the tomogram of each surface.
+        pixel_size : float, default=1.0
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
 
         Returns
         -------
         ParametricAssembly
         """
         surfaces = AnalyticSurfacesM(path, surface_type=surface_type, feature_id=column_name, tomo_id_column=tomo_id_column)
-        return cls(surfaces, column_name=column_name)
+        return cls(surfaces, column_name=column_name, pixel_size=pixel_size)
 
     @classmethod
     def from_sphere_motl(
@@ -15337,6 +15477,7 @@ class ParametricAssembly(ContactGraph):
         *,
         column_name: MotlColumn = "object_id",
         tomo_id_column: MotlColumn = "tomo_id",
+        pixel_size: float = 1.0,
     ) -> "ParametricAssembly":
         """Build the assembly from a motl that holds one sphere per row.
 
@@ -15355,6 +15496,8 @@ class ParametricAssembly(ContactGraph):
             Surface-object identifier column.
         tomo_id_column : MotlColumn, default='tomo_id'
             Column that identifies the tomogram of each particle.
+        pixel_size : float, default=1.0
+            Physical units per voxel, used only to scale reported values (see the module docstring); never scales motls or inputs. Set to 1 for EM, STOPGAP or Dynamo motls whose coordinates are already in physical units.
 
         Returns
         -------
@@ -15380,7 +15523,8 @@ class ParametricAssembly(ContactGraph):
             surfaces[key] = Ellipsoid(
                 center=center, radii=np.full(3, radius), e_vec1=axes[0], e_vec2=axes[1], e_vec3=axes[2]
             )
-        return cls(AnalyticSurfacesM(surfaces, surface_type="ellipsoid", feature_id=column_name, tomo_id_column=tomo_id_column), column_name=column_name)
+        fitted = AnalyticSurfacesM(surfaces, surface_type="ellipsoid", feature_id=column_name, tomo_id_column=tomo_id_column)
+        return cls(fitted, column_name=column_name, pixel_size=pixel_size)
 
     def write_out(self, output_path: PathOrStr) -> None:
         """Write the surface parameter table to *output_path* as CSV.
@@ -15593,6 +15737,7 @@ class ParametricAssembly(ContactGraph):
         -------
         pandas.DataFrame
             Columns: ``subtomo_id``, ``<self.column_name>``, ``d1``, ``d2``.
+            ``d1`` and ``d2`` are scaled by :attr:`pixel_size`.
         """
         in_motl = cryomotl.Motl.load(input_motl)
         features = in_motl.get_unique_values(column_name=self.column_name)
@@ -15610,7 +15755,12 @@ class ParametricAssembly(ContactGraph):
             for i in range(coord.shape[0]):
                 _, _, d1, d2, _ = surface.intersection_line(geom.Line(coord[i, :], normal_vectors[i, :]))
                 new_row = pd.Series(
-                    {"subtomo_id": fm.df.iloc[i][subtomo_id_column], self.column_name: f, "d1": d1, "d2": d2}
+                    {
+                        "subtomo_id": fm.df.iloc[i][subtomo_id_column],
+                        self.column_name: f,
+                        "d1": d1 * self.pixel_size,
+                        "d2": d2 * self.pixel_size,
+                    }
                 )
                 intersection_points = pd.concat([intersection_points, new_row.to_frame().T], ignore_index=True)
 
@@ -16553,15 +16703,14 @@ class IcosahedralComplex(PolyhedralComplex):
 
 def rays_from_motl(
     motl: "cryomotl.Motl",
-    pixel_size: float,
     reverse_direction: bool = False,
     ray_length: float | None = None,
 ) -> np.ndarray:
     """Build a ray array from a Motl's particle positions and orientations.
 
-    Coordinates are scaled by *pixel_size* to convert from voxels to physical
-    units (e.g. nm) **without modifying the input Motl**. Normal vectors are
-    derived from the particles' Euler angles via
+    The ray origins are the particle positions, in voxels like the motl and
+    like the surfaces an assembly holds; the input Motl is not modified.
+    Normal vectors are derived from the particles' Euler angles via
     :func:`~cryocat.utils.geom.euler_angles_to_normals` (zxz convention,
     z-axis as the particle's forward axis).
 
@@ -16569,8 +16718,6 @@ def rays_from_motl(
     ----------
     motl : cryomotl.Motl
         Particle list. Coordinates must be in voxels.
-    pixel_size : float
-        Physical units per voxel (e.g. nm/voxel).
     reverse_direction : bool, default=False
         When ``True``, negate the normals before building ray directions so
         rays fly away from the surface rather than toward it.
@@ -16583,10 +16730,9 @@ def rays_from_motl(
     numpy.ndarray
         Shape ``(N, 6)``; columns ``[ox, oy, oz, dx, dy, dz]``.
     """
-    coords = motl.get_coordinates() * float(pixel_size)
     normals = geom.euler_angles_to_normals(motl.get_angles())
     return geom.construct_rays(
-        points=coords,
+        points=motl.get_coordinates(),
         normals=normals,
         reverse_direction=bool(reverse_direction),
         ray_length=ray_length,

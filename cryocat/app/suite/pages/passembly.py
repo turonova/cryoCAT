@@ -1623,19 +1623,18 @@ def register_callbacks(app):
             isect_motl = Motl(isect_df)
             isect_motl._pool_motl_id = isect_motl_id
             motl_rows = isect_df.to_dict("records")
-            _px = float(isect_px or 1.0)
 
             # ── Distance mode (closest-point, ignores orientation) ────────
             if isect_mode == "distance":
                 target = np.asarray(
-                    isect_motl.get_coordinates() * _px, dtype=np.float32
+                    isect_motl.get_coordinates(), dtype=np.float32
                 )
                 dash_logger.write(
                     f"DEBUG distance_to_points: target.shape={target.shape!r}",
                     source="cryocat",
                 )
                 _motl_var = _prov.var_for(isect_motl_id)
-                _tgt_src = f"{_motl_var}.get_coordinates() * {_px}" if _motl_var else None
+                _tgt_src = f"{_motl_var}.get_coordinates()" if _motl_var else None
                 try:
                     raw = _invoke_op(
                         psurf.distance_to_points,
@@ -1678,11 +1677,10 @@ def register_callbacks(app):
             # ── Ray-cast mode (uses particle orientations) ────────────────
             _rays_kwargs = {
                 "motl": isect_motl,
-                "pixel_size": _px,
                 "reverse_direction": bool(isect_rev),
             }
             dash_logger.write(
-                f"DEBUG rays_from_motl kwargs: pixel_size={_rays_kwargs['pixel_size']!r}, "
+                f"DEBUG rays_from_motl kwargs: "
                 f"reverse_direction={_rays_kwargs['reverse_direction']!r}, "
                 f"motl rows={len(isect_motl.df)}",
                 source="cryocat",

@@ -105,6 +105,6 @@ def hits_summary_dataframe(data: dict) -> pd.DataFrame:
         return pd.DataFrame({
             "region": ["all hits"],
             "n_hits": [len(hits)],
-            "median_distance_nm": [float(hits["distance_nm"].median())],
+            "median_distance_nm": [float(hits["distance"].median())],
         })
     return pd.DataFrame({"region": [], "n_hits": []})

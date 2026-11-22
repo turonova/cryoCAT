@@ -328,7 +328,7 @@ def _make_npc_motl(n_subunits: int = 8, n_rings: int = 1):
 def test_NPC_compute_diameter_returns_summary_and_motl():
     m = _make_npc_motl(n_subunits=8, n_rings=1)
     cs = assembly.CnComplex(m, symmetry=8)
-    summary, motl_out = cs.diameter(pixel_size=1.0)
+    summary, motl_out = cs.diameter()
     assert isinstance(summary, pd.DataFrame)
     assert isinstance(motl_out, cryomotl.Motl)
     assert "mean_diameter" in summary.columns
@@ -1667,7 +1667,7 @@ class TestCnComplexDiameter:
         """Diameter of a regular C8 ring at radius 50 ≈ 100 (2 × radius)."""
         m = _make_ordered_ring(n=8, radius=50.0)
         cs = assembly.CnComplex(m, 8, subunit_index_column="geom2", center_method="barycentric")
-        summary, motl_out = cs.diameter(pixel_size=1.0)
+        summary, motl_out = cs.diameter()
         assert len(summary) == 1
         assert summary["n_pairs"].iloc[0] == 4
         np.testing.assert_allclose(summary["mean_diameter"].iloc[0], 100.0, atol=1.0)
@@ -1675,7 +1675,7 @@ class TestCnComplexDiameter:
     def test_store_column_filled_for_all_rows(self):
         m = _make_ordered_ring(n=8, radius=50.0)
         cs = assembly.CnComplex(m, 8, subunit_index_column="geom2", center_method="barycentric")
-        _, motl_out = cs.diameter(pixel_size=1.0, store_column="geom4")
+        _, motl_out = cs.diameter(store_column="geom4")
         assert motl_out.df["geom4"].notna().all()
 
     def test_two_objects_both_appear_in_summary(self):
@@ -1709,9 +1709,9 @@ class TestCnComplexDiameter:
 
     def test_pixel_size_scales_diameter(self):
         m = _make_ordered_ring(n=8, radius=50.0)
-        cs = assembly.CnComplex(m, 8, subunit_index_column="geom2", center_method="barycentric")
-        s1, _ = cs.diameter(pixel_size=1.0)
-        s2, _ = cs.diameter(pixel_size=2.0)
+        s1, _ = assembly.CnComplex(m, 8, subunit_index_column="geom2", center_method="barycentric").diameter()
+        s2, _ = assembly.CnComplex(m, 8, subunit_index_column="geom2", center_method="barycentric",
+                                   pixel_size=2.0).diameter()
         np.testing.assert_allclose(s2["mean_diameter"].iloc[0], s1["mean_diameter"].iloc[0] * 2.0, atol=1e-6)
 
 
@@ -1779,15 +1779,14 @@ class TestCnComplexCircumference:
         """Circumference of a C8 ring at radius 50 ≈ 2π×50."""
         m = _make_ordered_ring(n=8, radius=50.0)
         cs = assembly.CnComplex(m, 8, center_method="barycentric")
-        circ = cs.circumference(pixel_size=1.0)
+        circ = cs.circumference()
         assert len(circ) == 1
         np.testing.assert_allclose(circ["circumference"].iloc[0], 2 * np.pi * 50.0, atol=2.0)
 
     def test_pixel_size_scales_circumference(self):
         m = _make_ordered_ring(n=8, radius=50.0)
-        cs = assembly.CnComplex(m, 8, center_method="barycentric")
-        c1 = cs.circumference(pixel_size=1.0)["circumference"].iloc[0]
-        c2 = cs.circumference(pixel_size=3.0)["circumference"].iloc[0]
+        c1 = assembly.CnComplex(m, 8, center_method="barycentric").circumference()["circumference"].iloc[0]
+        c2 = assembly.CnComplex(m, 8, center_method="barycentric", pixel_size=3.0).circumference()["circumference"].iloc[0]
         np.testing.assert_allclose(c2, c1 * 3.0, atol=1e-6)
 
     def test_two_objects_two_rows(self):
@@ -2429,14 +2428,14 @@ class TestDnComplex:
             assembly.DnComplex(m, "C6")
 
     def test_split_rings_labels_two_groups(self):
-        """split_rings partitions 2n subunits into ring 0 and ring 1."""
+        """split_rings partitions 2n subunits into ring 1 and ring 2."""
         m = _make_dn_motl(n=6, axial_offset=20.0)
         dn = assembly.DnComplex(m, "D6")
         dn.split_rings()
         labels = dn.motl.df["geom5"].values
-        assert set(labels).issubset({0.0, 1.0})
-        assert (labels == 0.0).sum() == 6
+        assert set(labels).issubset({1.0, 2.0})
         assert (labels == 1.0).sum() == 6
+        assert (labels == 2.0).sum() == 6
 
     def test_split_rings_updates_ring_group_columns(self):
         """After split_rings, _ring_group_columns has 3 elements."""
@@ -2447,23 +2446,23 @@ class TestDnComplex:
         assert dn._ring_group_columns[2] == "geom5"
 
     def test_assign_subunit_order_ring_partitioning(self):
-        """Ring 0 subunits get indices <= n, ring 1 subunits get indices > n."""
+        """Ring 1 subunits get indices <= n, ring 2 subunits get indices > n."""
         m = _make_dn_motl(n=6, axial_offset=20.0)
         dn = assembly.DnComplex(m, "D6")
         dn.assign_subunit_index()
         ring_col = dn._ring_column
-        ring0_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 0.0, "geom1"].values
-        ring1_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 1.0, "geom1"].values
+        ring0_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 1.0, "geom1"].values
+        ring1_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 2.0, "geom1"].values
         assert all(v <= dn.n for v in ring0_orders)
         assert all(v > dn.n for v in ring1_orders)
 
     def test_assign_subunit_order_ring1_offset(self):
-        """Ring 1 subunits have subunit_index_column > n (offset by n applied)."""
+        """Ring 2 subunits have subunit_index_column > n (offset by n applied)."""
         m = _make_dn_motl(n=6, axial_offset=20.0)
         dn = assembly.DnComplex(m, "D6")
         dn.assign_subunit_index()
         ring_col = dn._ring_column
-        ring1_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 1.0, "geom1"].values
+        ring1_orders = dn.motl.df.loc[dn.motl.df[ring_col] == 2.0, "geom1"].values
         assert all(v > 6 for v in ring1_orders)
 
     def test_ring_spacing_matches_axial_separation(self):
@@ -2471,8 +2470,8 @@ class TestDnComplex:
         axial_offset = 30.0
         m = _make_dn_motl(n=6, axial_offset=axial_offset)
         dn = assembly.DnComplex(m, "D6")
-        df = dn.ring_spacing(pixel_size=1.0)
-        np.testing.assert_allclose(df["ring_spacing"].iloc[0], axial_offset, atol=1e-6)
+        df = dn.ring_spacing()
+        np.testing.assert_allclose(df["spacing_1_2"].iloc[0], axial_offset, atol=1e-6)
 
     def test_inter_ring_twist_staggered(self):
         """Ring past the half-period (>Δ/2) folds to a negative twist."""
@@ -2482,15 +2481,16 @@ class TestDnComplex:
         m = _make_dn_motl(n=n, axial_offset=20.0, stagger_degrees=stagger)
         dn = assembly.DnComplex(m, "D6")
         df = dn.inter_ring_twist(degrees=True)
-        expected = stagger - delta  # 45° - 60° = -15°
-        np.testing.assert_allclose(df["inter_ring_twist"].iloc[0], expected, atol=1e-4)
+        # The axis runs from the lower-numbered ring to the higher one, so the folded twist is +15°.
+        expected = delta - stagger  # 60° - 45° = +15°
+        np.testing.assert_allclose(df["twist_1_2"].iloc[0], expected, atol=1e-4)
 
     def test_inter_ring_twist_eclipsed(self):
         """Eclipsed rings (0 rotation) give twist ≈ 0 degrees."""
         m = _make_dn_motl(n=6, axial_offset=20.0, stagger_degrees=0.0)
         dn = assembly.DnComplex(m, "D6")
         df = dn.inter_ring_twist(degrees=True)
-        np.testing.assert_allclose(df["inter_ring_twist"].iloc[0], 0.0, atol=1e-4)
+        np.testing.assert_allclose(df["twist_1_2"].iloc[0], 0.0, atol=1e-4)
 
     def test_occupancy_denominator_is_2n(self):
         """occupancy uses n_subunits == 2n as denominator."""
@@ -2510,9 +2510,9 @@ class TestDnComplex:
         dn = assembly.DnComplex(m, "D4")
         dn.split_rings(axis=(0.0, 1.0, 0.0))
         labels = dn.motl.df["geom5"].values
-        assert set(labels).issubset({0.0, 1.0})
-        assert (labels == 0.0).sum() == n
+        assert set(labels).issubset({1.0, 2.0})
         assert (labels == 1.0).sum() == n
+        assert (labels == 2.0).sum() == n
 
     def test_unify_nn_orientations_not_on_cn_or_dn(self):
         """unify_nn_orientations is only on NPC, not CnComplex or DnComplex."""
@@ -2527,17 +2527,17 @@ class TestDnComplex:
         m = _make_dn_motl(n=n, radius=radius, axial_offset=20.0)
         dn = assembly.DnComplex(m, "D6")
         dn.split_rings()
-        summary_df, _ = dn.diameter(pixel_size=1.0)
+        summary_df, _ = dn.diameter()
         assert len(summary_df) == 2
 
     def test_get_object_stats_one_row_per_object(self):
         """get_object_stats returns one row per (tomo_id, object_id)."""
         m = _make_dn_motl(n=6, axial_offset=20.0)
         dn = assembly.DnComplex(m, "D6")
-        stats = dn.get_object_stats(pixel_size=1.0)
+        stats = dn.get_object_stats()
         assert len(stats) == 1
-        assert "ring_spacing" in stats.columns
-        assert "inter_ring_twist" in stats.columns
+        assert "spacing_1_2" in stats.columns
+        assert "twist_1_2" in stats.columns
 
 
 # ---------------------------------------------------------------------------
@@ -2561,22 +2561,10 @@ def _toy_motl(n: int = 4) -> cryomotl.Motl:
     return cryomotl.Motl(pd.DataFrame(rows))
 
 
-def test_rays_from_motl_shape_and_origins():
-    """Output shape is (N, 6); origin x coords are scaled by pixel_size; identity
-    rotation produces dx=dy=0, dz>0 for reverse_direction=False."""
-    motl = _toy_motl(n=3)
-    rays = assembly.rays_from_motl(motl, pixel_size=2.0, reverse_direction=False)
-    assert rays.shape == (3, 6)
-    np.testing.assert_array_almost_equal(rays[:, 0], np.arange(3) * 2.0)
-    assert np.all(rays[:, 5] > 0)
-    np.testing.assert_array_almost_equal(rays[:, 3], 0.0)
-    np.testing.assert_array_almost_equal(rays[:, 4], 0.0)
-
-
 def test_rays_from_motl_reverse_direction_flips_z():
     """reverse_direction=True negates the z component of the direction."""
     motl = _toy_motl(n=2)
-    rays = assembly.rays_from_motl(motl, pixel_size=1.0, reverse_direction=True)
+    rays = assembly.rays_from_motl(motl, reverse_direction=True)
     assert np.all(rays[:, 5] < 0)
 
 
@@ -4369,7 +4357,7 @@ class TestEnvelopeFromFaces:
 
     def test_outward_normals(self, mesh_and_psurf):
         m, ps = mesh_and_psurf
-        centre = ps.blocks.df[["x", "y", "z"]].values.mean(axis=0) * ps.block_pixel_size
+        centre = ps.blocks.df[["x", "y", "z"]].values.mean(axis=0) * ps.pixel_size
         tri_verts = m.vertices[m.faces]  # (F, 3, 3)
         tri_centroids = tri_verts.mean(axis=1)  # (F, 3)
         e0 = tri_verts[:, 1] - tri_verts[:, 0]
@@ -6423,9 +6411,9 @@ class TestRingGeometryFreeFunctions:
         axial_offset = 30.0
         m = _make_dn_motl(n=6, axial_offset=axial_offset)
         dn = assembly.DnComplex(m, "D6")
-        df = dn.ring_spacing(pixel_size=1.0)
-        assert "ring_spacing" in df.columns
-        np.testing.assert_allclose(df["ring_spacing"].iloc[0], axial_offset, atol=1e-6)
+        df = dn.ring_spacing()
+        assert "spacing_1_2" in df.columns
+        np.testing.assert_allclose(df["spacing_1_2"].iloc[0], axial_offset, atol=1e-6)
 
     def test_npc_three_rings_gives_two_spacings_and_two_twists(self):
         """NPC with three rings produces spacing/twist columns for all 3 ring pairs."""
@@ -6468,16 +6456,16 @@ class TestRingGeometryFreeFunctions:
         """DnComplex.ring_spacing auto-splits when split_rings() has not been called."""
         m = _make_dn_motl(n=6, axial_offset=20.0)
         dn = assembly.DnComplex(m, "D6")
-        df = dn.ring_spacing(pixel_size=1.0)
-        assert "ring_spacing" in df.columns
-        assert df["ring_spacing"].iloc[0] > 0
+        df = dn.ring_spacing()
+        assert "spacing_1_2" in df.columns
+        assert df["spacing_1_2"].iloc[0] > 0
 
     def test_dn_inter_ring_twist_auto_splits_without_explicit_call(self):
         """DnComplex.inter_ring_twist auto-splits when split_rings() has not been called."""
         m = _make_dn_motl(n=6, axial_offset=20.0)
         dn = assembly.DnComplex(m, "D6")
         df = dn.inter_ring_twist(degrees=True)
-        assert "inter_ring_twist" in df.columns
+        assert "twist_1_2" in df.columns
 
     def test_npc_inter_ring_twist_raises_before_merge(self):
         """NPC.inter_ring_twist raises ValueError naming merge() as remedy."""
@@ -6566,9 +6554,8 @@ class TestAssemblyStats:
 
     # ── pixel_size per layer ──────────────────────────────────────────────────
 
-    def test_pixel_size_layers_independent(self):
-        """Mesh pixel_size=2 and block_layer pixel_size=3: surface unchanged, warning issued."""
-        import warnings as _warnings
+    def test_pixel_size_mismatch_between_mesh_and_block_layer_raises(self):
+        """Mesh pixel_size=2 and block_layer pixel_size=3: a ValueError names both values."""
         from cryocat.core.surface import Mesh as _Mesh
 
         mesh = _Mesh()
@@ -6585,20 +6572,10 @@ class TestAssemblyStats:
         )
         bl = assembly.BlockLayer(motl, block_def, pixel_size=3.0)
 
-        with _warnings.catch_warnings(record=True) as caught:
-            _warnings.simplefilter("always")
-            ps = assembly.PleomorphicAssembly(mesh, block_layer=bl)
-
-        # Surface pixel_size is unchanged
-        np.testing.assert_array_equal(ps._surface.pixel_size, np.array([2.0, 2.0, 2.0]))
-        # Block-layer scale is 3
-        assert ps.block_pixel_size == 3.0
-        # Warning names both values
-        assert any(
-            "2.0" in str(w.message) and "3.0" in str(w.message)
-            for w in caught
-            if issubclass(w.category, UserWarning)
-        )
+        with pytest.raises(ValueError, match=r"3\.0.*2\.0"):
+            assembly.PleomorphicAssembly(mesh, block_layer=bl)
+        # The caller's mesh is not changed
+        np.testing.assert_array_equal(mesh.pixel_size, np.array([2.0, 2.0, 2.0]))
 
 
 # =============================================================================
@@ -7008,7 +6985,7 @@ class TestNPCSubunitStats:
         npc = assembly.NPC([r0, r1, r2], symmetry=8, radius=50.)
         npc.assign_subunit_index()
         npc.merge(npc_radius=50., distance_threshold=20.)
-        stats = npc.get_object_stats(pixel_size=1.0)
+        stats = npc.get_object_stats()
         assert len(stats) == 3, f"expected 3 rows (one per ring), got {len(stats)}"
         z_vals = sorted(stats["z"].tolist())
         assert abs(z_vals[0] - 40.) < 0.5, f"z[0]={z_vals[0]} expected ~40"
@@ -7025,7 +7002,7 @@ class TestNPCSubunitStats:
         npc = assembly.NPC([r0, r1, r2], symmetry=8, radius=50.)
         npc.assign_subunit_index()
         npc.merge(npc_radius=50., distance_threshold=20.)
-        spacing_df = npc.get_subunit_spacing(pixel_size=1.0)
+        spacing_df = npc.get_subunit_spacing()
         assert len(spacing_df) == 8, f"expected 8 rows (one per subunit), got {len(spacing_df)}"
         assert "spacing_1_2" in spacing_df.columns, "missing column spacing_1_2"
         assert "spacing_2_3" in spacing_df.columns, "missing column spacing_2_3"
@@ -7045,7 +7022,7 @@ class TestNPCSubunitStats:
         npc = assembly.NPC([r0, r1, r2], symmetry=8, radius=50.)
         npc.assign_subunit_index()
         npc.merge(npc_radius=50., distance_threshold=20.)
-        df = npc.get_subunit_spacing(pixel_size=1.0)
+        df = npc.get_subunit_spacing()
         spacing_cols = [c for c in df.columns if c.startswith("spacing_")]
         assert len(spacing_cols) == 3
         assert "spacing_1_3" in df.columns
@@ -7062,7 +7039,7 @@ class TestNPCSubunitStats:
         npc = assembly.NPC([r0, r1, r2], symmetry=8, radius=radius)
         npc.assign_subunit_index()
         npc.merge(npc_radius=radius, distance_threshold=20.)
-        stats = npc.get_subunit_stats(pixel_size=1.0)
+        stats = npc.get_subunit_stats()
         assert len(stats) == 24, f"expected 24 rows (3 rings × 8 subunits), got {len(stats)}"
         np.testing.assert_allclose(stats["distance_to_centre"].values, radius, atol=1e-6)
 
@@ -7077,7 +7054,7 @@ class TestNPCSubunitStats:
         npc = assembly.NPC([r0, r1], symmetry=8, radius=50.)
         npc.assign_subunit_index()
         npc.merge(npc_radius=50., distance_threshold=15.)
-        stats = npc.get_subunit_stats(pixel_size=1.0)
+        stats = npc.get_subunit_stats()
         assert len(stats) == 16, f"expected 16 rows, got {len(stats)}"
         ring_col = npc._ring_column
         tilted = stats[(stats["subtomo_id"] == 1.0) & (stats[ring_col] == 1.0)]
@@ -8001,7 +7978,7 @@ class TestInteriorAngle:
     def test_regular_ring_all_angles_are_135(self):
         """Regular 8-ring: all interior angles ≈ 135°."""
         npc = _make_npc_single_ring(n=8, radius=50.0)
-        stats = npc.get_subunit_stats(pixel_size=1.0, include_flagged=True)
+        stats = npc.get_subunit_stats(include_flagged=True)
         assert "interior_angle" in stats.columns
         np.testing.assert_allclose(
             stats["interior_angle"].values, 135.0, atol=0.5,
@@ -8013,11 +7990,11 @@ class TestInteriorAngle:
         m = _make_synthetic_ring(n=8, radius=50.0)
         npc = assembly.NPC([m], symmetry=8, radius=50.0)
         npc.assign_subunit_index()
-        stats_fwd = npc.get_subunit_stats(pixel_size=1.0, include_flagged=True)
+        stats_fwd = npc.get_subunit_stats(include_flagged=True)
 
         order_col = npc.subunit_index_column
         npc.motl.df[order_col] = 9.0 - npc.motl.df[order_col]
-        stats_rev = npc.get_subunit_stats(pixel_size=1.0, include_flagged=True)
+        stats_rev = npc.get_subunit_stats(include_flagged=True)
 
         np.testing.assert_allclose(
             np.sort(stats_fwd["interior_angle"].values),
@@ -8036,7 +8013,7 @@ class TestInteriorAngle:
         m.df.loc[m.df["subtomo_id"] == 1.0, "y"] = cy
         npc = assembly.NPC([m], symmetry=n, radius=radius)
         npc.assign_subunit_index()
-        stats = npc.get_subunit_stats(pixel_size=1.0, include_flagged=True)
+        stats = npc.get_subunit_stats(include_flagged=True)
         pulled = stats.loc[stats["subtomo_id"] == 1.0, "interior_angle"].iloc[0]
         # Non-adjacent particles (not subtomo_id 1, 2, 8) are unaffected
         nonadj = stats.loc[~stats["subtomo_id"].isin([1.0, 2.0, 8.0]), "interior_angle"].values
@@ -8077,7 +8054,7 @@ class TestRingEllipticity:
     def test_circular_ring_has_zero_ellipticity(self):
         """Regular circular ring → ellipticity ≈ 0, axis_ratio ≈ 1, partial_arc = 0."""
         npc = _make_npc_single_ring(n=8, radius=50.0)
-        df = npc.ring_ellipticity(pixel_size=1.0, include_flagged=True)
+        df = npc.ring_ellipticity(include_flagged=True)
         assert len(df) == 1
         row = df.iloc[0]
         assert row["partial_arc"] == 0, "full ring should not be flagged as partial"
@@ -8090,7 +8067,7 @@ class TestRingEllipticity:
         m = _make_elliptical_motl(n, stretch, radius)
         npc = assembly.NPC([m], symmetry=n, radius=radius)
         npc.assign_subunit_index()
-        df = npc.ring_ellipticity(pixel_size=1.0, include_flagged=True)
+        df = npc.ring_ellipticity(include_flagged=True)
         assert len(df) == 1
         row = df.iloc[0]
         assert row["partial_arc"] == 0, "full ring should not be flagged as partial"
@@ -8484,10 +8461,9 @@ class TestGetComponentStats:
 
     def _cx_with_component(self, pixel_size: float = 1.0):
         m = _make_ordered_ring(n=self._N, radius=self._R, center=self._C)
-        cx = assembly.CnComplex(m, self._N, center_method="barycentric")
+        cx = assembly.CnComplex(m, self._N, center_method="barycentric", pixel_size=pixel_size)
         comp = _make_component_motl(self._N, self._R * 1.3, self._C)
         cx.add_component(comp, name="basket")
-        cx.pixel_size = pixel_size
         return cx
 
     def test_raises_for_unknown_component(self):
@@ -8518,9 +8494,8 @@ class TestGetComponentStats:
 
     def test_pixel_size_override_scales_distances(self):
         ps = 2.0
-        cx = self._cx_with_component(pixel_size=1.0)
-        df1 = cx.get_component_stats(name="basket")
-        df2 = cx.get_component_stats(name="basket", pixel_size=ps)
+        df1 = self._cx_with_component(pixel_size=1.0).get_component_stats(name="basket")
+        df2 = self._cx_with_component(pixel_size=ps).get_component_stats(name="basket")
         np.testing.assert_allclose(
             df2["radius"].values, df1["radius"].values * ps, atol=1e-6,
         )
@@ -8813,10 +8788,8 @@ class TestRingSummary:
     def test_pixel_size_override_scales_radius(self):
         r = 50.0
         m = _make_ordered_ring(n=8, radius=r)
-        cx = assembly.CnComplex(m, 8, center_method="barycentric")
-        cx.pixel_size = 1.0
-        df1 = cx.ring_summary()
-        df2 = cx.ring_summary(pixel_size=2.0)
+        df1 = assembly.CnComplex(m, 8, center_method="barycentric").ring_summary()
+        df2 = assembly.CnComplex(m, 8, center_method="barycentric", pixel_size=2.0).ring_summary()
         np.testing.assert_allclose(df2.iloc[0]["radius"], df1.iloc[0]["radius"] * 2.0, atol=1e-6)
 
     def test_n_subunits_matches_symmetry(self):
@@ -8999,7 +8972,7 @@ class TestOppositeDistance:
         """Regular n=8 ring: opposite_distance ≈ 2*R and ≈ 2*distance_to_centre."""
         R = 50.0
         npc = _make_npc_from_angles([_REGULAR_ANGLES], radius=R)
-        stats = npc.get_subunit_stats(pixel_size=1.0)
+        stats = npc.get_subunit_stats()
         assert "opposite_distance" in stats.columns
         np.testing.assert_allclose(stats["opposite_distance"].values, 2 * R, atol=1e-5)
         np.testing.assert_allclose(stats["distance_to_centre"].values, R, atol=1e-5)
@@ -9015,7 +8988,7 @@ class TestOppositeDistance:
         # Order 1 sits at angle 0° → (cx+R, cy). Move it to radius 2*R.
         cx = 50.0
         npc.motl.df.loc[npc.motl.df["geom1"] == 1.0, "x"] = cx + 2 * R
-        stats = npc.get_subunit_stats(pixel_size=1.0)
+        stats = npc.get_subunit_stats()
         order_col = npc.subunit_index_column
         # Affected pair: orders 1 and 5 — opposite_distance ≠ 2*distance_to_centre
         for order in (1.0, 5.0):
@@ -9036,7 +9009,7 @@ class TestOppositeDistance:
         R = 50.0
         npc = _make_npc_from_angles([_REGULAR_ANGLES], radius=R)
         npc.motl.df = npc.motl.df[npc.motl.df["geom1"] != 5.0].reset_index(drop=True)
-        stats = npc.get_subunit_stats(pixel_size=1.0)
+        stats = npc.get_subunit_stats()
         order_col = npc.subunit_index_column
         opp_1 = stats[stats[order_col] == 1.0]["opposite_distance"].iloc[0]
         assert pd.isna(opp_1), (
@@ -9054,7 +9027,7 @@ class TestOppositeDistance:
         angles5 = [float(72 * i) for i in range(5)]
         npc = _make_npc_from_angles([angles5])
         npc.n = 5  # patch to odd — even_n is False, formula never runs
-        stats = npc.get_subunit_stats(pixel_size=1.0)
+        stats = npc.get_subunit_stats()
         assert "opposite_distance" in stats.columns
         assert stats["opposite_distance"].isna().all(), (
             f"odd n should yield all-NaN; got {stats['opposite_distance'].tolist()}"
@@ -9074,10 +9047,10 @@ class TestOppositeDistanceConsolidation:
         R = 50.0
         npc = _make_npc_from_angles([_REGULAR_ANGLES], radius=R)
         # diameter returns mean_diameter per object
-        summary, _ = npc.diameter(pixel_size=1.0)
+        summary, _ = npc.diameter()
         diam_val = summary["mean_diameter"].iloc[0]
         # get_subunit_stats returns per-subunit opposite_distance
-        stats = npc.get_subunit_stats(pixel_size=1.0)
+        stats = npc.get_subunit_stats()
         stats_mean = stats["opposite_distance"].mean()
         np.testing.assert_allclose(diam_val, 2 * R, atol=1e-5,
                                    err_msg="diameter.mean_diameter should be ≈ 2R")
@@ -9095,7 +9068,7 @@ class TestRingSummaryOppositeDistance:
         R = 50.0
         m = _make_ordered_ring(n=8, radius=R)
         cx = assembly.CnComplex(m, 8, center_method="barycentric")
-        df = cx.ring_summary(pixel_size=1.0)
+        df = cx.ring_summary()
         assert "opposite_distance" in df.columns
         opp = df.iloc[0]["opposite_distance"]
         rad = df.iloc[0]["radius"]
@@ -9112,7 +9085,7 @@ class TestRingSummaryOppositeDistance:
         cx_val = m.df["x"].mean()  # approximate centre x
         m.df.loc[m.df["geom1"] == 1.0, "x"] = cx_val + 2 * R
         cx = assembly.CnComplex(m, 8, center_method="barycentric")
-        df = cx.ring_summary(pixel_size=1.0)
+        df = cx.ring_summary()
         opp = df.iloc[0]["opposite_distance"]
         rad = df.iloc[0]["radius"]
         assert abs(opp - 2 * rad) > 1.0, (
@@ -9127,7 +9100,7 @@ class TestRingSummaryOppositeDistance:
         # Remove order-5 (opposite of order-1); pair (1,5) becomes NaN, others remain
         m.df = m.df[m.df["geom1"] != 5.0].reset_index(drop=True)
         cx = assembly.CnComplex(m, 8, center_method="barycentric")
-        df = cx.ring_summary(pixel_size=1.0)
+        df = cx.ring_summary()
         opp = df.iloc[0]["opposite_distance"]
         assert np.isfinite(opp), (
             f"incomplete ring (7/8 subunits): opposite_distance should be finite, got {opp}"
@@ -9244,18 +9217,8 @@ class TestCnComplexStateMachinery:
         with pytest.raises(TypeError):
             assembly.CnComplex.from_parent(parent, _STATE_SHIFT)
 
-    def test_pixel_size_mismatch_raises(self):
-        """A pixel-size mismatch between instance (1.0) and state motl (2.0) raises."""
-        parent = _make_state_parent()
-        subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
-            f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
-        )
-        a = assembly.CnComplex.from_subunit_motl(subunit, _STATE_N, pixel_size=1.0)
-        with pytest.raises(ValueError, match="[Pp]ixel"):
-            a.add_subunit_state(subunit, pixel_size=2.0)
-
     def test_pixel_size_absence_does_not_raise(self):
-        """Omitting pixel_size on add_subunit_state (default None) does not raise."""
+        """A state motl is added to an instance with a pixel size other than 1 without raising; the state takes the instance's pixel size."""
         parent = _make_state_parent()
         subunit = cryomotl.Motl.load(parent).split_in_asymmetric_subunits(
             f"C{_STATE_N}", _STATE_SHIFT, split_into_objects=True
@@ -10211,3 +10174,121 @@ def test_add_parent_through_subtomo_id_equals_linking_through_a_copy():
         copied.add_parent(parent, "geom2")
     assert direct._parent_subunit_map == copied._parent_subunit_map == {3: 3, 8: 8}
     pd.testing.assert_frame_equal(direct._parent_motl.df, copied._parent_motl.df)
+
+
+# =============================================================================
+# Pixel size: reported values only
+# =============================================================================
+
+_PS_TEST = 0.784
+
+
+def _soccer_lattice(pixel_size=None):
+    motl, arm_length, arm_elev = _soccer_ball(seed=0)
+    block_def = assembly.BlockDefinition.cyclic(
+        3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
+    ps = assembly.PleomorphicAssembly(block_layer=assembly.BlockLayer(motl, block_def, pixel_size=pixel_size))
+    ps.connect(max_distance=4.0)
+    return ps
+
+
+def _curved_mesh_in_nm():
+    """A torus with its curvatures computed, its vertices taken to be in nm."""
+    import open3d as o3d
+    from cryocat.core.surface import Mesh
+    o3m = o3d.geometry.TriangleMesh.create_torus(
+        torus_radius=20.0, tube_radius=5.0, radial_resolution=40, tubular_resolution=20)
+    o3m.compute_vertex_normals()
+    mesh = Mesh()
+    mesh.vertices = np.asarray(o3m.vertices)
+    mesh.faces = np.asarray(o3m.triangles)
+    mesh.normals = np.asarray(o3m.vertex_normals)
+    mesh.units = "nm"
+    with contextlib.redirect_stdout(io.StringIO()):
+        mesh.compute_curvatures()
+    return mesh
+
+
+def test_pixel_size_scales_lengths_and_areas_but_not_the_motl():
+    plain, scaled = _soccer_lattice(), _soccer_lattice(pixel_size=_PS_TEST)
+
+    np.testing.assert_allclose(scaled.get_contact_stats()["site_distance"].to_numpy(),
+                               plain.get_contact_stats()["site_distance"].to_numpy() * _PS_TEST)
+
+    plain.envelope_from_faces()
+    scaled.envelope_from_faces()
+    np.testing.assert_allclose(scaled.get_shape_stats()["area"].to_numpy(),
+                               plain.get_shape_stats()["area"].to_numpy() * _PS_TEST**2)
+
+    pd.testing.assert_frame_equal(scaled.get_blocks_as_motl().df, plain.get_blocks_as_motl().df)
+    pd.testing.assert_frame_equal(scaled.get_faces_as_motl(randomize_phi_angle=False).df,
+                                  plain.get_faces_as_motl(randomize_phi_angle=False).df)
+
+
+def test_two_different_given_pixel_sizes_raise():
+    motl, arm_length, arm_elev = _soccer_ball(seed=0)
+    block_def = assembly.BlockDefinition.cyclic(
+        3, [arm_length * np.cos(np.radians(arm_elev)), 0.0, -arm_length * np.sin(np.radians(arm_elev))])
+    mesh = _curved_mesh_in_nm()
+    mesh.pixel_size = np.full(3, _PS_TEST)
+
+    with pytest.raises(ValueError, match="differ"):
+        assembly.PleomorphicAssembly(
+            block_layer=assembly.BlockLayer(motl, block_def, pixel_size=1.5), pixel_size=_PS_TEST)
+    with pytest.raises(ValueError, match="differ"):
+        assembly.PleomorphicAssembly(mesh, pixel_size=1.5)
+    lattice = assembly.PleomorphicAssembly(block_layer=assembly.BlockLayer(motl, block_def, pixel_size=1.5))
+    with pytest.raises(ValueError, match="differ"):
+        lattice.surface = mesh
+    with pytest.raises(ValueError, match="differ"):
+        assembly.ParametricAssembly(block_layer=assembly.BlockLayer(motl, block_def, pixel_size=1.5),
+                                    pixel_size=_PS_TEST)
+
+
+def test_attached_mesh_is_copied_and_its_curvatures_are_reported_unchanged():
+    mesh = _curved_mesh_in_nm()
+    mesh.pixel_size = np.full(3, _PS_TEST)
+    vertices = mesh.vertices.copy()
+    mean, gaussian = mesh.get_mean_curvature().copy(), mesh.get_gaussian_curvature().copy()
+    area = mesh.get_surface_area()
+
+    ps = assembly.PleomorphicAssembly(mesh)
+
+    np.testing.assert_array_equal(mesh.vertices, vertices)
+    np.testing.assert_array_equal(mesh.pixel_size, np.full(3, _PS_TEST))
+    assert ps.pixel_size == pytest.approx(_PS_TEST)
+    np.testing.assert_allclose(ps.surface.vertices, vertices / _PS_TEST)
+    np.testing.assert_allclose(ps.get_mean_curvature(), mean)
+    np.testing.assert_allclose(ps.get_gaussian_curvature(), gaussian)
+    assert ps.get_surface_area() == pytest.approx(area)
+
+
+def test_envelope_in_physical_units_is_the_voxel_envelope_times_the_pixel_size():
+    ps = _soccer_lattice(pixel_size=_PS_TEST)
+    voxel = ps.envelope_from_faces()
+    physical = ps.envelope_from_faces(physical_units=True)
+    assert physical.keys() == voxel.keys()
+    for key, mesh in voxel.items():
+        np.testing.assert_allclose(physical[key].vertices, mesh.vertices * _PS_TEST)
+        np.testing.assert_allclose(physical[key].pixel_size, np.full(3, _PS_TEST))
+        np.testing.assert_allclose(mesh.pixel_size, np.ones(3))
+    for key, mesh in ps.envelopes.items():
+        np.testing.assert_allclose(mesh.vertices, voxel[key].vertices)
+
+
+def test_cluster_subunits_to_rings_writes_the_chosen_subunit_index_column():
+    kwargs = dict(
+        input_motl=str(DATA_DIR / "gt_ir_flipped.em"), npc_radius=55, max_trace_distance=5,
+        min_trace_distance=0, mask_size=72, entry_mask_coord=(34, 61, 36), exit_mask_coord=(34, 17, 36),
+    )
+    default = assembly.NPC.cluster_subunits_to_rings(**kwargs).df.sort_values("subtomo_id").reset_index(drop=True)
+    chosen = assembly.NPC.cluster_subunits_to_rings(subunit_index_column="geom5", **kwargs).df
+    chosen = chosen.sort_values("subtomo_id").reset_index(drop=True)
+
+    np.testing.assert_array_equal(chosen["geom5"].to_numpy(), default["geom2"].to_numpy())
+    input_motl = cryomotl.Motl.load(str(DATA_DIR / "gt_ir_flipped.em"))
+    input_motl.renumber_particles()
+    input_df = input_motl.df.sort_values("subtomo_id").reset_index(drop=True)
+    np.testing.assert_array_equal(chosen["geom2"].to_numpy(), input_df["geom2"].to_numpy())
+    rest = [c for c in default.columns if c not in ("geom2", "geom5")]
+    pd.testing.assert_frame_equal(chosen[rest], default[rest])
