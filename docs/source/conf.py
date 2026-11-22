@@ -151,7 +151,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/turonova/cryocat",
+            "url": "https://github.com/turonova-lab/cryocat",
             "icon": "fab fa-github",
             "type": "fontawesome",
         },

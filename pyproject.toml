@@ -52,8 +52,8 @@ gpu = ["numba-cuda"]
 packages = ["cryocat"]
 # include-package-data = true
 [project.urls]
-"Homepage" = "https://github.com/turonova/cryoCAT"
-"Bug Tracker" = "https://github.com/turonova/cryoCAT/issues"
+"Homepage" = "https://github.com/turonova-lab/cryoCAT"
+"Bug Tracker" = "https://github.com/turonova-lab/cryoCAT/issues"
 [project.scripts]
 cc_cryomotl = "cryocat.cli:cryomotl"
 cc_cryomap = "cryocat.cli:cryomap"

@@ -10,7 +10,7 @@ Official releases of cryoCAT can be installed from `PyPI <https://pypi.org/proje
 
     pip install cryocat
 
-Since cryoCAT is being developed on daily basis, it is recommended to clone the `github repository <https://github.com/turonova/cryocat>`_
+Since cryoCAT is being developed on daily basis, it is recommended to clone the `github repository <https://github.com/turonova-lab/cryocat>`_
 and install it with::
 
     pip install -e /path/to/your/local/copy/of/cryocat/.
@@ -53,7 +53,7 @@ Getting help
 ~~~~~~~~~~~~
 
 If you think you've encountered a bug in cryoCAT, please report it on the
-`GitHub issue tracker <https://github.com/turonova/cryocat/issues>`_.
+`GitHub issue tracker <https://github.com/turonova-lab/cryocat/issues>`_.
 To be useful, bug reports must include the following information:
 
 - A reproducible code example that demonstrates the problem

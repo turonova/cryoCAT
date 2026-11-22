@@ -18,8 +18,8 @@ cryoCAT: Contextual Analysis Tools for cryo electron tomography
 **Date**: |today| **Version**: |version|
 
 **Useful links**:
-`Source Repository <https://github.com/turonova/cryocat>`__ |
-`Issues & Ideas <https://github.com/turonova/cryocat/issues>`__ |
+`Source Repository <https://github.com/turonova-lab/cryocat>`__ |
+`Issues & Ideas <https://github.com/turonova-lab/cryocat/issues>`__ |
 `PyPI <https://pypi.org/project/cryocat>`__ |
 
 :mod:`cryoCAT` is an open source,  GPL-3.0+ licensed library providing contextual analysis tools for 
