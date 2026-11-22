@@ -10,7 +10,7 @@ from skimage.transform import downscale_local_mean
 from cryocat._types import MapSource, PathOrStr, TomoList
 from cryocat.core import cryomap
 from cryocat.utils import imageutils, ioutils
-from cryocat.utils.classutils import as_list
+from cryocat.utils.classutils import as_list, cli_exposed
 
 
 class TiltStack:
@@ -142,6 +142,7 @@ class TiltStack:
             return return_data
 
 
+@cli_exposed()
 def crop(
     tilt_stack: MapSource,
     new_width: int | None = None,
@@ -222,6 +223,7 @@ def crop(
     return ts.correct_order()
 
 
+@cli_exposed()
 def sort_tilts_by_angle(
     tilt_stack: MapSource,
     input_tilts: PathOrStr | np.ndarray | list,
@@ -278,6 +280,7 @@ def sort_tilts_by_angle(
     return ts.correct_order()
 
 
+@cli_exposed()
 def remove_tilts(
     tilt_stack: MapSource,
     idx_to_remove: PathOrStr | list | np.ndarray,
@@ -342,6 +345,7 @@ def remove_tilts(
         return ts
 
 
+@cli_exposed()
 def bin(
     tilt_stack: MapSource,
     binning_factor: int,
@@ -396,6 +400,7 @@ def bin(
     return ts.correct_order()
 
 
+@cli_exposed()
 def equalize_histogram(
     tilt_stack: MapSource,
     eh_method: str = "contrast_stretching",
@@ -448,6 +453,7 @@ def equalize_histogram(
     return ts.correct_order()
 
 
+@cli_exposed()
 def calculate_total_dose_batch(
     tomo_list: TomoList,
     prior_dose_file_format: str,
@@ -487,6 +493,7 @@ def calculate_total_dose_batch(
         np.savetxt(output_path, total_dose, fmt="%.6f")
 
 
+@cli_exposed()
 def dose_filter(
     tilt_stack: MapSource,
     pixel_size: float,
@@ -590,6 +597,7 @@ def dose_filter_single_image(image: np.ndarray, dose: float, freq_array: np.ndar
     return imageutils.apply_fft_filter(image, q)
 
 
+@cli_exposed()
 def deconvolve(
     tilt_stack: MapSource,
     pixel_size_a: float,
@@ -673,6 +681,7 @@ def deconvolve(
     return ts.correct_order()
 
 
+@cli_exposed()
 def split_stack_even_odd(
     tilt_stack: MapSource,
     output_file_prefix: PathOrStr | None = None,
@@ -735,6 +744,7 @@ def split_stack_even_odd(
         raise ValueError(f"Stack contains only 1 tilt.")
 
 
+@cli_exposed()
 def merge(
     file_path_pattern: str,
     output_path: PathOrStr | None = None,
@@ -794,6 +804,7 @@ def merge(
     return final_ts.correct_order()
 
 
+@cli_exposed()
 def flip_along_axes(
     tilt_stack: MapSource,
     axes: str | list[str],

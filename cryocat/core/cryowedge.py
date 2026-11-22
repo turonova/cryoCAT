@@ -20,7 +20,7 @@ from cryocat._types import (
     TripletLike,
     WedgeMaskMethod,
 )
-from cryocat.utils.classutils import gui_exposed
+from cryocat.utils.classutils import cli_exposed, gui_exposed
 import emfile
 import math
 
@@ -66,6 +66,7 @@ def check_data_consistency(
         raise ValueError(f"The {data_type1} file has different number of entries than the {data_type2} file!")
 
 
+@cli_exposed()
 def create_wedge_list_sg(
     tomo_id: int,
     tomo_dim: TomoDimensions,
@@ -183,6 +184,7 @@ def create_wedge_list_sg(
     return wedge_list_df
 
 
+@cli_exposed()
 def create_wedge_list_sg_batch(
     tomo_list: TomoList,
     pixel_size: float,
@@ -344,6 +346,7 @@ def create_wedge_list_sg_batch(
     return wedge_list_df
 
 
+@cli_exposed()
 def create_wedge_list_em_batch(
     tomo_list: TomoList,
     tlt_file_format: str,
@@ -495,6 +498,7 @@ def load_wedge_list_em(input_data: DataSource) -> pd.DataFrame:
     return wedge_list_df
 
 
+@cli_exposed()
 def wedge_list_sg_to_em(
     input_path: PathOrStr,
     output_path: PathOrStr,
@@ -601,6 +605,7 @@ def create_wg_mask(
     return mask
 
 
+@cli_exposed()
 def apply_wedge_mask(
     wedge_mask: MapSource,
     in_map: MapSource,
@@ -827,6 +832,7 @@ def _analytical_wedgemask_slices(
     return active_slices_idx, wedge_slices_weights, wedge_slices
 
 
+@cli_exposed()
 @gui_exposed(
     label="Generate wedge mask",
     category="builder",

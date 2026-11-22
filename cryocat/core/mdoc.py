@@ -11,6 +11,7 @@ import pandas as pd
 
 from cryocat._types import ArrayLike, DataSource, PathOrStr
 from cryocat.utils import ioutils
+from cryocat.utils.classutils import cli_exposed
 
 
 class Mdoc:
@@ -646,6 +647,7 @@ class Mdoc:
         return formatted
 
 
+@cli_exposed()
 def remove_images(
     input_mdoc: PathOrStr,
     idx_to_remove: PathOrStr | list | np.ndarray,
@@ -681,6 +683,7 @@ def remove_images(
     return mdoc
 
 
+@cli_exposed()
 def remove_images_by_angles(
     input_mdoc: PathOrStr,
     angles: DataSource,
@@ -719,6 +722,7 @@ def remove_images_by_angles(
     return mdoc_obj
 
 
+@cli_exposed()
 def get_tilt_angles(
     input_mdoc: PathOrStr,
     output_path: PathOrStr | None = None,
@@ -745,6 +749,7 @@ def get_tilt_angles(
     return mdoc.imgs["TiltAngle"].values
 
 
+@cli_exposed()
 def sort_mdoc_by_tilt_angles(
     input_mdoc: PathOrStr,
     reset_z_value: bool = False,
@@ -776,6 +781,7 @@ def sort_mdoc_by_tilt_angles(
     return mdoc
 
 
+@cli_exposed()
 def split_mdoc_file(
     input_mdoc: PathOrStr | Mdoc,
     new_id: str | None = None,
@@ -833,6 +839,7 @@ def split_mdoc_file(
     return mdocs_all
 
 
+@cli_exposed()
 def merge_mdoc_files(
     mdoc_path: PathOrStr,
     new_id: str | None = None,

@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-from cryocat.core.cryomotl import Motl
+from cryocat.core.cryomotl import Motl, motl_extra_table, motl_read_parameters, relion_version_to_type
 
 
 # ── File extension → motl type ───────────────────────────────────────────────
@@ -27,17 +27,6 @@ def motl_type_from_path(path: str) -> str | None:
         ".csv": "stopgap",
         ".tbl": "dynamo",
     }.get(ext)
-
-
-# ── Relion version → internal type string ────────────────────────────────────
-
-def relion_version_to_type(version: float) -> str:
-    """Map a Relion version float to the Motl.load type string."""
-    if version == 5.0:
-        return "relion5"
-    if version == 5.1:
-        return "relion5_1"
-    return "relion"
 
 
 # ── Motl load ─────────────────────────────────────────────────────────────────
@@ -73,37 +62,27 @@ def load_motl_from_path(
 
     if motl_type != "relion":
         motl = Motl.load(resolved, motl_type)
-        if motl_type == "stopgap":
-            extra_data = motl.sg_df.to_dict("records")
-        elif motl_type == "dynamo":
-            extra_data = motl.dynamo_df.to_dict("records")
+        table = motl_extra_table(motl)
+        if table is not None:
+            extra_data = table.to_dict("records")
     else:
-        rln_kwargs: dict = {}
         actual_type = relion_version_to_type(rln_version) if rln_version else "relion"
-
-        if actual_type == "relion" and rln_version is not None:
-            rln_kwargs["version"] = rln_version
-
-        for val, kw in (
-            (rln_pixelsize, "pixel_size"),
-            (rln_binning, "binning"),
-        ):
-            if val:
-                rln_kwargs[kw] = val
-
-        # RelionMotlv5_1.__new__ does not accept tomo_format / subtomo_format —
-        # v5.1 dispatches internally to backends that handle format strings
-        # differently; passing them would raise TypeError.
-        if actual_type != "relion5_1":
-            for val, kw in (
-                (rln_tomoformat, "tomo_format"),
-                (rln_subtomoformat, "subtomo_format"),
-            ):
-                if val:
-                    rln_kwargs[kw] = val
+        # Pass each set value the reader of this Relion type takes (see motl_read_parameters).
+        accepted = motl_read_parameters(actual_type)
+        rln_kwargs = {
+            kw: val
+            for kw, val in (
+                ("version", rln_version),
+                ("pixel_size", rln_pixelsize),
+                ("binning", rln_binning),
+                ("tomo_format", rln_tomoformat),
+                ("subtomo_format", rln_subtomoformat),
+            )
+            if val and kw in accepted
+        }
 
         tomo_tmp_path = None
-        if actual_type in ("relion5", "relion5_1") and rln_tomos:
+        if "input_tomograms" in accepted and rln_tomos:
             suffix = os.path.splitext(resolved)[-1] or ".star"
             tomo_tmp = tempfile.NamedTemporaryFile(
                 delete=False, suffix=suffix, mode="w", encoding="utf-8", newline="\n"
@@ -120,7 +99,7 @@ def load_motl_from_path(
                 os.remove(tomo_tmp_path)
 
         motl_type = actual_type
-        extra_data = motl.relion_df.to_dict("records")
+        extra_data = motl_extra_table(motl).to_dict("records")
         relion_optics = motl.optics_data.to_dict("records") if motl.optics_data is not None else None
 
         if actual_type in ("relion5", "relion5_1") and hasattr(motl, "tomo_df"):

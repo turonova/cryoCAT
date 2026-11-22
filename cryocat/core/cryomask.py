@@ -16,7 +16,7 @@ import pandas as pd
 import decimal
 from skimage import morphology
 from cryocat._types import MapSource, PathOrStr, TripletLike, EulerAngles, ArrayLike, TomoDimensions
-from cryocat.utils.classutils import gui_exposed
+from cryocat.utils.classutils import cli_exposed, gui_exposed
 
 
 def parse_shape_string(shape_string: str) -> tuple[str, list[int]]:
@@ -70,6 +70,7 @@ def parse_shape_string(shape_string: str) -> tuple[str, list[int]]:
     raise ValueError(f"String '{shape_string}' does not match any known shape pattern.")
 
 
+@cli_exposed(output='map')
 def generate_mask(mask_shape: str, mask_size: int | None = None, mask_expansion: int = 4) -> np.ndarray:
     """Generates a mask array based on the specified geometric shape and dimensions.
 
@@ -235,6 +236,7 @@ def postprocess(
     return mask
 
 
+@cli_exposed()
 def union(mask_list: list[MapSource], output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Calculate the union of multiple masks. The final values are clipped to 0.0 and 1.0.
 
@@ -273,6 +275,7 @@ def union(mask_list: list[MapSource], output_path: PathOrStr | None = None, **ou
     return final_mask
 
 
+@cli_exposed()
 def intersection(mask_list: list[MapSource], output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Calculate the intersection of multiple masks. The final values are clipped to 0.0 and 1.0.
 
@@ -309,6 +312,7 @@ def intersection(mask_list: list[MapSource], output_path: PathOrStr | None = Non
     return final_mask
 
 
+@cli_exposed()
 def subtraction(mask_list: list[MapSource], output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Calculate the subtraction of multiple masks. The subtraction follows the
     order in the list, i.e., the second mask is subtracted from the first one, the third one from the result of the
@@ -347,6 +351,7 @@ def subtraction(mask_list: list[MapSource], output_path: PathOrStr | None = None
     return final_mask
 
 
+@cli_exposed()
 def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None, **output_kwargs) -> np.ndarray:
     """Calculate the difference between multiple masks. The function first compute the union of all the masks in the
     list and then their intersection which is then substracted from the union. The final values are clipped
@@ -388,6 +393,7 @@ def difference(mask_list: list[MapSource], output_path: PathOrStr | None = None,
     return final_mask
 
 
+@cli_exposed()
 @gui_exposed(label="Spherical shell", category="Mask", output="mask", hide=("mask_size", "output_path"))
 def spherical_shell_mask(
     mask_size: TripletLike,
@@ -451,6 +457,7 @@ def spherical_shell_mask(
     return shell_mask
 
 
+@cli_exposed()
 @gui_exposed(label="Sphere", category="Mask", output="mask", hide=("mask_size", "output_path"))
 def spherical_mask(
     mask_size: TripletLike,
@@ -527,6 +534,7 @@ def spherical_mask(
     return mask
 
 
+@cli_exposed()
 @gui_exposed(label="Cylinder", category="Mask", output="mask", hide=("mask_size", "output_path"))
 def cylindrical_mask(
     mask_size: TripletLike,
@@ -625,6 +633,7 @@ def cylindrical_mask(
     return mask
 
 
+@cli_exposed()
 def cylindrical_mask_from_points(
     marker1: ArrayLike,
     marker2: ArrayLike,
@@ -716,6 +725,7 @@ def cylindrical_mask_from_points(
     return rot_shifted
 
 
+@cli_exposed()
 @gui_exposed(label="Ellipsoid shell", category="Mask", output="mask", hide=("mask_size", "output_path"))
 def ellipsoid_shell_mask(
     mask_size: TripletLike,
@@ -788,6 +798,7 @@ def ellipsoid_shell_mask(
     return shell_mask
 
 
+@cli_exposed()
 @gui_exposed(label="Ellipsoid", category="Mask", output="mask", hide=("mask_size", "output_path"))
 def ellipsoid_mask(
     mask_size: TripletLike,
@@ -929,6 +940,7 @@ def preprocess_params(radius: int | float | np.ndarray, gaussian: float, gaussia
     return new_radius
 
 
+@cli_exposed()
 def molmap_tight_mask(
     input_map: MapSource,
     threshold: float = 0.0,
@@ -1002,6 +1014,7 @@ def molmap_tight_mask(
     return mask
 
 
+@cli_exposed()
 @gui_exposed(
     label="Tight (from map)",
     category="Mask",
@@ -1185,6 +1198,7 @@ def get_mass_center(input_map: MapSource) -> np.ndarray:
     return mask_center.astype(int)
 
 
+@cli_exposed()
 def shrink_full_mask(
     input_map: MapSource, shrink_factor: int, output_path: PathOrStr | None = None, **output_kwargs
 ) -> np.ndarray:
@@ -1259,6 +1273,7 @@ def shrink_full_mask(
     return filled_mask
 
 
+@cli_exposed(hide=('footprint',))
 def fill_hollow_mask(
     input_map: MapSource,
     output_path: PathOrStr | None = None,
@@ -1377,6 +1392,7 @@ def mask_overlap(mask1: np.ndarray, mask2: np.ndarray, threshold: float = 1.9) -
     return imageutils.mask_overlap(mask1, mask2, threshold)
 
 
+@cli_exposed()
 def tomogram_shell_mask(
     input_motl: cryomotl.Motl | PathOrStr,
     tomo_dim: TomoDimensions,
@@ -1448,6 +1464,7 @@ def tomogram_shell_mask(
         )
 
 
+@cli_exposed()
 def icosahedral_mask(
     mask_size: TripletLike,
     radius: int | None = None,

@@ -54,8 +54,13 @@ packages = ["cryocat"]
 "Homepage" = "https://github.com/turonova/cryoCAT"
 "Bug Tracker" = "https://github.com/turonova/cryoCAT/issues"
 [project.scripts]
-wedge_list = "cryocat.cli:wedge_list"
-tm_ana = "cryocat.cli:tm_ana"
+cc_cryomotl = "cryocat.cli:cryomotl"
+cc_cryomap = "cryocat.cli:cryomap"
+cc_cryomask = "cryocat.cli:cryomask"
+cc_tiltstack = "cryocat.cli:tiltstack"
+cc_cryowedge = "cryocat.cli:cryowedge"
+cc_mdoc = "cryocat.cli:mdoc"
+cc_tmana = "cryocat.cli:tmana"
 cryocatG = "cryocat.app.server:main"
 [tool.setuptools.package-data]
 "cryocat" = ["example_files/*.tlt"]

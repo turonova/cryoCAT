@@ -8,6 +8,14 @@ import subprocess
 import re
 import warnings
 import copy
+import ast
+import inspect
+import pydoc
+import textwrap
+import types
+import typing
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from cryocat.utils.exceptions import UserInputError
 from cryocat.core import cryomap
@@ -38,7 +46,7 @@ from cryocat._types import (
     RelionVersion,
 )
 from cryocat.utils import classutils
-from cryocat.utils.classutils import gui_exposed
+from cryocat.utils.classutils import cli_exposed, gui_exposed
 from typing import Literal
 
 from math import ceil
@@ -46,6 +54,7 @@ from pathlib import Path
 
 from scipy.spatial import KDTree
 from scipy.spatial.transform import Rotation as rot
+from numpydoc.docscrape import NumpyDocString
 
 type MotlSource = Motl | pd.DataFrame | PathOrStr
 """Anything that can be used to construct or load a :class:`Motl`.
@@ -217,6 +226,7 @@ class Motl:
         else:
             raise ValueError("Both objects need to be instances of Motl class.")
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Geometry")
     def adapt_to_trimming(self, trim_coord_start: ArrayLike, trim_coord_end: ArrayLike) -> None:
         """The adapt_to_trimming function takes in the trim_coord_start and trim_coord_end values, which are the
@@ -256,6 +266,7 @@ class Motl:
             :,
         ]
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Geometry")
     def apply_rotation(self, input_rotation: RotationLike) -> None:
         """The apply_rotation function applies a rotation to the angles in the DataFrame.
@@ -313,6 +324,7 @@ class Motl:
         self.df[["phi", "theta", "psi"]] = self.df[["phi", "theta", "psi"]].astype(float)
         self.df.loc[:, ["phi", "theta", "psi"]] = angles
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Geometry")
     def randomize_angles(
         self,
@@ -415,6 +427,7 @@ class Motl:
                     )
                 self.df[em_key] = coerced.fillna(0.0)
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Cleaning", label="Clean by separation radius")
     def clean_by_distance(
         self,
@@ -459,6 +472,7 @@ class Motl:
         print(f"Cleaned {self.df.shape[0] - cleaned_df.shape[0]} particles.")
         self.df = cleaned_df
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Cleaning", label="Clean by directional distance")
     def clean_by_directional_distance(
         self,
@@ -633,6 +647,7 @@ class Motl:
             return 0
         raise UserInputError(f"Unknown type of boundaries: {boundary_type}")
 
+    @cli_exposed(hide=('inplace', 'output_path'), output='motl')
     @gui_exposed(category="Cleaning", label="Clean by tomo mask", hide=("inplace", "output_path"))
     def clean_by_tomo_mask(
         self,
@@ -735,6 +750,7 @@ class Motl:
             return None
         return cleaned_motl
 
+    @cli_exposed(hide=('center', 'order', 'inplace', 'output_path'), output='motl')
     @gui_exposed(
         category="Cleaning",
         label="Clean by rotated-mask intersection",
@@ -936,6 +952,7 @@ class Motl:
             return None
         return cleaned_motl
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Cleaning")
     def clean_by_otsu(
         self, column_name: MotlColumn, histogram_bin: int | None = None, global_level: bool = False
@@ -1173,6 +1190,7 @@ class Motl:
 
         self.df = self.df.fillna(0.0)
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Subsets", output="motl")
     def get_random_subset(self, number_of_particles: int) -> "Motl":
         """Generate a random subset of particles from the motl.
@@ -1194,6 +1212,7 @@ class Motl:
 
         return new_motl
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Classes")
     def assign_random_classes(self, number_of_classes: int) -> None:
         """Assign a random class to each point in the motl.
@@ -1215,6 +1234,7 @@ class Motl:
         r_classes = np.random.randint(1, number_of_classes + 1, size=self.df.shape[0])
         self.df["class"] = r_classes
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Geometry")
     def flip_handedness(self, tomo_dimensions: TomoDimensions | None = None) -> None:
         """Flip the handedness of the particles in the motl.
@@ -1598,6 +1618,7 @@ class Motl:
 
         return rotations
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Geometry")
     def make_angles_canonical(self) -> None:
         """Convert Euler angles to their canonical zxz representation in-place.
@@ -1811,6 +1832,7 @@ class Motl:
 
         return cls(s1.reset_index(drop=True))
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Subsets", label="Renumber objects sequentially")
     def renumber_objects_sequentially(
         self, starting_number: int = 1, sort_by_object_id: bool = False
@@ -1848,6 +1870,7 @@ class Motl:
             df = df.sort_values("object_id").reset_index(drop=True)
         self.df = df
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Subsets", label="Merge objects")
     def merge_objects(
         self,
@@ -1994,6 +2017,7 @@ class Motl:
         else:
             raise UserInputError(f"Provided motl file {input_motl} has format that is currently not supported.")
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Cleaning")
     def remove_feature(self, column_name: MotlColumn, column_values: ArrayLike | int | float) -> None:
         """The function removes particles based on a column value (e.g. tomo number).
@@ -2019,6 +2043,7 @@ class Motl:
         column_values = np.atleast_1d(column_values)
         self.df = self.df.loc[~self.df[column_name].isin(column_values)]
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Subsets")
     def renumber_particles(self) -> None:
         """This function renumbers the particles in a motl. This is useful when you want to reorder the particles in a
@@ -2041,6 +2066,7 @@ class Motl:
         """
         self.df.loc[:, "subtomo_id"] = list(range(1, len(self.df) + 1))
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Geometry")
     def scale_coordinates(self, scaling_factor: float) -> None:
         """Scales coordinates (including shifts) by the scaling factor.
@@ -2062,6 +2088,7 @@ class Motl:
         cols = ["x", "y", "z", "shift_x", "shift_y", "shift_z"]
         self.df[cols] = self.df[cols] * scaling_factor
 
+    @cli_exposed()
     @gui_exposed(category="Subsets", output="motl_group", label="Split by feature", hide=("write_out", "output_prefix"))
     def split_by_feature(
         self, column_name: MotlColumn, write_out: bool = False, output_prefix: str = ""
@@ -2174,6 +2201,7 @@ class Motl:
         else:
             raise UserInputError(f"Provided motl file {output_path} has format that is currently not supported.")
 
+    @cli_exposed()
     @gui_exposed(category="Utility", label="Save to file")
     def save_to(self, output_path: "PathOrStr", **kwargs) -> str:
         """Save via :meth:`write_out` and return the written path as a string.
@@ -2186,6 +2214,7 @@ class Motl:
         self.write_out(output_path, **kwargs)
         return str(output_path)
 
+    @cli_exposed()
     @gui_exposed(category="Utility", label="Write to IMOD model")
     def write_to_model_file(
         self,
@@ -2263,6 +2292,7 @@ class Motl:
                 ]
             )
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Geometry")
     def update_coordinates(self) -> None:
         """Aplies the existing shifts to x, y, z positions, rounds the new coordinates and stores them as integer
@@ -2334,6 +2364,7 @@ class Motl:
         merged_motl.df.reset_index(inplace=True, drop=True)
         return merged_motl
 
+    @cli_exposed(output='motl')
     @gui_exposed(
         label="Merge and renumber",
         category="Combine",
@@ -2365,6 +2396,7 @@ class Motl:
         merged_motl.renumber_particles()
         return merged_motl
 
+    @cli_exposed(output='motl')
     @gui_exposed(
         label="Merge and drop duplicates",
         category="Combine",
@@ -2397,6 +2429,7 @@ class Motl:
         merged_motl.df.reset_index(inplace=True, drop=True)
         return merged_motl
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Cleaning")
     def remove_out_of_bounds_particles(
         self, dimensions: TomoDimensions, boundary_type: BoundaryType = "center", box_size: int | None = None
@@ -2458,6 +2491,7 @@ class Motl:
         print(f"Removed {original_size - len(self.df)} particles.")
         print(f"Original size {original_size}, new_size {len(self.df)}")
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Cleaning")
     def drop_duplicates(
         self,
@@ -2506,6 +2540,7 @@ class Motl:
         self.df = self.df.drop_duplicates(subset=column_name)
         self.df.reset_index(inplace=True, drop=True)
 
+    @cli_exposed(output='motl')
     @gui_exposed(category="Geometry", output="motl", label="Recenter to subparticle")
     @staticmethod
     def recenter_to_subparticle(
@@ -2617,6 +2652,7 @@ class Motl:
 
         return feature_motl
 
+    @cli_exposed(hide=('inplace',), output='motl')
     @gui_exposed(category="Geometry", hide=("inplace",))
     def shift_positions(self, shift: ArrayLike, inplace: bool = True) -> Motl | None:
         """Shifts the coordinates by the provided shift.
@@ -2657,6 +2693,7 @@ class Motl:
         except (TypeError, ValueError):
             return Motl(df)
 
+    @cli_exposed(output='motl')
     @gui_exposed(
         category="Geometry",
         output="motl",
@@ -6214,6 +6251,7 @@ class ModMotl(Motl):
         imod.write_model_binary(df_to_write, output_path)
 
 
+@cli_exposed(required=("output_path",))
 def emmotl2relion(
     input_motl: "MotlSource",
     relion_version: float,
@@ -6276,6 +6314,7 @@ def emmotl2relion(
     return rln_motl
 
 
+@cli_exposed(required=("output_path",))
 def relion2emmotl(
     input_motl: "MotlSource",
     relion_version: float,
@@ -6341,6 +6380,7 @@ def relion2emmotl(
     return em_motl
 
 
+@cli_exposed(required=("output_path",))
 def stopgap2emmotl(
     input_motl: "MotlSource", output_path: PathOrStr | None = None, update_coordinates: bool = False
 ) -> "EmMotl":
@@ -6372,6 +6412,7 @@ def stopgap2emmotl(
     return em_motl
 
 
+@cli_exposed(required=("output_path",))
 def emmotl2stopgap(
     input_motl: "MotlSource",
     output_path: PathOrStr | None = None,
@@ -6408,6 +6449,7 @@ def emmotl2stopgap(
     return sg_motl
 
 
+@cli_exposed(required=("output_path",))
 def relion2stopgap(
     input_motl: "MotlSource",
     relion_version: float,
@@ -6459,6 +6501,7 @@ def relion2stopgap(
     return sg_motl
 
 
+@cli_exposed(required=("output_path",))
 def stopgap2relion(
     input_motl: "MotlSource",
     relion_version: float,
@@ -6518,6 +6561,7 @@ def stopgap2relion(
     return rln_motl
 
 
+@cli_exposed(required=("output_path",))
 def emmotl2mod(
     input_motl: "MotlSource", output_path: PathOrStr | None = None, mod_prefix: str = "", mod_suffix: str = ".mod"
 ) -> "ModMotl":
@@ -6549,6 +6593,7 @@ def emmotl2mod(
     return mod_motl
 
 
+@cli_exposed(required=("output_path",))
 def mod2emmotl(
     input_mod: "MotlSource",
     output_path: PathOrStr | None = None,
@@ -6716,3 +6761,292 @@ def motl_converter_kwargs(
         )
 
     return output_motl
+
+# ===========================================================================
+# Shared motl IO — how each motl type is read and written (GUI and CLI)
+# ===========================================================================
+#
+# Reading is :meth:`Motl.load` itself.  Writing builds the class that
+# :meth:`Motl.write_out` writes the type with and calls that class's
+# ``write_out``.  Which class each type uses, and which arguments ``Motl.load``,
+# ``Motl.write_out`` or a converter pass themselves, are read from their source
+# with :mod:`ast`; the options are read from the signatures and numpydoc
+# docstrings of the constructors and writers.
+
+_MOTL_IO_EXTRA_TABLES: dict[type, str] = {RelionMotl: "relion_df", StopgapMotl: "sg_df", DynamoMotl: "dynamo_df"}
+"""The attribute in which a motl class keeps its own format's table.
+
+The one hand-written list of this section: nothing in the classes names it.
+"""
+
+
+@dataclass(frozen=True)
+class MotlIOParameter:
+    """One option of a motl constructor or writer.
+
+    ``source`` says where ``annotation`` came from: ``"annotation"``,
+    ``"docstring"`` (the numpydoc type), ``"default"`` (the type of a non-None
+    default) or ``"text"`` (nothing gave a type).
+    """
+
+    name: str
+    annotation: Any
+    default: Any
+    description: str
+    source: str
+    owner: Callable
+
+
+def relion_version_to_type(version: float) -> str:
+    """Map a Relion version float to the Motl.load type string."""
+    if version == 5.0:
+        return "relion5"
+    if version == 5.1:
+        return "relion5_1"
+    return "relion"
+
+
+def motl_io_types() -> tuple[str, ...]:
+    """The motl types the shared motl IO reads and writes: the values of ``MotlType``."""
+    return typing.get_args(MotlType.__value__)
+
+
+def _motl_io_tree(fn: Callable) -> ast.AST:
+    return ast.parse(textwrap.dedent(inspect.getsource(fn)))
+
+
+def _motl_io_class(name: str) -> type | None:
+    """The motl class of this module called *name*, or None."""
+    obj = globals().get(name)
+    return obj if inspect.isclass(obj) and obj.__module__ == __name__ else None
+
+
+def _motl_io_branches(fn: Callable) -> dict[str, list[ast.stmt]]:
+    """The body of each ``if``/``elif`` branch of *fn* that compares a name with motl type names, by type."""
+    types_ = set(motl_io_types())
+    branches: dict[str, list[ast.stmt]] = {}
+    for node in ast.walk(_motl_io_tree(fn)):
+        if not (isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and len(node.test.ops) == 1):
+            continue
+        test, comparator = node.test, node.test.comparators[0]
+        if not isinstance(test.left, ast.Name):
+            continue
+        if isinstance(test.ops[0], ast.Eq) and isinstance(comparator, ast.Constant):
+            names = [comparator.value]
+        elif isinstance(test.ops[0], ast.In) and isinstance(comparator, (ast.Tuple, ast.List, ast.Set)):
+            names = [e.value for e in comparator.elts if isinstance(e, ast.Constant)]
+        else:
+            continue
+        for name in names:
+            if name in types_:
+                branches.setdefault(name, node.body)
+    missing = types_ - set(branches)
+    if missing:
+        raise RuntimeError(f"{fn.__qualname__} has no branch for the motl types {sorted(missing)}")
+    return branches
+
+
+def _motl_io_class_call(body: list[ast.stmt]) -> tuple[type, ast.Call]:
+    """The first call to a motl class in *body*, and the class."""
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                cls = _motl_io_class(node.func.id)
+                if cls is not None:
+                    return cls, node
+    raise RuntimeError("branch without a motl class call")
+
+
+@lru_cache(maxsize=None)
+def _motl_io_load_dispatch() -> dict[str, tuple[type, frozenset[str], bool]]:
+    """Per type: the class :meth:`Motl.load` reads with, the keywords it passes itself, and whether it passes ``**kwargs`` on."""
+    dispatch = {}
+    for motl_type, body in _motl_io_branches(Motl.load.__func__).items():
+        cls, call = _motl_io_class_call(body)
+        passed = frozenset(k.arg for k in call.keywords if k.arg is not None)
+        dispatch[motl_type] = (cls, passed, any(k.arg is None for k in call.keywords))
+    return dispatch
+
+
+@lru_cache(maxsize=None)
+def _motl_io_write_dispatch() -> dict[str, tuple[type, dict[str, Any]]]:
+    """Per type: the class :meth:`Motl.write_out` writes with, and the constant keywords it builds that class with."""
+    dispatch = {}
+    for motl_type, body in _motl_io_branches(Motl.write_out).items():
+        cls, call = _motl_io_class_call(body)
+        fixed = {k.arg: k.value.value for k in call.keywords if k.arg is not None and isinstance(k.value, ast.Constant)}
+        dispatch[motl_type] = (cls, fixed)
+    return dispatch
+
+
+def _motl_io_documented_type(doc_type: str) -> Any:
+    """The type a numpydoc entry names (``float, optional`` → ``float``), a union for ``a or b``, or None."""
+    spec = re.sub(r",\s*(optional|default\s*[=:].*)$", "", doc_type.strip())
+    spec = re.sub(r",\s*(optional|default\s*[=:].*)$", "", spec)
+    members = []
+    for token in re.split(r"\s+or\s+|\s*\|\s*", spec):
+        try:
+            member = eval(token, globals())  # noqa: S307 - library docstring, not user input
+        except Exception:
+            member = pydoc.locate(token)
+        if inspect.isclass(member) or isinstance(member, (typing.TypeAliasType, types.GenericAlias)):
+            members.append(member)
+    if not members:
+        return None
+    return members[0] if len(members) == 1 else typing.Union[tuple(members)]
+
+
+def _motl_io_parameters(fn: Callable, skip: set[str]) -> dict[str, MotlIOParameter]:
+    """The parameters of *fn* (a class: its constructor) except *skip*, with their types and descriptions."""
+    doc = inspect.getdoc(fn) or ""
+    documented = {p.name.split(":")[0].strip(): p.type for p in NumpyDocString(doc)["Parameters"]} if doc else {}
+    descriptions = classutils.process_method_docstring(fn)
+    parameters = {}
+    for name, param in inspect.signature(fn).parameters.items():
+        if name in skip or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        annotation, source = param.annotation, "annotation"
+        if annotation is inspect.Parameter.empty:
+            annotation, source = _motl_io_documented_type(documented.get(name, "")), "docstring"
+            if annotation is None and param.default not in (None, inspect.Parameter.empty):
+                annotation, source = type(param.default), "default"
+            if annotation is None:
+                annotation, source = str, "text"
+        while isinstance(annotation, str):
+            annotation = eval(annotation, globals())  # noqa: S307 - library source, not user input
+        parameters[name] = MotlIOParameter(name, annotation, param.default, descriptions.get(name, ""), source, fn)
+    return parameters
+
+
+def _motl_io_first_parameters(fn: Callable, count: int) -> set[str]:
+    """The names of the first *count* parameters of *fn* after ``self``: the ones a call fills positionally."""
+    names = [n for n in inspect.signature(fn).parameters if n != "self"]
+    return set(names[:count])
+
+
+def _motl_io_merged(declarations: list[MotlIOParameter]) -> MotlIOParameter:
+    """One option declared by several constructors or writers: the union of their types, the first description."""
+    annotations = list(dict.fromkeys(d.annotation for d in declarations))
+    annotation = annotations[0] if len(annotations) == 1 else typing.Union[tuple(annotations)]
+    first = declarations[0]
+    return MotlIOParameter(first.name, annotation, first.default, first.description, first.source, first.owner)
+
+
+@lru_cache(maxsize=None)
+def motl_read_parameters(motl_type: str) -> dict[str, MotlIOParameter]:
+    """The options :meth:`Motl.load` takes for *motl_type*, by name.
+
+    These are the parameters of the class it reads that type with, except the
+    input itself and the keywords ``Motl.load`` passes; empty when ``Motl.load``
+    passes no options on to that class.  The returned dict is shared: do not
+    change it.
+    """
+    cls, passed, passes_on = _motl_io_load_dispatch()[motl_type]
+    if not passes_on:
+        return {}
+    return _motl_io_parameters(cls, _motl_io_first_parameters(cls, 1) | passed)
+
+
+@lru_cache(maxsize=None)
+def motl_write_parameters(motl_type: str) -> tuple[dict[str, MotlIOParameter], dict[str, MotlIOParameter]]:
+    """The constructor options of :func:`build_motl_writer` and the ``write_out`` options for *motl_type*.
+
+    Both exclude the data, the output path and the keywords
+    :meth:`Motl.write_out` fixes for that type.  The returned dicts are
+    shared: do not change them.
+    """
+    cls, fixed = _motl_io_write_dispatch()[motl_type]
+    constructor = _motl_io_parameters(cls, _motl_io_first_parameters(cls, 1) | set(fixed))
+    writer = _motl_io_parameters(cls.write_out, _motl_io_first_parameters(cls.write_out, 1) | set(fixed) | {"self"})
+    return constructor, writer
+
+
+def build_motl_writer(
+    motl_type: str, motl_df: pd.DataFrame, extra_df: pd.DataFrame | list[dict] | None = None, **constructor_kwargs
+) -> Motl:
+    """The motl that writes *motl_df* as *motl_type*; call its ``write_out`` with the writer options.
+
+    It is the class :meth:`Motl.write_out` writes that type with, built from
+    *motl_df* with the keywords ``Motl.write_out`` fixes and
+    *constructor_kwargs* (see :func:`motl_write_parameters`).  *extra_df*,
+    the format's own table, is set on it when its class keeps one.
+
+    Raises
+    ------
+    ValueError
+        If *motl_type* is not a motl type.
+    """
+    if motl_type not in motl_io_types():
+        raise ValueError(f"Unknown motl type {motl_type!r}; supported: {', '.join(motl_io_types())}")
+    cls, fixed = _motl_io_write_dispatch()[motl_type]
+    (data_argument,) = _motl_io_first_parameters(cls, 1)
+    motl = cls(**{data_argument: motl_df}, **fixed, **constructor_kwargs)
+    if extra_df is not None:
+        for owner, attribute in _MOTL_IO_EXTRA_TABLES.items():
+            if isinstance(motl, owner):
+                setattr(motl, attribute, extra_df if isinstance(extra_df, pd.DataFrame) else pd.DataFrame(extra_df))
+                break
+    return motl
+
+
+def motl_extra_table(motl: Motl) -> pd.DataFrame | None:
+    """The table of *motl*'s own format that its class keeps (e.g. ``relion_df``), or None."""
+    for owner, attribute in _MOTL_IO_EXTRA_TABLES.items():
+        if isinstance(motl, owner):
+            return getattr(motl, attribute)
+    return None
+
+
+@lru_cache(maxsize=None)
+def motl_kwargs_parameters(fn: Callable) -> dict[str, tuple[str, dict[str, MotlIOParameter]]]:
+    """The parameters *fn* passes on as ``**name`` to motl constructors or writers, and their options.
+
+    For each such parameter: ``"constructor"`` or ``"writer"``, and the
+    options of every constructor or writer it reaches (a variable's class is
+    read from its assignments), merged by name.  A name *fn* passes to one of
+    those calls itself, by keyword or position, is not an option.  The
+    returned dict is shared: do not change it.
+    """
+    tree = _motl_io_tree(fn)
+    own = set(inspect.signature(fn).parameters)
+    assigned: dict[str, list[type]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+            cls = _motl_io_class(node.value.func.id)
+            for target in node.targets:
+                if cls is not None and isinstance(target, ast.Name):
+                    assigned.setdefault(target.id, []).append(cls)
+
+    reached: dict[str, tuple[str, list[Callable], set[str]]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg is not None or not isinstance(keyword.value, ast.Name) or keyword.value.id not in own:
+                continue
+            if isinstance(node.func, ast.Name) and _motl_io_class(node.func.id) is not None:
+                role, targets = "constructor", [_motl_io_class(node.func.id)]
+            elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
+                role = "writer"
+                classes = assigned.get(node.func.value.id, [])
+                targets = [getattr(c, node.func.attr) for c in classes if inspect.isfunction(getattr(c, node.func.attr, None))]
+            else:
+                continue
+            if not targets:
+                continue
+            entry = reached.setdefault(keyword.value.id, (role, [], set()))
+            if entry[0] != role:
+                raise RuntimeError(f"{fn.__qualname__} passes {keyword.value.id} to constructors and writers")
+            for target in targets:
+                entry[1].append(target)
+                entry[2].update(_motl_io_first_parameters(target, len(node.args)))
+            entry[2].update(k.arg for k in node.keywords if k.arg is not None)
+
+    result = {}
+    for name, (role, targets, passed) in reached.items():
+        declarations: dict[str, list[MotlIOParameter]] = {}
+        for target in dict.fromkeys(targets):
+            for option in _motl_io_parameters(target, passed | {"self"}).values():
+                declarations.setdefault(option.name, []).append(option)
+        result[name] = (role, {n: _motl_io_merged(d) for n, d in declarations.items()})
+    return result

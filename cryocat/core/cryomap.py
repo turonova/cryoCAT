@@ -11,7 +11,7 @@ from typing import Any, TYPE_CHECKING
 from cryocat.utils import ioutils
 from cryocat.utils import geom
 from cryocat.utils import imageutils
-from cryocat.utils.classutils import gui_exposed
+from cryocat.utils.classutils import cli_exposed, gui_exposed
 from skimage import transform
 from cryocat._types import MapSource, PathOrStr, TripletLike, EulerAngles, Symmetry, ArrayLike
 
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from cryocat.core import cryomotl
 
 
+@cli_exposed()
 def scale(
     input_map: MapSource,
     scaling_factor: float,
@@ -77,6 +78,7 @@ def scale(
     return scaled_map
 
 
+@cli_exposed()
 def pixels2resolution(
     fourier_pixels: int,
     edge_size: int,
@@ -116,6 +118,7 @@ def pixels2resolution(
     return res
 
 
+@cli_exposed()
 def resolution2pixels(
     resolution: float,
     edge_size: int,
@@ -154,6 +157,7 @@ def resolution2pixels(
     return pixels
 
 
+@cli_exposed(output='map')
 def binarize(input_map: MapSource, threshold: float = 0.5) -> np.ndarray:
     """Converts a given input map to a binary map based on a specified threshold.
 
@@ -192,6 +196,7 @@ def get_filter_radius(
     return imageutils.get_filter_radius(edge_size, fourier_pixels, target_resolution, pixel_size)
 
 
+@cli_exposed()
 def bandpass(
     input_map: MapSource,
     lp_fourier_pixels: int | None = None,
@@ -273,6 +278,7 @@ def bandpass(
     return bandpass_filtered
 
 
+@cli_exposed()
 def lowpass(
     input_map: MapSource,
     fourier_pixels: int | None = None,
@@ -338,6 +344,7 @@ def lowpass(
     return filtered_map
 
 
+@cli_exposed()
 def highpass(
     input_map: MapSource,
     fourier_pixels: int | None = None,
@@ -605,6 +612,7 @@ def write(
         raise ValueError("The output file name", file_name_str, "has to end with .mrc, .rec or .em!")
 
 
+@cli_exposed()
 def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, **output_kwargs: Any) -> np.ndarray:
     """Invert the contrast of an input volume map.
 
@@ -651,6 +659,7 @@ def invert_contrast(input_map: MapSource, output_path: PathOrStr | None = None, 
     return inverted_map
 
 
+@cli_exposed()
 def em2mrc(
     input_path: PathOrStr,
     invert: bool = False,
@@ -704,6 +713,7 @@ def em2mrc(
     write(data_to_write, output_path_str, **output_kwargs)
 
 
+@cli_exposed()
 def mrc2em(
     input_path: PathOrStr,
     invert: bool = False,
@@ -758,6 +768,7 @@ def mrc2em(
     write(data_to_write, output_path_str, **output_kwargs)
 
 
+@cli_exposed()
 def write_hdf5(
     input_path: PathOrStr,
     labels: PathOrStr | None = None,
@@ -865,6 +876,7 @@ def read_hdf5(
     return data
 
 
+@cli_exposed(output='map')
 def normalize(input_map: MapSource) -> np.ndarray:
     """Normalize a given map by standardizing its values (z-score).
 
@@ -994,6 +1006,7 @@ def sample_line_profiles(
     return profiles
 
 
+@cli_exposed(hide=('rotation',))
 def rotate(
     input_map: MapSource,
     rotation: srot | None = None,
@@ -1076,6 +1089,7 @@ def rotate(
     return rot_struct
 
 
+@cli_exposed()
 def crop(
     input_map: MapSource,
     new_size: TripletLike,
@@ -1138,6 +1152,7 @@ def crop(
     return cropped_volume
 
 
+@cli_exposed()
 def shift(
     input_map: MapSource,
     delta: ArrayLike,
@@ -1186,6 +1201,7 @@ def shift(
     return shifted_map
 
 
+@cli_exposed(output='map')
 def recenter(input_map: MapSource, new_center: TripletLike) -> np.ndarray:
     """
     Recenter a given map around a new center.
@@ -1216,6 +1232,7 @@ def recenter(input_map: MapSource, new_center: TripletLike) -> np.ndarray:
     return imageutils.recenter_volume(original_map, new_center)
 
 
+@cli_exposed(output='map')
 def normalize_under_mask(input_map: MapSource, input_mask: MapSource) -> np.ndarray:
     """A function to take a reference volume and a mask, and normalize the area
     under the mask to 0-mean and standard deviation of 1.
@@ -1428,6 +1445,7 @@ def get_cross_slices(
     return cross_slices
 
 
+@cli_exposed(output='map')
 def pad(
     input_map: MapSource,
     new_size: TripletLike,
@@ -1537,6 +1555,7 @@ def place_object(
     return object_container
 
 
+@cli_exposed()
 def deconvolve(
     input_map: MapSource,
     pixel_size_a: float,
@@ -1609,6 +1628,7 @@ def deconvolve(
     return deconvolved_map
 
 
+@cli_exposed()
 def trim(
     input_map: MapSource,
     trim_start: TripletLike,
@@ -1668,6 +1688,7 @@ def trim(
     return output_map
 
 
+@cli_exposed()
 def flip(
     input_map: MapSource,
     axis: str = "z",
@@ -1715,6 +1736,7 @@ def flip(
     return output_map
 
 
+@cli_exposed(output='map')
 def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
     """
     Symmetrize the input volume based on the specified symmetry.
@@ -1728,8 +1750,8 @@ def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
         The point-group symmetry specifier: ``"Cn"`` or a bare number (cyclic),
         ``"Dn"``, ``"T"``, ``"O"`` or ``"I"``.
 
-    Returns:
-    --------
+    Returns
+    -------
     ndarray: The symmetrized volume (average over all rotations of the group).
 
     Raises
@@ -1737,8 +1759,8 @@ def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
     ValueError
         If the symmetry is not specified correctly
 
-    Notes:
-    ------
+    Notes
+    -----
     The map must be in cryoCAT's canonical orientation for the group, with
     the symmetry centre at the box centre; see
     :func:`cryocat.utils.imageutils.symmetrize_volume` (which also documents
@@ -1747,6 +1769,7 @@ def symmetrize_volume(input_map: MapSource, symmetry: Symmetry) -> np.ndarray:
     return imageutils.symmetrize_volume(read(input_map), symmetry)
 
 
+@cli_exposed()
 def calculate_masked_fsc(
     input_map_even: MapSource,
     input_map_odd: MapSource,
@@ -1887,6 +1910,7 @@ def calculate_masked_fsc(
     return df
 
 
+@cli_exposed()
 def multiply_by_ctf(
     input_map: MapSource,
     ctf_map: MapSource,

@@ -30,7 +30,12 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 
 from cryocat.utils.classutils import TYPE_HANDLERS
-from cryocat.core.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionMotlv5, DynamoMotl
+from cryocat.core.cryomotl import (
+    Motl,
+    build_motl_writer,
+    motl_write_parameters,
+    relion_version_to_type,
+)
 
 # mport dash_html_components as html
 
@@ -62,20 +67,10 @@ def save_motl(
     else:
         df = data_to_save
 
-    if motl_type == "emmotl":
-        m = EmMotl(df)
+    if motl_type != "relion":
+        m = build_motl_writer(motl_type, df, extra_df if extra_df else None)
         run_operation(m.save_to, {"output_path": file_path})
-    elif motl_type == "stopgap":
-        m = StopgapMotl(df)
-        if extra_df:
-            m.stopgap_df = pd.DataFrame(extra_df)
-        run_operation(m.save_to, {"output_path": file_path})
-    elif motl_type == "dynamo":
-        m = DynamoMotl(df)
-        if extra_df:
-            m.dynamo_df = pd.DataFrame(extra_df)
-        run_operation(m.save_to, {"output_path": file_path})
-    elif motl_type == "relion":
+    else:
         if rln_optics:
             optics_data = pd.DataFrame(rln_optics)
             write_optics = True
@@ -83,30 +78,29 @@ def save_motl(
             optics_data = None
             write_optics = False
 
+        if rln_version == 5.0 and not rln_tomos:
+            return "Tomogram data needs to be provided for Relion 5.0 file type."
+        io_type = relion_version_to_type(rln_version)
+        constructor_params, _ = motl_write_parameters(io_type)
+        constructor_kwargs = {
+            "version": rln_version,
+            "pixel_size": rln_pixel_size,
+            "binning": rln_binning,
+            "optics_data": optics_data,
+            "input_tomograms": pd.DataFrame(rln_tomos) if rln_tomos else None,
+        }
+        m = build_motl_writer(
+            io_type,
+            df,
+            extra_df if extra_df else pd.DataFrame(),
+            **{k: v for k, v in constructor_kwargs.items() if k in constructor_params},
+        )
         if rln_version == 5.0:
-            if rln_tomos:
-                input_tomograms = pd.DataFrame(rln_tomos)
-            else:
-                return "Tomogram data needs to be provided for Relion 5.0 file type."
-            m = RelionMotlv5(
-                df,
-                input_tomograms=input_tomograms,
-                pixel_size=rln_pixel_size,
-                binning=rln_binning,
-                optics_data=optics_data,
-            )
             m._ctor_kwargs = {"pixel_size": rln_pixel_size, "binning": rln_binning}
         elif rln_version == 5.1:
-            m = RelionMotl(
-                df, version=5.1, pixel_size=rln_pixel_size, binning=rln_binning, optics_data=optics_data
-            )
             m._ctor_kwargs = {"version": 5.1, "pixel_size": rln_pixel_size, "binning": rln_binning}
         else:
-            m = RelionMotl(
-                df, version=rln_version, pixel_size=rln_pixel_size, binning=rln_binning, optics_data=optics_data
-            )
             m._ctor_kwargs = {"version": rln_version, "pixel_size": rln_pixel_size, "binning": rln_binning}
-        m.relion_df = pd.DataFrame(extra_df) if extra_df else pd.DataFrame()
         run_operation(m.save_to, {
             "output_path": file_path,
             "write_optics": write_optics,

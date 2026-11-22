@@ -11,6 +11,7 @@ This module is the single type authority shared by the Dash form generator
   app realizes them into Dash components. **Nothing here imports Dash.**
 """
 
+import argparse
 import importlib
 import inspect
 import sys
@@ -475,6 +476,70 @@ def gui_exposed(
 
 
 # ===========================================================================
+# @cli_exposed — mark a callable as a command-line subcommand
+# ===========================================================================
+
+_CLI_OUTPUTS: frozenset[str | None] = frozenset({None, "motl", "csv", "map"})
+
+
+def cli_exposed(
+    _fn: Callable | None = None,
+    *,
+    hide: tuple[str, ...] = (),
+    output: str | None = None,
+    required: tuple[str, ...] = (),
+):
+    """Mark a callable as a subcommand of the command line of its module (:mod:`cryocat.cli`).
+
+    Independent of :func:`gui_exposed`: a callable is on the command line
+    only if it carries this decorator.  The callable is returned unchanged;
+    the metadata is stored on it as ``_cli``.
+
+    Parameters
+    ----------
+    hide : tuple of str, optional
+        Parameter names the command line does not offer (beyond ``self`` and
+        ``cls``, which are always hidden).
+    output : {None, "motl", "csv", "map"}, optional
+        What the command line writes after the call.  ``None`` writes
+        nothing: the callable writes through its own parameter, or prints.
+        ``"motl"`` adds a required ``--output_motl`` and writes the returned
+        motl there, or, for a method that returns ``None``, the motl it
+        changed in place.  ``"csv"`` adds a required ``--output_csv`` and
+        writes the returned DataFrame with ``to_csv(index=False)``.  ``"map"``
+        adds a required ``--output_map`` and writes the returned array with
+        :func:`cryocat.core.cryomap.write`.
+    required : tuple of str, optional
+        Parameter names the command line offers as required although their
+        signature has a default.
+
+    Notes
+    -----
+    An unknown *output*, or a name in *required* that is not a parameter of
+    the callable, raises :exc:`ValueError` at decoration time, naming the
+    callable.  A bare ``@cli_exposed`` (no parentheses) is accepted.
+    Stack ``@classmethod`` / ``@staticmethod`` **below** so ``_cli`` lands on
+    the underlying function, as with :func:`gui_exposed`.
+    """
+
+    def wrap(fn):
+        target = fn.__func__ if isinstance(fn, (classmethod, staticmethod)) else fn
+        if output not in _CLI_OUTPUTS:
+            raise ValueError(
+                f"@cli_exposed on {target.__qualname__!r}: output must be one of None, 'motl', 'csv', 'map'; got {output!r}"
+            )
+        unknown = set(required) - set(inspect.signature(target).parameters)
+        if unknown:
+            raise ValueError(
+                f"@cli_exposed on {target.__qualname__!r}: required names {sorted(unknown)} are not parameters"
+            )
+        target._cli = {"hide": set(hide) | {"self", "cls"}, "output": output, "required": frozenset(required)}
+        return fn
+
+    return wrap(_fn) if _fn is not None else wrap
+
+
+# ===========================================================================
 # Annotation -> handler-tag resolver
 # ===========================================================================
 
@@ -760,7 +825,13 @@ def _parse_motl_source(value: Any):
 
 
 def _arg_bool(s: str) -> bool:
-    return _parse_bool(s)
+    """``true``/``false`` (any case) or ``1``/``0``; anything else is an argparse error."""
+    value = s.strip().lower()
+    if value in ("true", "1"):
+        return True
+    if value in ("false", "0"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected true/false or 1/0, got {s!r}")
 
 
 def _arg_triplet(s: str) -> Any:

@@ -2,8 +2,9 @@
 
 Covers:
 - get_motl_input component layout contract.
-- _motlio_ops pure functions: motl_type_from_path, relion_version_to_type,
-  validate_save, save_kwargs_from_store, load_kwargs_from_store.
+- _motlio_ops pure functions: motl_type_from_path, validate_save,
+  save_kwargs_from_store, load_kwargs_from_store.
+- cryomotl.relion_version_to_type.
 - motlsource.picker_options pure function.
 - relionopts.read_relion_kwargs pure function.
 - Motl.write_out round-trips and error cases; annotation pinning.
@@ -25,14 +26,13 @@ import dash_bootstrap_components as dbc
 from cryocat.app.components.motlinput import get_motl_input
 from cryocat.app.components._motlio_ops import (
     motl_type_from_path,
-    relion_version_to_type,
     validate_save,
     save_kwargs_from_store,
     load_kwargs_from_store,
 )
 from cryocat.app.components.motlsource import picker_options
 from cryocat.app.components.relionopts import read_relion_kwargs
-from cryocat.core.cryomotl import Motl, StopgapMotl, RelionMotl
+from cryocat.core.cryomotl import Motl, StopgapMotl, RelionMotl, relion_version_to_type
 from cryocat.utils.exceptions import UserInputError
 
 

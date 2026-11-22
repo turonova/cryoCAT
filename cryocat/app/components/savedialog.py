@@ -31,7 +31,15 @@ import pandas as pd
 from dash import html, dcc, Input, Output, State, no_update, ALL, ctx
 import dash_bootstrap_components as dbc
 
-from cryocat.core.cryomotl import Motl, EmMotl, StopgapMotl, RelionMotl, RelionMotlv5, DynamoMotl, _cc_name
+from cryocat.core.cryomotl import (
+    Motl,
+    RelionMotl,
+    StopgapMotl,
+    _cc_name,
+    build_motl_writer,
+    motl_write_parameters,
+    relion_version_to_type,
+)
 from cryocat.app.pool import get_rows, get_extra
 from cryocat.app.apputils import run_operation, generate_kwargs
 from cryocat.app.components.pathfield import get_path_field
@@ -187,54 +195,42 @@ def validate_save(
 
 def _build_motl(fmt: str, df, extra_df, rln_value: dict | None, writer_kwargs: dict) -> tuple:
     """Return (motl_instance, write_out_kwargs) for the given format."""
-    if fmt == "emmotl":
-        return EmMotl(df), {}
+    if fmt != "relion":
+        return build_motl_writer(fmt, df, extra_df), dict(writer_kwargs)
 
-    if fmt == "stopgap":
-        m = StopgapMotl(df)
-        if extra_df is not None:
-            src = pd.DataFrame(extra_df) if not isinstance(extra_df, pd.DataFrame) else extra_df
-            m.sg_df = src
-        return m, writer_kwargs
-
-    if fmt == "dynamo":
-        m = DynamoMotl(df)
-        if extra_df is not None:
-            src = pd.DataFrame(extra_df) if not isinstance(extra_df, pd.DataFrame) else extra_df
-            m.dynamo_df = src
-        return m, {}
-
-    if fmt == "relion":
-        rln = rln_value or {}
-        ver = float(rln.get("version") or 3.1)
-        px = rln.get("pixel_size") or 1.0
-        bn = rln.get("binning") or 1
-        optics_raw = rln.get("optics")
-        optics = pd.DataFrame(optics_raw) if optics_raw else None
-        tomos_raw = rln.get("tomos")
-        write_kw: dict = {
-            "tomo_format": rln.get("tomo_format") or "",
-            "subtomo_format": rln.get("subtomo_format") or "",
-            "use_original_entries": bool(rln.get("use_original")),
-            "write_optics": optics is not None,
-        }
-        # Merge writer-form params (keep_all_entries, add_object_id, add_subunit_id).
-        write_kw.update(writer_kwargs)
-        if ver >= 5.0:
-            tomo_df = pd.DataFrame(tomos_raw) if tomos_raw else None
-            m = RelionMotlv5(df, input_tomograms=tomo_df, pixel_size=px, binning=bn, optics_data=optics)
-            if rln.get("subtomo_size"):
-                write_kw["subtomo_size"] = rln["subtomo_size"]
-            if rln.get("convert"):
-                write_kw["convert"] = True
-        else:
-            m = RelionMotl(df, version=ver, pixel_size=px, binning=bn, optics_data=optics)
-        if extra_df is not None:
-            src = pd.DataFrame(extra_df) if not isinstance(extra_df, pd.DataFrame) else extra_df
-            m.relion_df = src
-        return m, write_kw
-
-    raise ValueError(f"Unknown save format {fmt!r}")
+    rln = rln_value or {}
+    ver = float(rln.get("version") or 3.1)
+    px = rln.get("pixel_size") or 1.0
+    bn = rln.get("binning") or 1
+    optics_raw = rln.get("optics")
+    optics = pd.DataFrame(optics_raw) if optics_raw else None
+    tomos_raw = rln.get("tomos")
+    write_kw: dict = {
+        "tomo_format": rln.get("tomo_format") or "",
+        "subtomo_format": rln.get("subtomo_format") or "",
+        "use_original_entries": bool(rln.get("use_original")),
+        "write_optics": optics is not None,
+    }
+    # Merge writer-form params (keep_all_entries, add_object_id, add_subunit_id).
+    write_kw.update(writer_kwargs)
+    io_type = relion_version_to_type(ver)
+    constructor_params, writer_params = motl_write_parameters(io_type)
+    if ver >= 5.0:
+        if rln.get("subtomo_size"):
+            write_kw["subtomo_size"] = rln["subtomo_size"]
+        if rln.get("convert") and "convert" in writer_params:
+            write_kw["convert"] = True
+    constructor_kwargs = {
+        "version": ver,
+        "pixel_size": px,
+        "binning": bn,
+        "optics_data": optics,
+        "input_tomograms": pd.DataFrame(tomos_raw) if tomos_raw else None,
+    }
+    m = build_motl_writer(
+        io_type, df, extra_df, **{k: v for k, v in constructor_kwargs.items() if k in constructor_params}
+    )
+    return m, write_kw
 
 
 def _prefill_to_form_values(prefill: dict | None) -> tuple:

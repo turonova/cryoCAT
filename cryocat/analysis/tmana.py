@@ -24,6 +24,7 @@ from cryocat._types import (
     ThresholdType,
 )
 from cryocat.core.cryomotl import MotlSource
+from cryocat.utils.classutils import cli_exposed
 
 import skimage
 from typing import Literal
@@ -215,6 +216,7 @@ def _random_symmetric_copies(
     return _euler_to_canonical(rots)
 
 
+@cli_exposed()
 def scores_extract_particles(
     scores_map: MapSource,
     angles_map: MapSource,
