@@ -35,6 +35,8 @@ The documentation including tutorials and basic user guide can be found here: [c
     * yvista (0.48),
     * ipywidgets (8.0),
     * IPython (8.0)
+    * scs (3.3)
+* Optional, installed separately (see below): gpytoolbox (0.3.8)
       
 ## PIP
 
@@ -45,5 +47,16 @@ pip install -e /path/to/your/local/copy/of/cryocat/.
 ```
 
 * Note that the '-e' will install editable version of the package - this is important because you do not have to upgrade it every time something is changed. The only thing you have to do is to pull the repo to have the latest version, all changes will be visible without running pip install upgrade.
+
+### Optional: isotropic remeshing
+
+`Mesh.remesh_isotropic` (also used by default in `Mesh.from_mrc_screened_poisson`) needs [gpytoolbox](https://github.com/sgsellan/gpytoolbox). Install it in a second step, without its dependencies:
+
+```
+pip install --no-deps "gpytoolbox==0.3.8"
+```
+
+* gpytoolbox's package metadata caps scipy and numpy below the versions cryoCAT uses, hence `--no-deps`; the remeshing works with the newer versions, and its other runtime dependencies come with cryoCAT. `pip check` will then report that gpytoolbox requires older scipy/numpy; this is expected and harmless.
+* Not available on Linux ARM (aarch64); there, use `remesh_edge_length=None`.
 
 

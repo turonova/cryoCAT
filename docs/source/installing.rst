@@ -27,6 +27,27 @@ Supported Python versions
 
 - Python 3.12+
 
+Optional: isotropic remeshing (gpytoolbox)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Isotropic remeshing (:meth:`cryocat.core.surface.Mesh.remesh_isotropic`, also used by default in
+:meth:`cryocat.core.surface.Mesh.from_mrc_screened_poisson`) needs
+`gpytoolbox <https://github.com/sgsellan/gpytoolbox>`_. Install it in a second step, without its
+dependencies::
+
+    pip install cryocat                          # or, from a clone: pip install -e .
+    pip install --no-deps "gpytoolbox==0.3.8"
+
+gpytoolbox is installed with ``--no-deps`` because its package metadata caps scipy and numpy below
+the versions cryoCAT uses; the remeshing itself works with the newer versions. Its remaining
+runtime dependencies (numpy, scipy, scikit-image, scs) are installed with cryoCAT. Afterwards
+``pip check`` reports that gpytoolbox requires older scipy and numpy versions; this warning is
+expected and harmless.
+
+gpytoolbox has no wheels for Linux ARM (aarch64), so the second step fails there. Everything else
+in cryoCAT works without it; screened Poisson meshes can still be made with
+``Mesh.from_mrc_screened_poisson(..., remesh_edge_length=None)``.
+
 
 Getting help
 ~~~~~~~~~~~~
