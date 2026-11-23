@@ -3,9 +3,9 @@
 [![PyPI](https://img.shields.io/pypi/v/cryocat)](https://pypi.org/project/cryocat/)
 [![Python](https://img.shields.io/pypi/pyversions/cryocat)](https://pypi.org/project/cryocat/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Docs](https://readthedocs.org/projects/cryocat/badge/?version=latest)](https://cryocat.readthedocs.io/en/latest/)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/turonova-lab/cryoCAT)
+[![Docs](https://readthedocs.org/projects/cryocat/badge/?version=latest)](https://cryocat.readthedocs.io/latest/)
+[![DOI](https://zenodo.org/badge/648572535.svg)](https://doi.org/10.5281/zenodo.7997723)
+[![Ask DeepWiki](https://img.shields.io/badge/DeepWiki-turonova--lab%2FcryoCAT-blue)](https://deepwiki.com/turonova-lab/cryoCAT)
 
 Contextual Analysis Tools for cryoET and subtomogram averaging
 
