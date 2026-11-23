@@ -321,6 +321,7 @@ def test_name_of_own_parameter_is_not_offered():
 @pytest.mark.parametrize("command, subcommand, flags", [
     ("cc_cryomap", "em2mrc", {"pixel_size", "transpose", "overwrite"}),
     ("cc_cryomask", "spherical_mask", {"pixel_size", "transpose", "overwrite"}),
+    ("cc_cryomask", "generate_mask", {"pixel_size", "transpose", "overwrite"}),
     ("cc_cryomotl", "save_to", {"motl_type"}),
     ("cc_tmana", "scores_extract_particles", {"relion_version"}),
     ("cc_tiltstack", "bin", {"pixel_size", "overwrite"}),
@@ -427,4 +428,4 @@ def test_map_outputs():
     assert set(MAP_OUTPUTS) == {
         ("cc_cryomap", name)
         for name in ("binarize", "normalize", "recenter", "normalize_under_mask", "pad", "symmetrize_volume")
-    } | {("cc_cryomask", "generate_mask")}
+    }

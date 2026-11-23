@@ -70,8 +70,14 @@ def parse_shape_string(shape_string: str) -> tuple[str, list[int]]:
     raise ValueError(f"String '{shape_string}' does not match any known shape pattern.")
 
 
-@cli_exposed(output='map')
-def generate_mask(mask_shape: str, mask_size: int | None = None, mask_expansion: int = 4) -> np.ndarray:
+@cli_exposed()
+def generate_mask(
+    mask_shape: str,
+    mask_size: int | None = None,
+    mask_expansion: int = 4,
+    output_path: PathOrStr | None = None,
+    **output_kwargs,
+) -> np.ndarray:
     """Generates a mask array based on the specified geometric shape and dimensions.
 
     Parameters
@@ -85,6 +91,12 @@ def generate_mask(mask_shape: str, mask_size: int | None = None, mask_expansion:
     mask_expansion : int, default=4
         If mask_size is not specified, the maximum dimension plus this expansion is used to define the mask size.
         Defaults to 4.
+    output_path : str, optional
+        Path to write out the created mask. If not specified, the mask is not written out.
+        Defaults to None.
+    **output_kwargs
+        Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
+        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
 
     Returns
     -------
@@ -120,6 +132,8 @@ def generate_mask(mask_shape: str, mask_size: int | None = None, mask_expansion:
         mask = ellipsoid_shell_mask(mask_size=mask_size, shell_thickness=specs[3], radii=specs[0:3])
     elif shape == "icosahedral":
         mask = icosahedral_mask(mask_size=mask_size, radius=specs[0])
+
+    write_out(mask, output_path, **output_kwargs)
 
     return mask
 

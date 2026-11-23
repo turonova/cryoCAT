@@ -770,3 +770,20 @@ def test_spherical_mask_raises_without_output_path():
 def test_spherical_mask_no_output_no_kwargs():
     mask = spherical_mask(16)
     assert mask.shape == (16, 16, 16)
+
+
+def test_generate_mask_output_kwargs_forwarded(tmp_path):
+    out = str(tmp_path / "mask.mrc")
+    generate_mask("sphere_r5", mask_size=20, output_path=out, pixel_size=2.5)
+    _, ps, _ = get_metadata(out)
+    assert abs(ps - 2.5) < 0.01
+
+
+def test_generate_mask_raises_without_output_path():
+    with pytest.raises(ValueError, match="output_path"):
+        generate_mask("sphere_r5", mask_size=20, pixel_size=2.7)
+
+
+def test_generate_mask_no_output_no_kwargs():
+    mask = generate_mask("sphere_r5", mask_size=20)
+    assert mask.shape == (20, 20, 20)
