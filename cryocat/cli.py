@@ -40,6 +40,7 @@ from cryocat.core import cryomotl as cryomotl_module
 from cryocat.core import cryowedge as cryowedge_module
 from cryocat.core import mdoc as mdoc_module
 from cryocat.core import tiltstack as tiltstack_module
+from cryocat.utils import geom as geom_module
 from cryocat.utils.classutils import (
     TYPE_HANDLERS,
     DerivedParameter,
@@ -702,3 +703,8 @@ def mdoc() -> None:
 def tmana() -> None:
     """``cc_tmana``: the command line of :mod:`cryocat.analysis.tmana`."""
     run(tmana_module)
+
+
+def geom() -> None:
+    """``cc_geom``: the command line of :mod:`cryocat.utils.geom`."""
+    run(geom_module)

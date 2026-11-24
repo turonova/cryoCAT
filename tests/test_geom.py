@@ -946,6 +946,24 @@ def test_generate_angles_registered_as_builder():
     assert entry.standalone is True
 
 
+def test_generate_angles_cli_exposed():
+    """generate_angles must carry @cli_exposed metadata, offering output_path (not hiding it,
+    unlike the GUI form) since the CLI has no other way to get the result out of the process."""
+    from cryocat.utils.geom import generate_angles
+    cli = getattr(generate_angles, "_cli", None)
+    assert cli is not None, "generate_angles is not decorated with @cli_exposed"
+    assert cli["output"] is None, "generate_angles writes output_path itself; the CLI must not also write it"
+    assert "output_path" not in cli["hide"]
+
+
+def test_generate_angles_is_a_cc_geom_subcommand():
+    """generate_angles must be reachable as `cc_geom generate_angles` on the command line."""
+    from cryocat import cli as cli_module
+    parser, exposed = cli_module.build_parser(cli_module.geom_module)
+    assert parser.prog == "cc_geom"
+    assert "generate_angles" in exposed
+
+
 def test_generate_angles_shape():
     """generate_angles returns (N, 3) for a small cone."""
     angles = generate_angles(cone_angle=30.0, cone_sampling=10.0)

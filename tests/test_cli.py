@@ -59,7 +59,7 @@ MAP_OUTPUTS = [(command, name) for command in COMMANDS for name, c in _subcomman
 
 def test_all_module_commands_are_entries():
     assert set(COMMANDS) == {
-        "cc_cryomotl", "cc_cryomap", "cc_cryomask", "cc_tiltstack", "cc_cryowedge", "cc_mdoc", "cc_tmana",
+        "cc_cryomotl", "cc_cryomap", "cc_cryomask", "cc_tiltstack", "cc_cryowedge", "cc_mdoc", "cc_tmana", "cc_geom",
     }
 
 

@@ -14,7 +14,7 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import splprep, splev, make_interp_spline, BSpline
 
 from cryocat._types import RotationLike, Symmetry, TripletLike, EulerAngles, ArrayLike, PathOrStr
-from cryocat.utils.classutils import gui_exposed
+from cryocat.utils.classutils import cli_exposed, gui_exposed
 
 
 # Constants
@@ -2531,6 +2531,7 @@ def apply_starting_and_offset(
     return angles
 
 
+@cli_exposed()
 @gui_exposed(
     label="Generate angle list",
     category="builder",
