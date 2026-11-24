@@ -484,7 +484,7 @@ def gui_exposed(
 # @cli_exposed — mark a callable as a command-line subcommand
 # ===========================================================================
 
-_CLI_OUTPUTS: frozenset[str | None] = frozenset({None, "motl", "csv", "map"})
+_CLI_OUTPUTS: frozenset[str | None] = frozenset({None, "motl", "csv", "map", "mdoc"})
 
 
 def cli_exposed(
@@ -505,7 +505,7 @@ def cli_exposed(
     hide : tuple of str, optional
         Parameter names the command line does not offer (beyond ``self`` and
         ``cls``, which are always hidden).
-    output : {None, "motl", "csv", "map"}, optional
+    output : {None, "motl", "csv", "map", "mdoc"}, optional
         What the command line writes after the call.  ``None`` writes
         nothing: the callable writes through its own parameter, or prints.
         ``"motl"`` adds a required ``--output_motl`` and writes the returned
@@ -513,7 +513,10 @@ def cli_exposed(
         changed in place.  ``"csv"`` adds a required ``--output_csv`` and
         writes the returned DataFrame with ``to_csv(index=False)``.  ``"map"``
         adds a required ``--output_map`` and writes the returned array with
-        :func:`cryocat.core.cryomap.write`.
+        :func:`cryocat.core.cryomap.write`.  ``"mdoc"`` adds a required
+        ``--output_mdoc`` and writes the returned :class:`~cryocat.core.mdoc.Mdoc`,
+        or, for a method that returns ``None``, the one it changed in place,
+        with its ``write``.
     required : tuple of str, optional
         Parameter names the command line offers as required although their
         signature has a default.
@@ -531,7 +534,7 @@ def cli_exposed(
         target = fn.__func__ if isinstance(fn, (classmethod, staticmethod)) else fn
         if output not in _CLI_OUTPUTS:
             raise ValueError(
-                f"@cli_exposed on {target.__qualname__!r}: output must be one of None, 'motl', 'csv', 'map'; got {output!r}"
+                f"@cli_exposed on {target.__qualname__!r}: output must be one of None, 'motl', 'csv', 'map', 'mdoc'; got {output!r}"
             )
         unknown = set(required) - set(inspect.signature(target).parameters)
         if unknown:

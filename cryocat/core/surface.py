@@ -853,7 +853,11 @@ class Mesh(DiscreteSurface):
         self._shape_index = None              # N array in [-1, 1]
         self._curvedness = None               # N array >= 0
         self._surface_type = None             # N array of category codes (-1..8)
-        
+
+        # Per-vertex fields read from a VTP file that have no dedicated attribute, kept unchanged
+        # and written back by save(..., format='vtp').
+        self.point_data: dict[str, np.ndarray] = {}
+
         # Cached geometric properties for optimization
         self._edge_vectors = None
         self._edge_lengths = None
@@ -945,6 +949,8 @@ class Mesh(DiscreteSurface):
           are divided by *factor*; Gaussian curvature by its square.
         - Shape index, surface type, normals and principal directions do not
           change under uniform scaling and are kept.
+        - The fields in :attr:`point_data` are kept unchanged: they come from
+          the file, not from cryoCAT, so their units are not known.
         - Cached edge vectors, edge lengths, face and vertex areas and the
           spatial search structures are cleared; they are rebuilt on demand.
           The connectivity is kept.
@@ -3268,40 +3274,53 @@ class Mesh(DiscreteSurface):
         mesh.units = units if units is not None else cu
 
         pd = surf.point_data
+        read_fields: set[str] = set()
         if "normals" in pd:
             mesh.normals = np.asarray(pd["normals"], dtype=np.float64)
+            read_fields.add("normals")
         elif all(k in pd for k in ("normal_x", "normal_y", "normal_z")):
             mesh.normals = np.column_stack(
                 [pd["normal_x"], pd["normal_y"], pd["normal_z"]]
             ).astype(np.float64)
+            read_fields.update(("normal_x", "normal_y", "normal_z"))
 
         curvatures_loaded = False
         if "mean_curvature" in pd:
             mesh._mean_curvature = np.asarray(pd["mean_curvature"], dtype=np.float64).ravel()
             curvatures_loaded = True
+            read_fields.add("mean_curvature")
         if "gaussian_curvature" in pd:
             mesh._gaussian_curvature = np.asarray(
                 pd["gaussian_curvature"], dtype=np.float64
             ).ravel()
             curvatures_loaded = True
+            read_fields.add("gaussian_curvature")
         if "k1" in pd and "k2" in pd:
             k1 = np.asarray(pd["k1"], dtype=np.float64).ravel()
             k2 = np.asarray(pd["k2"], dtype=np.float64).ravel()
             mesh._principal_curvatures = np.column_stack([k1, k2])
             curvatures_loaded = True
+            read_fields.update(("k1", "k2"))
         if "shape_index" in pd:
             mesh._shape_index = np.asarray(pd["shape_index"], dtype=np.float64).ravel()
             curvatures_loaded = True
+            read_fields.add("shape_index")
         if "curvedness" in pd:
             mesh._curvedness = np.asarray(pd["curvedness"], dtype=np.float64).ravel()
+            read_fields.add("curvedness")
         if "shape_category" in pd:
             mesh._surface_type = np.asarray(pd["shape_category"], dtype=np.int64).ravel()
+            read_fields.add("shape_category")
 
         if "principal_direction_1" in pd and "principal_direction_2" in pd:
             d1 = np.asarray(pd["principal_direction_1"], dtype=np.float64)
             d2 = np.asarray(pd["principal_direction_2"], dtype=np.float64)
             if d1.shape == (len(vertices), 3) and d2.shape == (len(vertices), 3):
                 mesh._principal_directions = np.stack([d1, d2], axis=2)
+                read_fields.update(("principal_direction_1", "principal_direction_2"))
+
+        # Every other point-data field is kept unchanged and written back on save.
+        mesh.point_data = {name: np.asarray(pd[name]).copy() for name in pd.keys() if name not in read_fields}
 
         print(f"Loaded: {len(vertices)} vertices, {len(faces)} faces")
 
@@ -3814,7 +3833,8 @@ class Mesh(DiscreteSurface):
                 print("Warning: No normals available, computing...")
                 self.compute_normals()
                 mesh_pv.point_data['normals'] = self.normals
-            
+            self._write_kept_point_data(mesh_pv)
+
             # Save to VTP
             mesh_pv.save(str(output_path))
             
@@ -3842,6 +3862,24 @@ class Mesh(DiscreteSurface):
             raise IOError(f"Failed to write mesh to {output_path}")
         
         return None
+
+    def _write_kept_point_data(self, mesh_pv) -> None:
+        """Add the fields of :attr:`point_data` to a PyVista mesh being written.
+
+        A field the writer already set (e.g. a recomputed ``curvature_anisotropy``)
+        is not overwritten; one whose length no longer matches the vertices
+        (after an operation that changed them) is skipped with a warning.
+        """
+        n_vertices = len(self.vertices)
+        for name, values in self.point_data.items():
+            if name in mesh_pv.point_data:
+                continue
+            if len(values) != n_vertices:
+                warnings.warn(
+                    f"Point-data field {name!r} has {len(values)} values for {n_vertices} vertices; not written."
+                )
+                continue
+            mesh_pv.point_data[name] = values
 
     def _save_mesh_vtp_with_curvatures(self, output_path: PathOrStr):
         """Save mesh to VTP with curvature data using pyvista."""
@@ -3908,7 +3946,8 @@ class Mesh(DiscreteSurface):
         
         mesh_pv.point_data['principal_direction_1'] = dir1
         mesh_pv.point_data['principal_direction_2'] = dir2
-        
+        self._write_kept_point_data(mesh_pv)
+
         if self.units:
             mesh_pv.field_data['coordinate_units'] = [self.units]
             unit_info_short = Mesh._get_curvature_unit_str(self.units).split(' (')[0]
@@ -6730,7 +6769,8 @@ class OrientedPointCloud(DiscreteSurface):
         Build point-index regions around seed points at increasing 3D radii.
 
         Always includes ``"hit points"`` (unique seeds). For each radius ``r``,
-        adds ``"r <= {r} nm"`` and annulus bands between consecutive radii.
+        adds ``"r <= {r}"`` and annulus bands between consecutive radii, with the
+        radii in the units of the vertices.
 
         Parameters
         ----------
@@ -6744,8 +6784,8 @@ class OrientedPointCloud(DiscreteSurface):
         -------
         dict[str, np.ndarray]
             Mapping from region label to sorted integer array of point indices.
-            Keys: ``"hit points"`` (the seeds), ``"r <= {r} nm"`` for each radius, and
-            ``"{r_inner} < r <= {r_outer} nm"`` for each consecutive pair of radii.
+            Keys: ``"hit points"`` (the seeds), ``"r <= {r}"`` for each radius, and
+            ``"{r_inner} < r <= {r_outer}"`` for each consecutive pair of radii.
         """
         seeds = np.unique(np.asarray(seed_point_ids, dtype=np.intp))
         vertices = np.asarray(self.vertices, dtype=np.float64)
@@ -6763,13 +6803,13 @@ class OrientedPointCloud(DiscreteSurface):
                 neighbors = tree.query_ball_point(vertices[point_id], r=radius)
                 expanded.update(int(i) for i in neighbors)
             cumulative.append(expanded)
-            regions[f"r <= {radius:g} nm"] = np.array(sorted(expanded), dtype=int)
+            regions[f"r <= {radius:g}"] = np.array(sorted(expanded), dtype=int)
 
         for idx_inner in range(len(radii) - 1):
             r_inner = radii[idx_inner]
             r_outer = radii[idx_inner + 1]
             ring_set = cumulative[idx_inner + 1] - cumulative[idx_inner]
-            regions[f"{r_inner:g} < r <= {r_outer:g} nm"] = np.array(
+            regions[f"{r_inner:g} < r <= {r_outer:g}"] = np.array(
                 sorted(ring_set), dtype=int
             )
 

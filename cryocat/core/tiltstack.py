@@ -563,7 +563,7 @@ def dose_filter(
         image = ts.data[z, :, :]
         ts.data[z, :, :] = dose_filter_single_image(image, total_dose[z], frequency_array)
 
-    ts.write_out(output_path, **output_kwargs)
+    ts.write_out(output_path, pixel_size=pixel_size, **output_kwargs)
 
     print(f"...dose-filtering finished.")
 

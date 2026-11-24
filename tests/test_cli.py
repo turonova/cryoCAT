@@ -429,3 +429,51 @@ def test_map_outputs():
         ("cc_cryomap", name)
         for name in ("binarize", "normalize", "recenter", "normalize_under_mask", "pad", "symmetrize_volume")
     }
+
+
+# ---------------------------------------------------------------------------
+# cc_geom and Mdoc methods
+# ---------------------------------------------------------------------------
+
+
+def test_geom_command_offers_generate_angles():
+    assert "generate_angles" in _subcommands("cc_geom")[1]
+
+
+MDOC_WRITES = ("sort_by_tilt", "remove_image", "keep_images", "reset_images", "keep_image", "reorder_images",
+               "change_frame_path", "update_pixel_size", "convert_section_type")
+MDOC_TABLES = ("get_images", "get_image_by_zvalue", "get_images_by_zvalues", "get_image_by_zvalue_range",
+               "get_image_features")
+
+
+@pytest.mark.parametrize("subcommand", MDOC_WRITES + MDOC_TABLES)
+def test_mdoc_method_reads_input_mdoc(subcommand):
+    subparser = _subcommands("cc_mdoc")[0][subcommand]
+    assert _action(subparser, "input_mdoc").required
+    assert not {"input_motl", "input_type"} & {a.dest for a in subparser._actions}
+
+
+@pytest.mark.parametrize("subcommand", MDOC_WRITES)
+def test_mdoc_method_writes_output_mdoc(subcommand):
+    assert _action(_subcommands("cc_mdoc")[0][subcommand], "output_mdoc").required
+
+
+@pytest.mark.parametrize("subcommand", MDOC_TABLES)
+def test_mdoc_get_method_writes_csv(subcommand):
+    assert _action(_subcommands("cc_mdoc")[0][subcommand], "output_csv").required
+
+
+def test_mdoc_method_call_is_built_on_the_loaded_mdoc():
+    invocation = _invocation("cc_mdoc", [
+        "remove_image", "--input_mdoc", "in.mdoc", "--index", "3", "--output_mdoc", "out.mdoc",
+    ])
+    assert invocation.read == ("in.mdoc", "mdoc", {})
+    assert invocation.destination == "out.mdoc"
+    assert invocation.kwargs == {"index": 3}
+
+
+def test_mdoc_functions_keep_their_names():
+    # The module functions remove_images and remove_images_by_angles stay the subcommands of those names.
+    exposed = _subcommands("cc_mdoc")[1]
+    assert exposed["remove_images"].kind == "function"
+    assert exposed["remove_images_by_angles"].kind == "function"

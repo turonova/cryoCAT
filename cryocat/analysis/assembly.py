@@ -363,11 +363,12 @@ class Chain:
         output_motl_path: PathOrStr | None = None,
         sort_by_subtomo: bool = True,
         occupancy_id: MotlColumn = "geom1",
+        subtomo_id_column: MotlColumn = "subtomo_id",
     ) -> "cryomotl.Motl":
         """Copy chain columns from the traced motl onto *input_motl*.
 
         The columns ``occupancy_id``, ``order_id_col``, ``step_dist_col``, and
-        ``chain_id_col`` are transferred by matching ``subtomo_id`` values.
+        ``chain_id_col`` are transferred by matching ``subtomo_id_column`` values.
         If occupancy has not yet been computed it is computed first.
 
         Parameters
@@ -377,10 +378,12 @@ class Chain:
         output_motl_path : PathOrStr, optional
             Path to save the annotated motl.
         sort_by_subtomo : bool, default=True
-            Sort both motls by ``subtomo_id`` before copying to ensure correct
-            row alignment.
+            Sort both motls by ``subtomo_id_column`` before copying to ensure
+            correct row alignment.
         occupancy_id : MotlColumn, default='geom1'
             Column that holds (or will hold) the chain-length value.
+        subtomo_id_column : MotlColumn, default='subtomo_id'
+            Column identifying each particle in both motls.
 
         Returns
         -------
@@ -400,10 +403,10 @@ class Chain:
         input_motl = cryomotl.Motl.load(input_motl)
 
         if sort_by_subtomo:
-            traced_motl.df.sort_values(["subtomo_id"], inplace=True)
-            input_motl.df.sort_values(["subtomo_id"], inplace=True)
+            traced_motl.df.sort_values([subtomo_id_column], inplace=True)
+            input_motl.df.sort_values([subtomo_id_column], inplace=True)
 
-        if not np.array_equal(traced_motl.df["subtomo_id"].values, input_motl.df["subtomo_id"].values):
+        if not np.array_equal(traced_motl.df[subtomo_id_column].values, input_motl.df[subtomo_id_column].values):
             raise ValueError("The input motl has different subtomograms than the traced motl.")
 
         cols = [occupancy_id, self.order_id_col, self.step_dist_col, self.chain_id_col]
@@ -503,7 +506,7 @@ class Chain:
             ``<column_name>``         —                 value of ``self.column_name`` (e.g. tomo_id)
             ``chain_id``              —                 value of ``self.chain_id_col``
             ``step``                  —                 ``order_id_col`` value of the upstream particle
-            ``step_dist``             motl's own units  ``step_dist_col`` of the upstream particle; NaN when the column is absent
+            ``step_dist``             length            ``step_dist_col`` of the upstream particle times ``pixel_size``; NaN when the column is absent
             ``angular_distance``      degrees           SO(3) geodesic distance between orientations
             ``cone_distance``         degrees           angle between z-axes (normal-vector distance)
             ``in_plane_distance``     degrees           in-plane rotation component
@@ -527,7 +530,7 @@ class Chain:
             ang_dist, cone_dist, inplane_dist = nnana.angular_distances(qp_angles, nn_angles, rotation_type="all")
             n_steps = len(qp_angles)
             step_dists = (
-                group_sorted[self.step_dist_col].values[:-1]
+                group_sorted[self.step_dist_col].values[:-1] * self.pixel_size
                 if self.step_dist_col in group_sorted.columns
                 else np.full(n_steps, np.nan)
             )
@@ -15051,8 +15054,8 @@ class PleomorphicAssembly(ContactGraph):
         Expand seed points on an oriented point cloud using surface radii.
 
         Delegates to :meth:`OrientedPointCloud.get_point_neighborhoods`. The returned
-        dict always includes ``"hit points"``; for each radius ``r``, adds ``"r <= {r} nm"``
-        and annulus bands ``"{r_inner} < r <= {r_outer} nm"`` between consecutive radii.
+        dict always includes ``"hit points"``; for each radius ``r``, adds ``"r <= {r}"``
+        and annulus bands ``"{r_inner} < r <= {r_outer}"`` between consecutive radii.
 
         Parameters
         ----------
@@ -15064,8 +15067,8 @@ class PleomorphicAssembly(ContactGraph):
         Returns
         -------
         dict[str, np.ndarray]
-            Keys: ``"hit points"``, ``"r <= {r} nm"`` for each radius, and
-            ``"{r_inner} < r <= {r_outer} nm"`` for each consecutive pair.
+            Keys: ``"hit points"``, ``"r <= {r}"`` for each radius, and
+            ``"{r_inner} < r <= {r_outer}"`` for each consecutive pair.
             Values are sorted integer arrays of point indices.
         """
         if not isinstance(self.surface, OrientedPointCloud):

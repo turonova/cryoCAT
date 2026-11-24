@@ -126,6 +126,7 @@ class Mdoc:
         """
         self.imgs[field_name] = field_value
 
+    @cli_exposed(output='mdoc')
     def sort_by_tilt(self, reset_z_value: bool = False) -> None:
         """Sort images by tilt angle in ascending order.
 
@@ -139,6 +140,7 @@ class Mdoc:
         if reset_z_value:
             self.imgs["ZValue"] = range(self.imgs.shape[0])
 
+    @cli_exposed(output='mdoc')
     def remove_image(self, index: int) -> None:
         """Mark a single image as removed.
 
@@ -218,6 +220,7 @@ class Mdoc:
         """
         return self.imgs[self.imgs["Removed"] == False]
 
+    @cli_exposed(output='mdoc')
     def keep_images(self, indices: ArrayLike) -> None:
         """Mark multiple images as kept (un-remove them).
 
@@ -228,10 +231,12 @@ class Mdoc:
         """
         self.imgs.loc[indices, "Removed"] = False
 
+    @cli_exposed(output='mdoc')
     def reset_images(self) -> None:
         """Mark all images as kept by clearing the ``Removed`` flag."""
         self.imgs["Removed"] = False
 
+    @cli_exposed(output='mdoc')
     def keep_image(self, index: int) -> None:
         """Mark a single image as kept (un-remove it).
 
@@ -257,6 +262,7 @@ class Mdoc:
         """
         return self.imgs.loc[index]
 
+    @cli_exposed(output='csv')
     def get_images(self, indices: ArrayLike) -> pd.DataFrame:
         """Return multiple image rows by their DataFrame indices.
 
@@ -272,6 +278,7 @@ class Mdoc:
         """
         return self.imgs.loc[indices]
 
+    @cli_exposed(output='csv')
     def get_image_by_zvalue(self, zvalue: int) -> pd.DataFrame:
         """Return the image row(s) with a specific ZValue.
 
@@ -287,6 +294,7 @@ class Mdoc:
         """
         return self.imgs[self.imgs["ZValue"] == zvalue]
 
+    @cli_exposed(output='csv')
     def get_images_by_zvalues(self, zvalues: ArrayLike) -> pd.DataFrame:
         """Return image rows matching any of the given ZValues.
 
@@ -302,6 +310,7 @@ class Mdoc:
         """
         return self.imgs[self.imgs["ZValue"].isin(zvalues)]
 
+    @cli_exposed(output='csv')
     def get_image_by_zvalue_range(
         self,
         zvalue_min: int,
@@ -359,6 +368,7 @@ class Mdoc:
         """
         return self.imgs[column_name]
 
+    @cli_exposed(output='csv')
     def get_image_features(self, features: list[str]) -> pd.DataFrame:
         """Return multiple columns from the image DataFrame.
 
@@ -374,6 +384,7 @@ class Mdoc:
         """
         return self.imgs[features]
 
+    @cli_exposed(output='mdoc')
     def reorder_images(self, indices: ArrayLike) -> None:
         """Reorder the image DataFrame to the given index order.
 
@@ -385,6 +396,7 @@ class Mdoc:
         self.imgs = self.imgs.reindex(indices)
         self.imgs.reset_index(drop=True, inplace=True)
 
+    @cli_exposed(output='mdoc')
     def change_frame_path(self, new_path: PathOrStr | None = None) -> None:
         """Update the ``SubFramePath`` column to use a new directory.
 
@@ -405,6 +417,7 @@ class Mdoc:
         if new_path is not None and new_path != "":
             self.imgs["SubFramePath"] = self.imgs["SubFramePath"].apply(add_new_path)
 
+    @cli_exposed(output='mdoc')
     def update_pixel_size(self, new_pixel_size: float) -> None:
         """Update the pixel size in both the project info and per-image data.
 
@@ -416,6 +429,7 @@ class Mdoc:
         self.project_info["PixelSpacing"] = new_pixel_size
         self.imgs["PixelSpacing"] = new_pixel_size
 
+    @cli_exposed(output='mdoc')
     def convert_section_type(self, new_section_id: str = "FrameSet") -> None:
         """Convert the mdoc section type between ``ZValue`` and ``FrameSet``.
 

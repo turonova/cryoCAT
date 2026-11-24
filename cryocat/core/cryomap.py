@@ -235,7 +235,8 @@ def bandpass(
         filtered map is not saved. Default is None.
     **output_kwargs
         Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
-        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
+        See that function for the available parameters (``transpose``, ``data_type``, ``overwrite``);
+        the pixel size written to the header is ``pixel_size`` when it is given.
 
     Returns
     -------
@@ -273,7 +274,8 @@ def bandpass(
     )
 
     if output_path is not None:
-        write(bandpass_filtered, output_path, **{"data_type": np.single, **output_kwargs})
+        header = {} if pixel_size is None else {"pixel_size": pixel_size}
+        write(bandpass_filtered, output_path, **{"data_type": np.single, **header, **output_kwargs})
 
     return bandpass_filtered
 
@@ -308,7 +310,8 @@ def lowpass(
         is not saved. Default is None.
     **output_kwargs
         Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
-        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
+        See that function for the available parameters (``transpose``, ``data_type``, ``overwrite``);
+        the pixel size written to the header is ``pixel_size`` when it is given.
 
     Returns
     -------
@@ -339,7 +342,8 @@ def lowpass(
     filtered_map = imageutils.apply_lowpass(input_map, radius, gaussian=gaussian)
 
     if output_path is not None:
-        write(filtered_map, output_path, **{"data_type": np.single, **output_kwargs})
+        header = {} if pixel_size is None else {"pixel_size": pixel_size}
+        write(filtered_map, output_path, **{"data_type": np.single, **header, **output_kwargs})
 
     return filtered_map
 
@@ -374,7 +378,8 @@ def highpass(
         map is not saved. Default is None.
     **output_kwargs
         Forwarded to :func:`cryocat.core.cryomap.write` when ``output_path`` is provided.
-        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
+        See that function for the available parameters (``transpose``, ``data_type``, ``overwrite``);
+        the pixel size written to the header is ``pixel_size`` when it is given.
 
     Returns
     -------
@@ -400,7 +405,8 @@ def highpass(
     filtered_map = imageutils.apply_highpass(input_map, radius, gaussian=gaussian)
 
     if output_path is not None:
-        write(filtered_map, output_path, **{"data_type": np.single, **output_kwargs})
+        header = {} if pixel_size is None else {"pixel_size": pixel_size}
+        write(filtered_map, output_path, **{"data_type": np.single, **header, **output_kwargs})
 
     return filtered_map
 

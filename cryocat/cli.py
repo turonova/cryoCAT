@@ -96,11 +96,13 @@ class _MotlOption:
 class _Invocation:
     """What a parsed command line calls, built before anything is read or run.
 
-    ``read`` is ``(input_motl, input_type, Motl.load options)`` and ``write``
-    ``(output_type, constructor options, writer options)``, each ``None``
-    where the command reads or writes no motl.  ``writes_itself`` is true when
-    the input and output types are the same: the loaded motl, as the method
-    returns or changes it, writes itself with the writer options.
+    ``read`` is ``(input_motl, input_type, Motl.load options)`` for a motl
+    method, ``(input_mdoc, "mdoc", {})`` for an :class:`~cryocat.core.mdoc.Mdoc`
+    method, and ``write`` ``(output_type, constructor options, writer
+    options)``, each ``None`` where the command reads or writes no motl.
+    ``writes_itself`` is true when the input and output types are the same:
+    the loaded motl, as the method returns or changes it, writes itself with
+    the writer options.
     """
 
     kwargs: dict
@@ -135,7 +137,8 @@ def _exposed(module: types.ModuleType) -> dict[str, _Command]:
     ------
     ValueError
         If two exposed callables of the module share a name, or an exposed
-        instance method belongs to a class that is not a motl class.
+        instance method belongs to a class that is neither a motl class nor
+        :class:`~cryocat.core.mdoc.Mdoc`.
     """
     commands: dict[str, _Command] = {}
 
@@ -163,10 +166,10 @@ def _exposed(module: types.ModuleType) -> dict[str, _Command]:
                     else "staticmethod" if isinstance(member, staticmethod)
                     else "method"
                 )
-                if kind == "method" and not issubclass(obj, cryomotl_module.Motl):
+                if kind == "method" and not issubclass(obj, (cryomotl_module.Motl, mdoc_module.Mdoc)):
                     raise ValueError(
-                        f"{fn.__qualname__}: instance methods are exposed only for motl classes, "
-                        "which the command line loads from --input_motl"
+                        f"{fn.__qualname__}: instance methods are exposed only for motl classes and Mdoc, "
+                        "which the command line loads from --input_motl or --input_mdoc"
                     )
                 add(member_name, fn, obj, kind)
     return dict(sorted(commands.items()))
@@ -332,10 +335,17 @@ class _Forwarded:
     flags: dict[str, str]
 
 
+def _loads_mdoc(command: _Command) -> bool:
+    """True for an :class:`~cryocat.core.mdoc.Mdoc` method, called on the mdoc loaded from ``--input_mdoc``."""
+    return command.kind == "method" and issubclass(command.owner, mdoc_module.Mdoc)
+
+
 def _added_names(command: _Command) -> set[str]:
     """The options the command line adds to *command* besides its parameters (without ``--``)."""
     names = {"help", "h"}
-    if command.kind == "method":
+    if _loads_mdoc(command):
+        names.add("input_mdoc")
+    elif command.kind == "method":
         names |= {"input_motl", "input_type"} | {f"input_{n}" for n in _read_options()}
     if command.output == "motl":
         names |= {"output_motl", "output_type"} | {f"output_{n}" for n in _write_options()}
@@ -480,7 +490,9 @@ def _add_subcommand(subparsers: argparse._SubParsersAction, command: _Command) -
     def add_type(prefix: str, given: str) -> None:
         added[f"{prefix}_type"] = (formats, {"choices": motl_types, "default": "emmotl", "help": f"Format of --{given}."})
 
-    if command.kind == "method":
+    if _loads_mdoc(command):
+        added["input_mdoc"] = (required, {"required": True, "type": str, "help": "Mdoc file the method is called on."})
+    elif command.kind == "method":
         added["input_motl"] = (required, {"required": True, "type": str, "help": "Motl file the method is called on."})
         add_type("input", "input_motl")
         add_options("input", _read_options(), typed=True)
@@ -492,6 +504,8 @@ def _add_subcommand(subparsers: argparse._SubParsersAction, command: _Command) -
         added["output_csv"] = (required, {"required": True, "type": str, "help": "Path the resulting table is written to, as CSV."})
     elif command.output == "map":
         added["output_map"] = (required, {"required": True, "type": str, "help": "Path the resulting map is written to."})
+    elif command.output == "mdoc":
+        added["output_mdoc"] = (required, {"required": True, "type": str, "help": "Path the resulting mdoc is written to."})
     forwarded = _forwarded(command)
     for passed in forwarded.values():
         add_options("", passed.options, typed=False, flags=passed.flags, group=forwarding)
@@ -558,7 +572,9 @@ def _invocation(parser: argparse.ArgumentParser, command: _Command, args: dict) 
     destination = args.pop(f"output_{command.output}") if command.output else None
 
     read = None
-    if command.kind == "method":
+    if _loads_mdoc(command):
+        read = (args.pop("input_mdoc"), "mdoc", {})
+    elif command.kind == "method":
         input_motl, input_type = args.pop("input_motl"), args.pop("input_type")
         loaded = _given_options(parser, args, "input", _read_options(), input_type)
         read = (input_motl, input_type, loaded.get("load", {}))
@@ -642,6 +658,13 @@ def _write_output(
         if not isinstance(result, np.ndarray):
             raise TypeError(f"{command.qualname} returned {type(result).__name__}, not an array to write as a map")
         cryomap_module.write(result, path)
+    elif command.output == "mdoc":
+        if isinstance(result, mdoc_module.Mdoc):
+            result.write(path)
+        elif result is None and isinstance(called_on, mdoc_module.Mdoc):
+            called_on.write(path)
+        else:
+            raise TypeError(f"{command.qualname} returned {type(result).__name__}, not an mdoc to write")
 
 
 def run(module: types.ModuleType) -> None:
@@ -659,9 +682,12 @@ def run(module: types.ModuleType) -> None:
 
     called_on = None
     if invocation.read is not None:
-        input_motl, input_type, load_kwargs = invocation.read
-        called_on = cryomotl_module.Motl.load(input_motl, input_type, **load_kwargs)
-        _check_self_write(parser, invocation, called_on)
+        input_path, input_type, load_kwargs = invocation.read
+        if input_type == "mdoc":
+            called_on = mdoc_module.Mdoc(input_path)
+        else:
+            called_on = cryomotl_module.Motl.load(input_path, input_type, **load_kwargs)
+            _check_self_write(parser, invocation, called_on)
         result = getattr(called_on, command.name)(**invocation.kwargs)
     elif command.owner is not None:
         result = getattr(command.owner, command.name)(**invocation.kwargs)

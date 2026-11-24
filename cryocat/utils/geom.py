@@ -1744,7 +1744,9 @@ def normals_to_euler_angles(
     theta = np.degrees(np.arctan2(np.sqrt(normals[:, 0] ** 2 + normals[:, 1] ** 2), normals[:, 2]))
 
     psi = np.degrees(np.arctan2(normals[:, 0], -normals[:, 1])) #90 + np.degrees(np.arctan2(normals[:, 1], normals[:, 0]))
-    b_idx = np.where(np.arctan2(normals[:, 1], normals[:, 0]) == 0)
+    # At the poles (x = y = 0) psi is undefined; set it to 0.  arctan2(y, x) == 0 alone would also
+    # catch y = 0 with x > 0, where psi = arctan2(x, -y) = 90 is the correct value.
+    b_idx = np.where((np.arctan2(normals[:, 1], normals[:, 0]) == 0) & (normals[:, 0] == 0))
     psi[b_idx] = 0
 
     phi = np.random.default_rng(seed).random(normals.shape[0]) * 360

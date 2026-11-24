@@ -2474,7 +2474,7 @@ class TestDnComplex:
         np.testing.assert_allclose(df["spacing_1_2"].iloc[0], axial_offset, atol=1e-6)
 
     def test_inter_ring_twist_staggered(self):
-        """Ring past the half-period (>Δ/2) folds to a negative twist."""
+        """Ring past the half-period (>Δ/2) folds to a positive twist."""
         n = 6
         delta = 360.0 / n          # 60° fold period
         stagger = delta * 3.0 / 4.0  # 45°, clearly past the 30° boundary

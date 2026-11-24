@@ -693,7 +693,8 @@ def cylindrical_mask_from_points(
         Defaults to None.
     **output_kwargs
         Forwarded to :func:`cryocat.core.cryomask.write_out` when ``output_path`` is provided.
-        See that function for the available parameters (``pixel_size``, ``transpose``, ``data_type``, ``overwrite``).
+        See that function for the available parameters (``transpose``, ``data_type``, ``overwrite``);
+        the pixel size written to the header is ``pixel_size``.
 
     Returns
     -------
@@ -734,7 +735,7 @@ def cylindrical_mask_from_points(
     rot_shifted = cryomap.recenter(rot_mask, new_center=center)
     rot_shifted = cryomap.recenter(rot_mask, center)
 
-    write_out(rot_shifted, output_path, **output_kwargs)
+    write_out(rot_shifted, output_path, pixel_size=pixel_size, **output_kwargs)
 
     return rot_shifted
 
