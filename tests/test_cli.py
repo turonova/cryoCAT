@@ -151,6 +151,37 @@ def test_number_or_path(token, expected):
 
 
 # ---------------------------------------------------------------------------
+# A list of numbers or a path (TomoDimensions), or literal numbers (RotationLike)
+# ---------------------------------------------------------------------------
+
+_WEDGE_LIST_SG_BATCH = [
+    "create_wedge_list_sg_batch", "--tomo_list", "tomos.txt", "--pixel_size", "2.0", "--tlt_file_format", "f",
+]
+
+
+@pytest.mark.parametrize("token, expected", [
+    ("5760,4092,1800", [5760, 4092, 1800]),
+    ("1,5760,4092,1800", [1, 5760, 4092, 1800]),
+    ("dims.txt", "dims.txt"),
+])
+def test_tomo_dimensions_accepts_list_or_path(token, expected):
+    tomo_dim = _parse("cc_cryowedge", [*_WEDGE_LIST_SG_BATCH, "--tomo_dim", token]).tomo_dim
+    assert tomo_dim == expected
+
+
+_APPLY_ROTATION = ["apply_rotation", "--input_motl", "in.star", "--output_motl", "out.star"]
+
+
+@pytest.mark.parametrize("token, expected", [
+    ("10,20,30", [10, 20, 30]),
+    ("10.5,20,30", [10.5, 20, 30]),
+])
+def test_rotation_like_accepts_literal_numbers(token, expected):
+    input_rotation = _parse("cc_cryomotl", [*_APPLY_ROTATION, "--input_rotation", token]).input_rotation
+    assert input_rotation == expected
+
+
+# ---------------------------------------------------------------------------
 # Motl formats and map output
 # ---------------------------------------------------------------------------
 
