@@ -62,6 +62,7 @@ cc_tiltstack = "cryocat.cli:tiltstack"
 cc_cryowedge = "cryocat.cli:cryowedge"
 cc_mdoc = "cryocat.cli:mdoc"
 cc_tmana = "cryocat.cli:tmana"
+cc_geom = "cryocat.cli:geom"
 cryocatG = "cryocat.app.server:main"
 [tool.setuptools.package-data]
 "cryocat" = ["example_files/*.tlt"]

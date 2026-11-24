@@ -263,6 +263,23 @@ def _argument(fn: Callable, name: str, annotation: Any) -> dict:
         spec["nargs"] = extra["length"]
     elif tag in _LIST_TAGS or (tag == "MotlSource" and extra.get("multi")):
         spec["nargs"] = "+"
+    elif tag == "TomoDimensions":
+        # CLI-only: a comma-separated token ("5760,4092,1800") is parsed into
+        # [x, y, z] (or [tomo_id, x, y, z]) ints, the same `list` case
+        # ioutils.dimensions_load() already accepts from Python, so its own
+        # 1x3/Nx4 shape check validates the result; a token with no comma
+        # that isn't numeric is kept as a path, as before (same mechanism
+        # already used for TomoList, which has the same path-or-list-of-ints
+        # shape). The shared TYPE_HANDLERS entry (GUI path widget) is
+        # untouched.
+        spec["type"] = TYPE_HANDLERS["ArrayLike"]["argparse"]["type"]
+    elif tag == "RotationLike":
+        # CLI-only: a comma-separated token ("10,20,30") is parsed into a
+        # list of numbers -- the (3,) Euler-angle case of geom.as_rotation().
+        # Matrices/quaternions/stacks aren't meaningfully typable as CLI
+        # tokens, so that's the only shape this covers. The shared
+        # TYPE_HANDLERS entry (GUI rotation widget) is untouched.
+        spec["type"] = TYPE_HANDLERS["ArrayLike"]["argparse"]["type"]
     return spec
 
 
