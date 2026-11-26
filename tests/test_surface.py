@@ -380,6 +380,16 @@ def test_mesh_cast_rays_miss(unit_sphere_mesh):
     assert not np.isfinite(result["t_hit"][0])
 
 
+def test_mesh_cast_rays_stops_at_ray_length(unit_sphere_mesh):
+    # From [2, 0, 0] the sphere is 1 away along -x: a ray of length 0.5 misses, one of length 1.5 hits
+    rays = np.array([[2.0, 0.0, 0.0, -0.5, 0.0, 0.0],
+                     [2.0, 0.0, 0.0, -1.5, 0.0, 0.0]], dtype=np.float32)
+    result = unit_sphere_mesh.cast_rays(rays)
+    assert not np.isfinite(result["t_hit"][0])
+    assert np.isnan(result["hit_points"][0]).all()
+    assert abs(result["t_hit"][1] - 1.0) < 0.02
+
+
 def test_mesh_translate_shifts_centroid(unit_sphere_mesh):
     v = np.array([3.0, 1.0, -2.0])
     unit_sphere_mesh.translate(v)
@@ -2219,3 +2229,49 @@ class TestCopyWithCachedRaycastingScene:
     def test_trim_by_distance(self, queried_sphere):
         trimmed = queried_sphere.trim_by_distance(queried_sphere.vertices[:20], max_distance=0.3)
         assert len(trimmed.vertices) < len(queried_sphere.vertices)
+
+
+# ---------------------------------------------------------------------------
+# Mesh.point_data: fields from a VTP file, kept while the vertices correspond
+# ---------------------------------------------------------------------------
+
+
+class TestMeshPointData:
+    @pytest.fixture
+    def mesh_with_field(self, tmp_path):
+        pv = pytest.importorskip("pyvista")
+        sphere = pv.Sphere(theta_resolution=12, phi_resolution=12).triangulate()
+        sphere.point_data["external_field"] = np.arange(sphere.n_points, dtype=float)
+        path = tmp_path / "in.vtp"
+        sphere.save(str(path))
+        with contextlib.redirect_stdout(io.StringIO()):
+            mesh = Mesh.read_curvatures(path)
+        return mesh, np.arange(sphere.n_points, dtype=float)
+
+    def test_vtp_round_trip_keeps_extra_field(self, mesh_with_field, tmp_path):
+        pv = pytest.importorskip("pyvista")
+        mesh, values = mesh_with_field
+        out = tmp_path / "out.vtp"
+        with contextlib.redirect_stdout(io.StringIO()):
+            mesh.save(out, format="vtp")
+        np.testing.assert_array_equal(pv.read(str(out)).point_data["external_field"], values)
+
+    @pytest.mark.parametrize("operation", [
+        lambda m: m.scale(2.0),
+        lambda m: m.transform(np.eye(4)),
+        lambda m: m.rotate(np.eye(3)),
+        lambda m: m.translate(np.array([1.0, 2.0, 3.0])),
+    ], ids=["scale", "transform", "rotate", "translate"])
+    def test_moving_the_vertices_keeps_the_field(self, mesh_with_field, operation):
+        mesh, values = mesh_with_field
+        operation(mesh)
+        np.testing.assert_array_equal(mesh.point_data["external_field"], values)
+
+    def test_replacing_the_vertices_clears_the_field(self, mesh_with_field):
+        mesh, _ = mesh_with_field
+        n_vertices = len(mesh.vertices)
+        with pytest.warns(UserWarning, match="external_field"):
+            # Reordered: the count stays the same, but the values no longer belong to the vertices.
+            mesh.vertices = mesh.vertices[::-1].copy()
+        assert len(mesh.vertices) == n_vertices
+        assert mesh.point_data == {}

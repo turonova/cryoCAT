@@ -855,7 +855,7 @@ class Mesh(DiscreteSurface):
         self._surface_type = None             # N array of category codes (-1..8)
 
         # Per-vertex fields read from a VTP file that have no dedicated attribute, kept unchanged
-        # and written back by save(..., format='vtp').
+        # and written back by save(..., format='vtp').  Cleared when the vertices change (see vertices).
         self.point_data: dict[str, np.ndarray] = {}
 
         # Cached geometric properties for optimization
@@ -879,6 +879,31 @@ class Mesh(DiscreteSurface):
         state.pop("_raycasting_scene", None)
         return state
 
+    @property
+    def vertices(self) -> np.ndarray | None:
+        """N x 3 array of vertex positions."""
+        return self._vertices
+
+    @vertices.setter
+    def vertices(self, value: np.ndarray | None) -> None:
+        """Replace the vertices; :attr:`point_data` is cleared with one warning, whatever the count.
+
+        A replacement may reorder, drop or add vertices, so the per-vertex values
+        no longer belong to them.  Operations that keep the vertex correspondence
+        (``scale``, ``transform``, ``rotate``) set their result through
+        :meth:`_move_vertices` and keep the fields; ``translate`` changes the
+        array in place, which is not a replacement.
+        """
+        point_data = getattr(self, "point_data", None)
+        if point_data and value is not getattr(self, "_vertices", None):
+            warnings.warn(f"The vertices were replaced, so the point-data fields {sorted(point_data)} were dropped.")
+            self.point_data = {}
+        self._vertices = value
+
+    def _move_vertices(self, value: np.ndarray) -> None:
+        """Set vertices that correspond one to one to the current ones (moved, not replaced); keeps :attr:`point_data`."""
+        self._vertices = value
+
     def get_vertices(self):
         return self.vertices
     
@@ -896,8 +921,8 @@ class Mesh(DiscreteSurface):
         # Transform vertices (homogeneous coordinates)
         vertices_homo = np.hstack([self.vertices, np.ones((len(self.vertices), 1))])
         transformed_vertices = (transformation_matrix @ vertices_homo.T).T
-        self.vertices = transformed_vertices[:, :3]
-        
+        self._move_vertices(transformed_vertices[:, :3])
+
         # Transform normals (only rotation part, no translation)
         if self.normals is not None:
             rotation_matrix = transformation_matrix[:3, :3]
@@ -976,7 +1001,7 @@ class Mesh(DiscreteSurface):
             raise ValueError(f"factor must be a positive, finite real number, got {factor!r}")
         factor = float(factor)
 
-        self.vertices = self.vertices * factor
+        self._move_vertices(self.vertices * factor)
         if self.pixel_size is not None:
             self.pixel_size = self.pixel_size * factor
 
@@ -1333,7 +1358,8 @@ class Mesh(DiscreteSurface):
         ----------
         rays : np.ndarray, shape (R, 6)
             Each row is ``[ox, oy, oz, dx, dy, dz]``: ray origin and direction vector.
-            The direction magnitude is used as the maximum ray travel length.
+            The direction magnitude is used as the maximum ray travel length; a hit
+            farther away is a miss.
         one_hit_per_target : bool, default=False
             If True, annotate the result with the globally shortest hit across all rays
             (see :meth:`DiscreteSurface._annotate_shortest_ray_hit`).
@@ -1343,7 +1369,8 @@ class Mesh(DiscreteSurface):
         dict
             Keys: ``t_hit`` (R,), ``geometry_ids`` (R,), ``primitive_ids`` (R,),
             ``primitive_normals`` (R, 3), ``primitive_uvs`` (R, 2), ``hit_points`` (R, 3).
-            Misses have ``t_hit=inf`` and ``hit_points=nan``.
+            Misses have ``t_hit=inf``, ``hit_points=nan``, the invalid id in both id
+            arrays and zero normals and uvs.
         """
         rays = np.atleast_2d(np.asarray(rays, dtype=np.float32))
         scene = self._get_raycasting_scene()
@@ -1354,19 +1381,31 @@ class Mesh(DiscreteSurface):
         directions = rays[:, 3:]
         t_param = cast["t_hit"].numpy()
 
+        # Open3D reports hits at any multiple of the direction; one beyond the ray's length is a miss
+        hit_mask = np.isfinite(t_param) & (t_param <= 1.0)
+        miss = ~hit_mask
+
         direction_magnitudes = np.linalg.norm(directions, axis=1)
-        t_hit = t_param * direction_magnitudes
+        t_hit = np.where(hit_mask, t_param * direction_magnitudes, np.inf).astype(t_param.dtype)
 
         hit_points = np.full((len(rays), 3), np.nan)
-        hit_mask = np.isfinite(t_param)
         hit_points[hit_mask] = origins[hit_mask] + directions[hit_mask] * t_param[hit_mask, np.newaxis]
+
+        geometry_ids = cast["geometry_ids"].numpy()
+        primitive_ids = cast["primitive_ids"].numpy()
+        primitive_normals = cast["primitive_normals"].numpy()
+        primitive_uvs = cast["primitive_uvs"].numpy()
+        geometry_ids[miss] = o3d.t.geometry.RaycastingScene.INVALID_ID
+        primitive_ids[miss] = o3d.t.geometry.RaycastingScene.INVALID_ID
+        primitive_normals[miss] = 0.0
+        primitive_uvs[miss] = 0.0
 
         result_dict = {
             "t_hit": t_hit,
-            "geometry_ids": cast["geometry_ids"].numpy(),
-            "primitive_ids": cast["primitive_ids"].numpy(),
-            "primitive_normals": cast["primitive_normals"].numpy(),
-            "primitive_uvs": cast["primitive_uvs"].numpy(),
+            "geometry_ids": geometry_ids,
+            "primitive_ids": primitive_ids,
+            "primitive_normals": primitive_normals,
+            "primitive_uvs": primitive_uvs,
             "hit_points": hit_points,
         }
 
@@ -3867,19 +3906,11 @@ class Mesh(DiscreteSurface):
         """Add the fields of :attr:`point_data` to a PyVista mesh being written.
 
         A field the writer already set (e.g. a recomputed ``curvature_anisotropy``)
-        is not overwritten; one whose length no longer matches the vertices
-        (after an operation that changed them) is skipped with a warning.
+        is not overwritten.
         """
-        n_vertices = len(self.vertices)
         for name, values in self.point_data.items():
-            if name in mesh_pv.point_data:
-                continue
-            if len(values) != n_vertices:
-                warnings.warn(
-                    f"Point-data field {name!r} has {len(values)} values for {n_vertices} vertices; not written."
-                )
-                continue
-            mesh_pv.point_data[name] = values
+            if name not in mesh_pv.point_data:
+                mesh_pv.point_data[name] = values
 
     def _save_mesh_vtp_with_curvatures(self, output_path: PathOrStr):
         """Save mesh to VTP with curvature data using pyvista."""
@@ -7970,25 +8001,27 @@ class Ellipsoid(AnalyticSurface):
         return geom.ellipsoid_quadric_from_axes(self.center, self.radii, self._evecs())
 
     @classmethod
-    def fit_to_points(cls, points: np.ndarray) -> "Ellipsoid":
+    def fit_to_points(cls, points: np.ndarray, min_points: int | None = None) -> "Ellipsoid":
         """
         Fit ellipsoid to a set of 3D points using algebraic least squares (:func:`geom.fit_ellipsoid`).
 
         Parameters
         ----------
         points : np.ndarray (N, 3)
+        min_points : int, optional
+            Fewest points the fit accepts; ``None`` (default) checks no count
+            (see :func:`geom.fit_ellipsoid`).
 
         Returns
         -------
         Ellipsoid
-            Fitted instance, or an instance with ``singular=True`` if too few points.
+            Fitted instance, or an instance with ``singular=True`` if the fit fails.
         """
-        if len(points) < 3:
+        center, radii, evecs, _ = geom.fit_ellipsoid(points, min_points=min_points)
+        if np.isnan(radii).any():
             el = cls()
             el.singular = True
             return el
-
-        center, radii, evecs, _ = geom.fit_ellipsoid(points)
         return cls(center=center, radii=radii, e_vec1=evecs[0], e_vec2=evecs[1], e_vec3=evecs[2])
 
     @classmethod

@@ -17,7 +17,7 @@ from cryocat.app.components import surface_registry as sr
 from cryocat.app.components.surfaceview import (
     _vertex_field, _mesh_traces, _build_figure, COLOR_BY_OPTIONS,
 )
-from cryocat.analysis.assembly import PleomorphicSurface
+from cryocat.analysis.assembly import PleomorphicAssembly
 from cryocat.core.surface import Mesh, OrientedPointCloud
 
 
@@ -30,7 +30,7 @@ def _reset_registry():
 
 @pytest.fixture
 def tiny_mesh_psurf():
-    """A 4-vertex tetrahedron mesh wrapped as PleomorphicSurface."""
+    """A 4-vertex tetrahedron mesh wrapped as PleomorphicAssembly."""
     m = Mesh()
     m.vertices = np.array(
         [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=float
@@ -38,7 +38,7 @@ def tiny_mesh_psurf():
     m.faces = np.array(
         [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]], dtype=np.int32
     )
-    return PleomorphicSurface(m)
+    return PleomorphicAssembly(m)
 
 
 # ── Registry layout ──────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ def test_mesh_only_helper_rejects_point_cloud(tiny_mesh_psurf):
     opc = OrientedPointCloud()
     opc.vertices = np.zeros((1, 3))
     opc.normals = np.array([[0, 0, 1.0]])
-    assert passembly._mesh_only(PleomorphicSurface(opc)) is None
+    assert passembly._mesh_only(PleomorphicAssembly(opc)) is None
     assert passembly._mesh_only(None) is None
 
 
@@ -86,7 +86,7 @@ def test_compute_curvatures_method_for_returns_none_on_point_cloud():
     opc.vertices = np.zeros((1, 3))
     opc.normals = np.array([[0, 0, 1.0]])
     bound = passembly.OPERATIONS["Mesh.compute_curvatures"]["method_for"](
-        PleomorphicSurface(opc)
+        PleomorphicAssembly(opc)
     )
     assert bound is None
 
@@ -111,7 +111,7 @@ def test_make_handle_point_cloud_never_has_curvatures():
     opc = OrientedPointCloud()
     opc.vertices = np.zeros((3, 3))
     opc.normals = np.array([[0, 0, 1.0]] * 3)
-    h = sr.make_handle(PleomorphicSurface(opc), label="cloud")
+    h = sr.make_handle(PleomorphicAssembly(opc), label="cloud")
     assert h["has_curvatures"] is False
 
 
@@ -135,7 +135,7 @@ def test_vertex_field_returns_none_for_point_cloud():
     opc = OrientedPointCloud()
     opc.vertices = np.zeros((3, 3))
     opc.normals = np.array([[0, 0, 1.0]] * 3)
-    assert _vertex_field(PleomorphicSurface(opc), "mean_curvature") is None
+    assert _vertex_field(PleomorphicAssembly(opc), "mean_curvature") is None
 
 
 def test_vertex_field_returns_none_when_color_by_is_none(tiny_mesh_psurf):
@@ -252,7 +252,7 @@ def test_build_figure_skips_color_by_when_no_curvatures(tiny_mesh_psurf):
 
 def test_extract_region_signature_drops_var_kwargs():
     """extract_region no longer takes **kwargs; preserve_curvatures is explicit."""
-    sig = inspect.signature(PleomorphicSurface.extract_region)
+    sig = inspect.signature(PleomorphicAssembly.extract_region)
     assert "preserve_curvatures" in sig.parameters
     assert not any(
         p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
@@ -261,19 +261,19 @@ def test_extract_region_signature_drops_var_kwargs():
 
 def test_extract_region_element_is_literal():
     """element annotation is the inline Literal of the three valid values."""
-    sig = inspect.signature(PleomorphicSurface.extract_region)
+    sig = inspect.signature(PleomorphicAssembly.extract_region)
     ann = sig.parameters["element"].annotation
     assert "Literal" in str(ann) or "triangles" in str(ann)
 
 
 def test_intersection_data_surface_seeds_is_literal():
-    sig = inspect.signature(PleomorphicSurface.intersection_data)
+    sig = inspect.signature(PleomorphicAssembly.intersection_data)
     assert "Literal" in str(sig.parameters["surface_seeds"].annotation)
     assert "Literal" in str(sig.parameters["surface_element"].annotation)
 
 
 def test_ray_intersections_target_orientation_is_literal_or_callable():
-    sig = inspect.signature(PleomorphicSurface.ray_intersections)
+    sig = inspect.signature(PleomorphicAssembly.ray_intersections)
     ann = str(sig.parameters["target_orientation"].annotation)
     assert "Literal" in ann
     assert "Callable" in ann
@@ -430,7 +430,7 @@ def test_surface_type_annotation_is_literal_ellipsoid():
 
 
 class _StubPSurf:
-    """Stand-in PleomorphicSurface-like object for registry tests."""
+    """Stand-in PleomorphicAssembly-like object for registry tests."""
 
     def __init__(self, n_quadrics=3, column_name="object_id"):
         self.column_name = column_name

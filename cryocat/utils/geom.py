@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import re
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -2955,7 +2956,9 @@ def fill_ellipsoid(
     return mask
 
 
-def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def fit_ellipsoid(
+    coord: np.ndarray, min_points: int | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Fit an ellipsoid to a set of 3D coordinates. It is based on
     http://www.mathworks.com/matlabcentral/fileexchange/24693-ellipsoid-fit
 
@@ -2963,6 +2966,10 @@ def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
     ----------
     coord : ndarray
         An array of shape (N, 3) where each row represents the x, y, z coordinates.
+    min_points : int, optional
+        Fewest points the fit accepts; fewer count as a failed fit.  ``None``
+        (default) checks no count.  Nine is the bare minimum for a determined
+        result: the fit solves for nine coefficients.
 
     Returns
     -------
@@ -2977,13 +2984,17 @@ def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
 
     Notes
     -----
+    A failed fit (fewer than *min_points* points, a singular system, or
+    non-finite results) returns NaN for every value above, with a warning
+    saying why; it does not raise.
+
     This function fits an ellipsoid to a set of points by solving a linear least squares problem to estimate the
     parameters of the ellipsoid's equation in its algebraic form; the axes are then derived from those parameters
     by :func:`ellipsoid_axes_from_quadric`.
 
     Examples
     --------
-    >>> points = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    >>> points = ...  # (N, 3) array of points on the ellipsoid surface, N >= 9
     >>> center, radii, evecs, _ = fit_ellipsoid(points)
     >>> center
     array([x_center, y_center, z_center])
@@ -2994,6 +3005,12 @@ def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
            [evec2_x, evec2_y, evec2_z],
            [evec3_x, evec3_y, evec3_z]])
     """
+    def failed(reason: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        warnings.warn(f"fit_ellipsoid: {reason}; every fitted value is NaN.")
+        return np.full(3, np.nan), np.full(3, np.nan), np.full((3, 3), np.nan), np.full(10, np.nan)
+
+    if min_points is not None and len(coord) < min_points:
+        return failed(f"{len(coord)} points, at least {min_points} needed")
 
     x = coord[:, 0]
     y = coord[:, 1]
@@ -3012,12 +3029,22 @@ def fit_ellipsoid(coord: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray
         ]
     )
     d2 = np.array(x * x + y * y + z * z).T  # rhs for LLSQ
-    u = np.linalg.solve(D.dot(D.T), D.dot(d2))
-    a = np.array([u[0] + 1 * u[1] - 1])
-    b = np.array([u[0] - 2 * u[1] - 1])
-    c = np.array([u[1] - 2 * u[0] - 1])
-    v = np.concatenate([a, b, c, u[2:]], axis=0).flatten()
-    center, radii, evecs = ellipsoid_axes_from_quadric(v)
+    # With too few or degenerate points the system is singular, even where solve() does not raise; the rank is
+    # taken of D, not of D·Dᵀ, whose condition number is the square of D's, and in double precision, since a
+    # float32 input (e.g. marching-cubes vertices) would otherwise get float32's much larger rank tolerance.
+    if np.linalg.matrix_rank(D.astype(np.float64)) < D.shape[0]:
+        return failed("singular system")
+    try:
+        u = np.linalg.solve(D.dot(D.T), D.dot(d2))
+        a = np.array([u[0] + 1 * u[1] - 1])
+        b = np.array([u[0] - 2 * u[1] - 1])
+        c = np.array([u[1] - 2 * u[0] - 1])
+        v = np.concatenate([a, b, c, u[2:]], axis=0).flatten()
+        center, radii, evecs = ellipsoid_axes_from_quadric(v)
+    except np.linalg.LinAlgError:
+        return failed("singular system")
+    if not all(np.all(np.isfinite(value)) for value in (center, radii, evecs, v)):
+        return failed("non-finite results")
     return center, radii, evecs.T, v
 
 

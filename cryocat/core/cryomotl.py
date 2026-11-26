@@ -2239,7 +2239,8 @@ class Motl:
             Format-specific options.  The motl is written by the class
             :func:`build_motl_writer` builds for ``motl_type``; a keyword goes
             to that class's constructor, its ``write_out``, or both, as their
-            signatures take it (see :func:`motl_write_parameters`).  For
+            signatures take it (see :func:`motl_write_parameters`); a keyword
+            neither takes is ignored.  For
             example ``"relion"`` takes ``version``, ``pixel_size``, ``binning``
             (required from version 4.0), ``write_optics`` and the name
             formats; ``"relion5"`` requires ``input_tomograms``;
@@ -2260,10 +2261,10 @@ class Motl:
         if t not in motl_io_types():
             raise UserInputError(f"Provided motl file {output_path} has format that is currently not supported.")
         # A keyword goes to the writer's constructor, its write_out, or both, by their signatures
-        # (see motl_write_parameters); one neither takes reaches write_out and fails there.
+        # (see motl_write_parameters); one that neither takes is ignored.
         constructor, writer = motl_write_parameters(t)
         constructor_kwargs = {k: v for k, v in kwargs.items() if k in constructor}
-        writer_kwargs = {k: v for k, v in kwargs.items() if k in writer or k not in constructor}
+        writer_kwargs = {k: v for k, v in kwargs.items() if k in writer}
         build_motl_writer(t, self.df, **constructor_kwargs).write_out(output_path, **writer_kwargs)
 
     @cli_exposed()
@@ -4077,8 +4078,10 @@ class RelionMotl(Motl):
                 raise UserInputError(
                     "Optics has to be specified as a dictionary, pandas DataFrame or as a path to the starfile."
                 )
+        elif self.optics_data is not None:
+            # The optics table the motl was loaded (or built) with is written back.
+            optics_df = self.optics_data
         else:
-            # TODO add support for 3.0
             if version == 3.1 or version == 5.1:
                 optics_df = self.create_optics_group_v3_1(pixel_size=pixel_size, subtomo_size=subtomo_size)
             elif version > 3.1 and version != 5.1:
@@ -4251,18 +4254,20 @@ class RelionMotl(Motl):
         # assign group number
         unique_tomos = relion_df[tomo_name].unique()
         tomo_to_group = {tomo: i + 1 for i, tomo in enumerate(unique_tomos)}
-        relion_df["rlnGroupNumber"] = relion_df[self.tomo_id_name].map(tomo_to_group)
+        relion_df["rlnGroupNumber"] = relion_df[tomo_name].map(tomo_to_group)
 
         return relion_df
 
     def create_optics_group_v3_1(self, pixel_size=None, subtomo_size=None):
-        """Creates an optics group with default parameters corresponding to Relion v. 3.1.
+        """Creates the optics groups with default parameters corresponding to Relion v. 3.1.
+
+        One optics group is created per distinct pixel size (see :meth:`_distinct_pixel_sizes`).
 
         Parameters
         ----------
-        pixel_size : float, optional
-            The pixel size of the data. If not provided, the pixel size of the object instance (`self.pixel_size`) will
-            be used. Defaults to None.
+        pixel_size : float or array-like, optional
+            The pixel size of the data, one value or one per particle. If not provided, the pixel size of the object
+            instance (`self.pixel_size`) will be used. Defaults to None.
         subtomo_size : int, optional
             The size of the subtomograms. If not provided, it will be set to "NaN". Defaults to None.
 
@@ -4275,35 +4280,31 @@ class RelionMotl(Motl):
 
         pixel_size = pixel_size if pixel_size is not None else self.pixel_size
         subtomo_size = subtomo_size if subtomo_size is not None else "NaN"
+        sizes = ["NaN"] if pixel_size is None else self._distinct_pixel_sizes(pixel_size)
+        groups = np.arange(1, len(sizes) + 1)
 
         optics_default = {
-            "rlnOpticsGroup": 1,
-            "rlnOpticsGroupName": "opticsGroup1",
+            "rlnOpticsGroup": groups,
+            "rlnOpticsGroupName": [f"opticsGroup{g}" for g in groups],
             "rlnSphericalAberration": 2.7,
             "rlnVoltage": 300.0,
-            "rlnImagePixelSize": pixel_size,
+            "rlnImagePixelSize": sizes,
             "rlnImageSize": subtomo_size,
             "rlnImageDimensionality": 3,
         }
 
-        if pixel_size is not None:
-            optics_default["rlnImagePixelSize"] = pixel_size
-        else:
-            optics_default["rlnImagePixelSize"] = "NaN"
-
-        if subtomo_size is not None:
-            optics_default["rlnImageSize"] = subtomo_size
-
-        return pd.DataFrame(optics_default, index=[0])
+        return pd.DataFrame(optics_default, index=range(len(sizes)))
 
     def create_optics_group_v4(self, pixel_size=None, subtomo_size=None, binning=None):
-        """Creates an optics group with default parameters corresponding to Relion v. 4.x.
+        """Creates the optics groups with default parameters corresponding to Relion v. 4.x.
+
+        One optics group is created per distinct pixel size (see :meth:`_distinct_pixel_sizes`).
 
         Parameters
         ----------
-        pixel_size : float, optional
-            The pixel size of the data. If not provided, the pixel size of the object instance (`self.pixel_size`)
-            will be used. Defaults to None.
+        pixel_size : float or array-like, optional
+            The pixel size of the data, one value or one per particle. If not provided, the pixel size of the object
+            instance (`self.pixel_size`) will be used. Defaults to None.
         subtomo_size : int, optional
             The size of the subtomograms. If not provided, it will be set to "NaN". Defaults to None.
         binning : int, optional
@@ -4320,24 +4321,96 @@ class RelionMotl(Motl):
         binning = binning if binning is not None else self.binning
         subtomo_size = subtomo_size if subtomo_size is not None else "NaN"
 
-        unbinned_pixel_size = pixel_size / binning
+        sizes = self._distinct_pixel_sizes(pixel_size)
+        groups = np.arange(1, len(sizes) + 1)
+        unbinned_pixel_size = sizes / binning
 
         optics_default = {
-            "rlnOpticsGroup": 1,
-            "rlnOpticsGroupName": "opticsGroup1",
+            "rlnOpticsGroup": groups,
+            "rlnOpticsGroupName": [f"opticsGroup{g}" for g in groups],
             "rlnSphericalAberration": 2.7,
             "rlnVoltage": 300.0,
             "rlnTomoTiltSeriesPixelSize": unbinned_pixel_size,
             "rlnCtfDataAreCtfPremultiplied": 1,
             "rlnImageDimensionality": 3,
             "rlnTomoSubtomogramBinning": binning,
-            "rlnImagePixelSize": pixel_size,
+            "rlnImagePixelSize": sizes,
             "rlnImageSize": subtomo_size,
         }
 
-        return pd.DataFrame(optics_default, index=[0])
+        return pd.DataFrame(optics_default, index=range(len(sizes)))
 
-    def create_final_output(self, relion_df, optics_df=None, use_original_entries=False):
+    @staticmethod
+    def _distinct_pixel_sizes(pixel_size) -> np.ndarray:
+        """The distinct values of *pixel_size* (one value or one per particle), sorted: one optics group each."""
+        return np.unique(np.atleast_1d(np.asarray(pixel_size)))
+
+    def _optics_groups_of_particles(self, optics_df: pd.DataFrame, pixel_size=None) -> np.ndarray:
+        """The optics group of each particle in a newly built *optics_df*: the group with the particle's pixel size.
+
+        The pixel size is *pixel_size* when given, else ``self.pixel_size``; one value applies to every particle.
+
+        Raises
+        ------
+        ValueError
+            If the pixel sizes are neither one value nor one per particle, or a particle's pixel size has no
+            optics group.
+        """
+        sizes = np.atleast_1d(np.asarray(self.pixel_size if pixel_size is None else pixel_size))
+        if sizes.size == 1:
+            sizes = np.repeat(sizes, len(self.df))
+        elif sizes.size != len(self.df):
+            raise ValueError(f"{sizes.size} pixel sizes given for {len(self.df)} particles.")
+        group_of_size: dict = {}
+        for size, group in zip(optics_df["rlnImagePixelSize"], optics_df["rlnOpticsGroup"]):
+            group_of_size.setdefault(size, group)
+        missing = sorted(set(sizes.tolist()) - set(group_of_size))
+        if missing:
+            raise ValueError(f"No optics group has the pixel size(s) {missing}.")
+        return np.array([group_of_size[size] for size in sizes])
+
+    def _carry_loaded_optics_groups(self, relion_df):
+        """Write the optics group each particle was loaded with (``self.relion_df``) into the freshly built
+        *relion_df*, unchanged. Particles the motl holds no loaded group for keep group 0 (unassigned)."""
+        if "rlnOpticsGroup" not in relion_df.columns or not {"rlnOpticsGroup", "ccSubtomoID"} <= set(
+            self.relion_df.columns
+        ):
+            return
+        loaded = self.relion_df.set_index("ccSubtomoID")["rlnOpticsGroup"].reindex(self.df["subtomo_id"])
+        relion_df["rlnOpticsGroup"] = loaded.fillna(0).to_numpy()
+
+    def _add_extra_columns(self, relion_df, extra_columns, standard_columns):
+        """Add the requested `extra_columns` (``{motl column: cc name}``) of ``self.df`` to *relion_df*.
+
+        A target name that is already an entry of *relion_df* (e.g. one kept as it was loaded) is overwritten with
+        the motl's current values.
+
+        Raises
+        ------
+        ValueError
+            If a target name is one of the `standard_columns` of the written version.
+        """
+        _extra: dict[str, str] = dict(extra_columns or {})
+        for mc, cc in _extra.items():
+            if cc in standard_columns:
+                raise ValueError(
+                    f"Extra column target '{cc}' collides with a standard Relion column. "
+                    "Choose a different cc name."
+                )
+        for mc, cc in _extra.items():
+            if mc in self.df.columns:
+                relion_df[cc] = self.df[mc].to_numpy()
+
+    @staticmethod
+    def _check_no_optics_group_0(relion_df):
+        """Raise if *relion_df*, written with an optics block, holds a particle without an optics group (group 0)."""
+        if "rlnOpticsGroup" in relion_df.columns and (relion_df["rlnOpticsGroup"].astype(float) == 0).any():
+            raise UserInputError(
+                "Some particles have no optics group (group 0) and the optics table has several groups; "
+                "write them with their original entries or give each particle its optics group."
+            )
+
+    def create_final_output(self, relion_df, optics_df=None, use_original_entries=False, version=None):
         """Creates the final output frames and specifiers based on the given input dataframes.
 
         Parameters
@@ -4348,9 +4421,12 @@ class RelionMotl(Motl):
             The dataframe containing the optics data. Defaults to None.
         use_original_entries : bool, default=False
             Whether `relion_df` was built from the originally loaded entries. If True, the
-            `rlnOpticsGroup` values already present in `relion_df` are left untouched. If False,
-            `rlnOpticsGroup` (when present in both `relion_df` and `optics_df`) is synced to the
-            group defined in `optics_df`, since freshly built particle data has no group assigned.
+            `rlnOpticsGroup` values already present in `relion_df` are left untouched. If False and
+            `optics_df` has a single group, particles without a group (0) get that group.
+        version : float, optional
+            The Relion version being written; it decides the layout. Defaults to None, in which case
+            `self.version` is used. The particle table is specified by `self.data_spec` when the version is
+            `self.version`, and by the version's own specifier otherwise.
 
         Returns
         -------
@@ -4362,15 +4438,18 @@ class RelionMotl(Motl):
 
         Notes
         -----
-        If optics_df is None, the frames and specifiers will be based on relion_df and self.data_spec.
+        If optics_df is None, the frames and specifiers will be based on relion_df and the particle specifier.
 
         If optics_df is not None, the frames and specifiers will be based on optics_df, relion_df, "data_optics", and
-        self.data_spec.
+        the particle specifier.
 
-        If self.version is less than 3.1, the frames and specifiers will be based on the concatenated dataframe of
-        optics_df and relion_df (with duplicates removed) and self.data_spec.
+        If the version is less than 3.1, the frames and specifiers will be based on the concatenated dataframe of
+        optics_df and relion_df (with duplicates removed) and the particle specifier.
 
         """
+
+        version = self.version if version is None else version
+        data_spec = self.data_spec if version == self.version else RelionMotl.get_version_specific_names(version)[3]
 
         if (
             not use_original_entries
@@ -4379,22 +4458,23 @@ class RelionMotl(Motl):
             and "rlnOpticsGroup" in optics_df.columns
         ):
             unique_groups = optics_df["rlnOpticsGroup"].unique()
-            # A single optics group unambiguously applies to every particle. With more than one
-            # group there is no per-particle mapping to infer, so the existing (per-particle)
-            # rlnOpticsGroup values, if any, are left untouched rather than guessed at.
+            # A single optics group unambiguously applies to every particle that has none (0). With more than one
+            # group there is no per-particle mapping to infer, so the existing (per-particle) rlnOpticsGroup
+            # values are left untouched rather than guessed at.
             if len(unique_groups) == 1:
-                relion_df["rlnOpticsGroup"] = unique_groups[0]
+                unassigned = relion_df["rlnOpticsGroup"].astype(float) == 0
+                relion_df.loc[unassigned, "rlnOpticsGroup"] = unique_groups[0]
 
         if optics_df is None:
             frames = [relion_df]
-            specifiers = [self.data_spec]
+            specifiers = [data_spec]
         else:
-            if self.version >= 3.1:
+            if version >= 3.1:
                 frames = [optics_df, relion_df]
-                specifiers = ["data_optics", self.data_spec]
+                specifiers = ["data_optics", data_spec]
             else:
                 frames = [pd.concat([optics_df, relion_df]).drop_duplicates().reset_index(drop=True)]
-                specifiers = [self.data_spec]
+                specifiers = [data_spec]
 
         return frames, specifiers
 
@@ -4442,8 +4522,10 @@ class RelionMotl(Motl):
         extra_columns : dict[str, str], optional
             Additional `self.df` columns to export as non-standard ``cc``-prefixed fields, e.g.
             ``{"object_id": "ccObjectId", "geom2": "ccGeom2"}``. Use :func:`_cc_name` to derive the
-            conventional target name for a given motl column. Raises ``ValueError`` if a target name
-            collides with a standard Relion column for the given version.
+            conventional target name for a given motl column. Added in every path, `keep_all_entries`
+            included; a target name that matches an original entry overwrites it with the motl's current
+            values. Raises ``ValueError`` if a target name collides with a standard Relion column for the
+            given version.
 
         Returns
         -------
@@ -4468,9 +4550,14 @@ class RelionMotl(Motl):
         if pixel_size is None:
             pixel_size = self.pixel_size
 
+        standard_columns = set(
+            self.columns_v3_0 if version < 3.1 else self.columns_v4 if version >= 4.0 else self.columns_v3_1
+        )
+
         if use_original_entries:
             relion_df = self.adapt_original_entries()
             if keep_all_entries:
+                self._add_extra_columns(relion_df, extra_columns, standard_columns)
                 if adapt_object_attr:
                     self.relion_df = relion_df
 
@@ -4480,6 +4567,7 @@ class RelionMotl(Motl):
             relion_df = self.prepare_particles_data(
                 tomo_format=tomo_format, subtomo_format=subtomo_format, version=version, pixel_size=pixel_size
             )
+            self._carry_loaded_optics_groups(relion_df)
             if "rlnRandomSubset" in relion_df.columns:
                 relion_df.loc[self.df["subtomo_id"].mod(2).eq(0).to_numpy(), "rlnRandomSubset"] = 2
                 relion_df.loc[self.df["subtomo_id"].mod(2).eq(1).to_numpy(), "rlnRandomSubset"] = 1
@@ -4491,22 +4579,7 @@ class RelionMotl(Motl):
 
         relion_df["rlnClassNumber"] = self.df["class"].to_numpy()
 
-        _extra: dict[str, str] = dict(extra_columns or {})
-        if _extra:
-            _rln_cols = set(
-                self.columns_v3_0 if (version or self.version) < 3.1
-                else self.columns_v4 if (version or self.version) >= 4.0
-                else self.columns_v3_1
-            )
-            for mc, cc in _extra.items():
-                if cc in _rln_cols:
-                    raise ValueError(
-                        f"Extra column target '{cc}' collides with a standard Relion column. "
-                        "Choose a different cc name."
-                    )
-            for mc, cc in _extra.items():
-                if mc in self.df.columns:
-                    relion_df[cc] = self.df[mc].to_numpy()
+        self._add_extra_columns(relion_df, extra_columns, standard_columns)
 
         if binning != 1.0 and version >= 4.0 and version != 5.1:
             for coord in ("X", "Y", "Z"):
@@ -4542,7 +4615,10 @@ class RelionMotl(Motl):
         output_path : str
             The output path to the starfile to be written out.
         write_optics : bool, default=True
-            Whether to include optics data in the starfile or not. Defaults to True.
+            Whether to include optics data in the starfile or not. An existing optics table (loaded, carried or
+            given as `optics_data`) is written as it is, and the particles keep their optics groups. Only when no
+            table exists is one built, with one optics group per distinct pixel size, and each particle gets the
+            group of its pixel size. Defaults to True.
         tomo_format : str, default=""
             Format of the tomo name output format. See
             :meth:`cryocat.core.cryomotl.RelionMotl.prepare_particles_data` for more information. Defaults to empty string.
@@ -4602,14 +4678,22 @@ class RelionMotl(Motl):
             extra_columns=extra_columns,
         )
 
+        version = self.version if version is None else version
         if write_optics:
             optics_df = self.prepare_optics_data(
                 use_original_entries, optics_data, version, pixel_size, subtomo_size, binning
             )
+            # Only a newly built optics table assigns the particles' groups, by pixel size.
+            if optics_data is None and self.optics_data is None and "rlnOpticsGroup" in relion_df.columns:
+                relion_df["rlnOpticsGroup"] = self._optics_groups_of_particles(optics_df, pixel_size)
         else:
             optics_df = None
 
-        frames, specifiers = self.create_final_output(relion_df, optics_df, use_original_entries=use_original_entries)
+        frames, specifiers = self.create_final_output(
+            relion_df, optics_df, use_original_entries=use_original_entries, version=version
+        )
+        if optics_df is not None:
+            self._check_no_optics_group_0(relion_df)
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
 
@@ -5200,12 +5284,14 @@ class RelionMotlv5(RelionMotl, Motl):
         Parameters
         ----------
         use_original_entries : bool, default=True
-            When ``True`` and ``optics_data`` is ``None``, ``self.optics_data``
-            is returned unchanged.
+            When ``True``, ``optics_data`` is ``None`` and the motl carries no
+            optics table, no table is built and a ``Warning`` is raised.
         optics_data : str or dict or pandas.DataFrame, optional
             Override optics source.  A ``str`` is interpreted as a path to a
-            star file; a ``dict`` is converted to a DataFrame.
-        pixel_size : float, optional
+            star file; a ``dict`` is converted to a DataFrame.  When ``None``,
+            the optics table the motl carries (``self.optics_data``) is
+            returned unchanged, and only without one a table is built.
+        pixel_size : float or array-like, optional
             Pixel size passed to :meth:`create_optics_group_v5` when building
             a fresh optics group.
         subtomo_size : int, optional
@@ -5239,13 +5325,13 @@ class RelionMotlv5(RelionMotl, Motl):
                 raise UserInputError(
                     "Optics has to be specified as a dictionary, path to the starfile or pandas DataFrame."
                 )
+        elif self.optics_data is not None:
+            # The optics table the motl was loaded (or built) with is written back.
+            optics_df = self.optics_data
         elif use_original_entries:
-            if self.optics_data is not None:
-                optics_df = self.optics_data
-            else:
-                raise Warning(
-                    f"There is no information on optics available - use optics_data argument to provide this information."
-                )
+            raise Warning(
+                f"There is no information on optics available - use optics_data argument to provide this information."
+            )
         else:
             optics_df = self.create_optics_group_v5(pixel_size=pixel_size, subtomo_size=subtomo_size)
 
@@ -5345,12 +5431,12 @@ class RelionMotlv5(RelionMotl, Motl):
         return relion_df
 
     def create_optics_group_v5(self, pixel_size=None, subtomo_size=None, binning=None):
-        """Build a default RELION 5 optics group DataFrame.
+        """Build the default RELION 5 optics groups, one per distinct pixel size (see :meth:`_distinct_pixel_sizes`).
 
         Parameters
         ----------
-        pixel_size : float, optional
-            Binned pixel size in Angstroms.  Defaults to ``self.pixel_size``.
+        pixel_size : float or array-like, optional
+            Binned pixel size in Angstroms, one value or one per particle.  Defaults to ``self.pixel_size``.
         subtomo_size : int, optional
             Subtomogram box size in pixels.  Stored as ``rlnImageSize``.
             Defaults to ``'NaN'``.
@@ -5361,29 +5447,31 @@ class RelionMotlv5(RelionMotl, Motl):
         Returns
         -------
         pandas.DataFrame
-            Single-row optics DataFrame with standard RELION 5 columns.
+            Optics DataFrame with standard RELION 5 columns, one row per optics group.
         """
         pixel_size = pixel_size if pixel_size is not None else self.pixel_size
         binning = binning if binning is not None else self.binning
         subtomo_size = subtomo_size if subtomo_size is not None else "NaN"
 
-        unbinned_pixel_size = pixel_size / binning
+        sizes = self._distinct_pixel_sizes(pixel_size)
+        groups = np.arange(1, len(sizes) + 1)
+        unbinned_pixel_size = sizes / binning
 
         optics_default = {
-            "rlnOpticsGroup": 1,
-            "rlnOpticsGroupName": "opticsGroup1",
+            "rlnOpticsGroup": groups,
+            "rlnOpticsGroupName": [f"opticsGroup{g}" for g in groups],
             "rlnSphericalAberration": 2.7,
             "rlnVoltage": 300.0,
             "rlnTomoTiltSeriesPixelSize": unbinned_pixel_size,
             "rlnCtfDataAreCtfPremultiplied": 1,
             "rlnImageDimensionality": 3,
             "rlnTomoSubtomogramBinning": binning,
-            "rlnImagePixelSize": pixel_size,
+            "rlnImagePixelSize": sizes,
             "rlnImageSize": subtomo_size,
             "rlnAmplitudeContrast": 0.1,
         }
 
-        return pd.DataFrame(optics_default, index=[0])
+        return pd.DataFrame(optics_default, index=range(len(sizes)))
 
     def create_relion_df(
         self,
@@ -5439,6 +5527,7 @@ class RelionMotlv5(RelionMotl, Motl):
         if use_original_entries:
             relion_df = self.adapt_original_entries()
             if keep_all_entries:
+                self._add_extra_columns(relion_df, extra_columns, set(self.columns_v4))
                 if adapt_object_attr:
                     self.relion_df = relion_df
 
@@ -5446,6 +5535,7 @@ class RelionMotlv5(RelionMotl, Motl):
                 return relion_df
         else:
             relion_df = self.prepare_particles_data(tomo_format=tomo_format, subtomo_format=subtomo_format)
+            self._carry_loaded_optics_groups(relion_df)
             if "rlnRandomSubset" in relion_df.columns:  # only in relion
                 relion_df.loc[self.df["subtomo_id"].mod(2).eq(0).to_numpy(), "rlnRandomSubset"] = 2
                 relion_df.loc[self.df["subtomo_id"].mod(2).eq(1).to_numpy(), "rlnRandomSubset"] = 1
@@ -5487,18 +5577,7 @@ class RelionMotlv5(RelionMotl, Motl):
         if not self.isWarp:  # only in relion
             relion_df["rlnClassNumber"] = self.df["class"].to_numpy()
 
-        _extra: dict[str, str] = dict(extra_columns or {})
-        if _extra:
-            _rln_cols = set(self.columns_v4)
-            for mc, cc in _extra.items():
-                if cc in _rln_cols:
-                    raise ValueError(
-                        f"Extra column target '{cc}' collides with a standard Relion column. "
-                        "Choose a different cc name."
-                    )
-            for mc, cc in _extra.items():
-                if mc in self.df.columns:
-                    relion_df[cc] = self.df[mc].to_numpy()
+        self._add_extra_columns(relion_df, extra_columns, set(self.columns_v4))
 
         if binning != 1.0:
             if self.isWarp:
@@ -5582,10 +5661,15 @@ class RelionMotlv5(RelionMotl, Motl):
 
         if write_optics:
             optics_df = self.prepare_optics_data(use_original_entries, optics_data, pixel_size, subtomo_size)
+            # Only a newly built optics table assigns the particles' groups, by pixel size.
+            if optics_data is None and self.optics_data is None and "rlnOpticsGroup" in relion_df.columns:
+                relion_df["rlnOpticsGroup"] = self._optics_groups_of_particles(optics_df, pixel_size)
         else:
             optics_df = None
 
         frames, specifiers = self.create_final_output(relion_df, optics_df, use_original_entries=use_original_entries)
+        if optics_df is not None:
+            self._check_no_optics_group_0(relion_df)
 
         starfileio.Starfile.write(frames, output_path, specifiers=specifiers)
 

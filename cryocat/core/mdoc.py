@@ -200,6 +200,7 @@ class Mdoc:
                 )
             self.imgs.loc[self.imgs.index[hits[0]], "Removed"] = True
 
+    @cli_exposed(output='csv')
     def removed_images(self) -> pd.DataFrame:
         """Return the subset of images that have been marked as removed.
 
@@ -210,6 +211,7 @@ class Mdoc:
         """
         return self.imgs[self.imgs["Removed"] == True]
 
+    @cli_exposed(output='csv')
     def kept_images(self) -> pd.DataFrame:
         """Return the subset of images that have not been removed.
 

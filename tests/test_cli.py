@@ -508,3 +508,45 @@ def test_mdoc_functions_keep_their_names():
     exposed = _subcommands("cc_mdoc")[1]
     assert exposed["remove_images"].kind == "function"
     assert exposed["remove_images_by_angles"].kind == "function"
+
+
+# ---------------------------------------------------------------------------
+# RELION 5.1 without tomograms; Mdoc query methods and writer options
+# ---------------------------------------------------------------------------
+
+
+def test_relion5_1_output_builds_without_tomograms():
+    from cryocat.core import cryomotl
+
+    invocation = _invocation("cc_cryomotl", [
+        "flip_handedness", "--input_motl", "in.em", "--output_motl", "out.star",
+        "--output_type", "relion5_1", "--output_pixel_size", "1.5",
+    ])
+    output_type, constructor_kwargs, _ = invocation.write
+    assert output_type == "relion5_1"
+    assert "input_tomograms" not in constructor_kwargs
+    df = cryomotl.Motl.create_empty_motl_df()
+    df.loc[0] = 0.0
+    df.loc[0, ["subtomo_id", "tomo_id", "class"]] = [1, 1, 1]
+    writer = cryomotl.build_motl_writer(output_type, df, **constructor_kwargs)
+    assert writer.version == 5.1
+
+
+@pytest.mark.parametrize("subcommand", ["kept_images", "removed_images"])
+def test_mdoc_image_tables_write_csv(subcommand):
+    subparser = _subcommands("cc_mdoc")[0][subcommand]
+    assert _action(subparser, "input_mdoc").required
+    assert _action(subparser, "output_csv").required
+
+
+def test_mdoc_output_offers_write_options():
+    dests = {a.dest for a in _subcommands("cc_mdoc")[0]["sort_by_tilt"]._actions}
+    assert {"output_overwrite", "output_removed"} <= dests
+
+
+def test_mdoc_write_option_reaches_write():
+    invocation = _invocation("cc_mdoc", [
+        "sort_by_tilt", "--input_mdoc", "in.mdoc", "--output_mdoc", "out.mdoc", "--output_overwrite", "true",
+    ])
+    assert invocation.write == ("mdoc", {}, {"overwrite": True})
+    assert "overwrite" not in invocation.kwargs

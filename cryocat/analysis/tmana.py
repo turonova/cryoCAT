@@ -629,7 +629,10 @@ def compute_gaussian_threshold(input_map: MapSource) -> float:
 
 
 def get_ellipsoid_label(
-    input_map: MapSource, peak_coordinates: tuple[int, int, int], map_threshold: float = 0.0
+    input_map: MapSource,
+    peak_coordinates: tuple[int, int, int],
+    map_threshold: float = 0.0,
+    min_points: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Fit an ellipsoid to the connected region around a peak and return the filled volume.
 
@@ -650,6 +653,9 @@ def get_ellipsoid_label(
         binarisation.  Voxels with this exact value become background (label 2)
         and all others become foreground (label 1) before connected-component
         labelling.  Default is 0.0.
+    min_points : int, optional
+        Fewest surface vertices the ellipsoid fit accepts; ``None`` (default)
+        checks no count (see :func:`cryocat.utils.geom.fit_ellipsoid`).
 
     Returns
     -------
@@ -689,7 +695,7 @@ def get_ellipsoid_label(
     surface_fit = np.zeros(th_map.shape)
     surface_fit[idx[:, 0], idx[:, 1], idx[:, 2]] = 1.0
 
-    _, radii, radii_dir, ell_params = geom.fit_ellipsoid(ellipsoid_verts)
+    _, radii, radii_dir, ell_params = geom.fit_ellipsoid(ellipsoid_verts, min_points=min_points)
 
     # dist = np.zeros(3,)
     # for i in range(3):

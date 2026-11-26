@@ -45,7 +45,9 @@ from cryocat.utils.classutils import (
     TYPE_HANDLERS,
     DerivedParameter,
     call_targets,
+    derived_parameters,
     forwarded_keywords,
+    positional_parameters,
     process_method_docstring,
     resolve_param_type,
     source_tree,
@@ -99,7 +101,8 @@ class _Invocation:
     ``read`` is ``(input_motl, input_type, Motl.load options)`` for a motl
     method, ``(input_mdoc, "mdoc", {})`` for an :class:`~cryocat.core.mdoc.Mdoc`
     method, and ``write`` ``(output_type, constructor options, writer
-    options)``, each ``None`` where the command reads or writes no motl.
+    options)``, or ``("mdoc", {}, Mdoc.write options)`` for an mdoc output,
+    each ``None`` where the command reads or writes no motl or mdoc.
     ``writes_itself`` is true when the input and output types are the same:
     the loaded motl, as the method returns or changes it, writes itself with
     the writer options.
@@ -335,6 +338,13 @@ def _write_options() -> dict[str, _MotlOption]:
     return _motl_options(declarations)
 
 
+@functools.cache
+def _mdoc_write_options() -> dict[str, _MotlOption]:
+    """The ``--output_<name>`` options of mdoc outputs: the parameters of :meth:`Mdoc.write` after the path."""
+    write = mdoc_module.Mdoc.write
+    return _motl_options([("mdoc", "writer", p) for p in derived_parameters(write, positional_parameters(write, 1)).values()])
+
+
 @dataclass(frozen=True)
 class _Forwarded:
     """The options of a parameter a callable passes on as ``**name`` (see :func:`~cryocat.utils.classutils.forwarded_keywords`).
@@ -366,6 +376,8 @@ def _added_names(command: _Command) -> set[str]:
         names |= {"input_motl", "input_type"} | {f"input_{n}" for n in _read_options()}
     if command.output == "motl":
         names |= {"output_motl", "output_type"} | {f"output_{n}" for n in _write_options()}
+    elif command.output == "mdoc":
+        names |= {"output_mdoc"} | {f"output_{n}" for n in _mdoc_write_options()}
     elif command.output is not None:
         names.add(f"output_{command.output}")
     return names
@@ -523,6 +535,7 @@ def _add_subcommand(subparsers: argparse._SubParsersAction, command: _Command) -
         added["output_map"] = (required, {"required": True, "type": str, "help": "Path the resulting map is written to."})
     elif command.output == "mdoc":
         added["output_mdoc"] = (required, {"required": True, "type": str, "help": "Path the resulting mdoc is written to."})
+        add_options("output", _mdoc_write_options(), typed=False)
     forwarded = _forwarded(command)
     for passed in forwarded.values():
         add_options("", passed.options, typed=False, flags=passed.flags, group=forwarding)
@@ -615,6 +628,9 @@ def _invocation(parser: argparse.ArgumentParser, command: _Command, args: dict) 
         else:
             written = _given_options(parser, args, "output", _write_options(), output_type)
             write = (output_type, written.get("constructor", {}), written.get("writer", {}))
+    elif command.output == "mdoc":
+        written = _given_options(parser, args, "output", _mdoc_write_options(), "mdoc")
+        write = ("mdoc", {}, written.get("writer", {}))
     version_parameter = _version_parameter(command)
     version = args.get(version_parameter) if version_parameter else None
     relion_type = cryomotl_module.relion_version_to_type(version) if version is not None else None
@@ -676,10 +692,11 @@ def _write_output(
             raise TypeError(f"{command.qualname} returned {type(result).__name__}, not an array to write as a map")
         cryomap_module.write(result, path)
     elif command.output == "mdoc":
+        writer_kwargs = invocation.write[2]
         if isinstance(result, mdoc_module.Mdoc):
-            result.write(path)
+            result.write(path, **writer_kwargs)
         elif result is None and isinstance(called_on, mdoc_module.Mdoc):
-            called_on.write(path)
+            called_on.write(path, **writer_kwargs)
         else:
             raise TypeError(f"{command.qualname} returned {type(result).__name__}, not an mdoc to write")
 

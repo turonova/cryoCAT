@@ -23,11 +23,15 @@
 Tutorials
 =========
 
-This section contains useful tutorials but is currently under developement. Please refer to the available tutorials from the list on the left hand side.
+The tutorials are worked examples that take one analysis from start to finish. Each one starts from the input data and shows every step needed to get to a result, so it can be followed as written and then adapted to your own data. For the concepts behind the steps, see the :ref:`user_guide`.
 
-|
+The tutorials are grouped by the kind of question they answer:
 
-.. image:: ../_static/cryocat_mglass_construction.png
-   :width: 300
-   :alt: Under construction
-   :align: center
+* **Particle picking:** :doc:`peak_analysis/peak_analysis` shows how to inspect and analyze the peaks of a template matching scores map.
+* **Surfaces and particles:** :doc:`surface_sampling/oversample_capsid` oversamples a surface to generate new candidate positions on it, :doc:`compute_curvatures/compute_curvatures` computes curvature on membrane meshes, and :doc:`mesh_points_intersections/mesh_points_intersections` relates particles to a mesh by intersecting rays with it.
+* **Sample geometry:** :doc:`lamellae_analysis/lamellae_analysis` describes the lamella that a tomogram was recorded from.
+* **Spatial organization:** :doc:`nearest_neighbor_analysis/nearest_neighbor_analysis` measures distances and orientations between neighboring particles.
+* **Membrane thickness:** three tutorials, meant to be followed in order: :doc:`membrane_thickness/memthick_tomo_preprocessing` prepares the tomograms, :doc:`membrane_thickness/memthick_run` runs the measurement, and :doc:`membrane_thickness/memthick_analysis` analyzes the results.
+* **TANGO:** analyses in the TANGO graphical interface. :doc:`tango_tutorials/TANGO_tutorial_video_structure` outlines the tutorial video, and :doc:`tango_tutorials/TANGO_NPC` and :doc:`tango_tutorials/TANGO_VLP` apply TANGO to nuclear pore complexes and virus-like particles.
+
+More tutorials will be added over time.

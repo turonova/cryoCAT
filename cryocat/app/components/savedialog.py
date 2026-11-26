@@ -182,8 +182,9 @@ def validate_save(
             probs.append("No group is active (click a group in the pool list).")
     if fmt == "relion":
         ver = float((rln_value or {}).get("version") or 0)
-        if ver >= 5.0 and not (rln_value or {}).get("tomos"):
-            probs.append("Relion 5.x save requires a tomogram file — load one in the Relion options.")
+        # Only RELION 5.0 is written with tomograms; 5.1 writes a single file (see cryomotl._MOTL_IO_WRITERS).
+        if relion_version_to_type(ver) == "relion5" and not (rln_value or {}).get("tomos"):
+            probs.append("Relion 5.0 save requires a tomogram file — load one in the Relion options.")
     if mode == "batch" and overwrite == "refuse" and paths:
         conflicts = [p for p in paths.values() if os.path.exists(p)]
         if conflicts:

@@ -7490,3 +7490,173 @@ def test_mod_motl_single_point_file_and_dataframe_are_identical():
         from_df = ModMotl(ModMotl.read_in(path), seed=11)
     assert len(from_file.df) > 0
     pd.testing.assert_frame_equal(from_file.df, from_df.df)
+
+
+# =============================================================================
+# Shared motl IO: RELION 5.1 without a tomogram file
+# =============================================================================
+
+def test_relion5_1_writes_without_tomograms_and_reads_back(tmp_path):
+    df = cryomotl.Motl.create_empty_motl_df()
+    for i in range(3):
+        df.loc[i] = 0.0
+    df[["subtomo_id", "tomo_id", "object_id", "class"]] = [[1, 1, 1, 1], [2, 1, 1, 1], [3, 1, 2, 1]]
+    df[["x", "y", "z"]] = [[10, 20, 30], [15, 25, 35], [40, 50, 60]]
+    path = str(tmp_path / "particles.star")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cryomotl.build_motl_writer("relion5_1", df, pixel_size=1.5).write_out(path)
+        read = cryomotl.Motl.load(path, "relion5_1")
+
+    assert read.version == 5.1
+    np.testing.assert_allclose(read.df[["x", "y", "z"]].to_numpy(), df[["x", "y", "z"]].to_numpy())
+    np.testing.assert_array_equal(read.df["subtomo_id"].to_numpy(), df["subtomo_id"].to_numpy())
+
+
+# =============================================================================
+# RELION optics groups follow the pixel sizes
+# =============================================================================
+
+def test_relion_self_write_keeps_loaded_optics_table(tmp_path):
+    path = str(tmp_path / "particles.star")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        loaded = cryomotl.Motl.load(test_data + "/motl_data/relion_3.1_optics2.star", "relion")
+        loaded.write_out(path)
+    frames, specifiers, _ = starfileio.Starfile.read(path)
+    written = frames[specifiers.index("data_optics")]
+    pd.testing.assert_frame_equal(
+        written.reset_index(drop=True).astype(str), loaded.optics_data.reset_index(drop=True).astype(str)
+    )
+
+
+def test_relion_two_pixel_sizes_write_two_optics_groups(tmp_path):
+    df = cryomotl.Motl.create_empty_motl_df()
+    for i in range(4):
+        df.loc[i] = 0.0
+    df["subtomo_id"] = [1, 2, 3, 4]
+    df["tomo_id"] = 1
+    df["class"] = 1
+    df[["x", "y", "z"]] = [[10, 20, 30], [15, 25, 35], [40, 50, 60], [45, 55, 65]]
+    path = str(tmp_path / "particles.star")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        motl = cryomotl.RelionMotl(df, version=3.1)
+        motl.pixel_size = np.array([1.5, 2.0, 1.5, 2.0])
+        motl.write_out(path)
+    frames, specifiers, _ = starfileio.Starfile.read(path)
+    optics = frames[specifiers.index("data_optics")]
+    particles = frames[specifiers.index("data_particles")]
+    assert len(optics) == 2
+    size_of_group = dict(zip(optics["rlnOpticsGroup"].astype(int), optics["rlnImagePixelSize"].astype(float)))
+    np.testing.assert_allclose(
+        [size_of_group[g] for g in particles["rlnOpticsGroup"].astype(int)], [1.5, 2.0, 1.5, 2.0]
+    )
+
+
+def test_relion_loaded_optics_groups_sharing_a_pixel_size_are_kept_per_particle(tmp_path):
+    source = Path(test_data) / "motl_data" / "relion_3.1_optics2.star"
+    shared = tmp_path / "shared_pixel_size.star"
+    shared.write_text(source.read_text().replace("3.446000", "2.446000"))
+    path = str(tmp_path / "particles.star")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        loaded = cryomotl.Motl.load(str(shared), "relion")
+        loaded.write_out(path)
+    assert loaded.optics_data["rlnImagePixelSize"].nunique() == 1
+    frames, specifiers, _ = starfileio.Starfile.read(path)
+    optics = frames[specifiers.index("data_optics")]
+    particles = frames[specifiers.index("data_particles")]
+    np.testing.assert_array_equal(optics["rlnOpticsGroup"].astype(int), [1, 2])
+    np.testing.assert_array_equal(
+        particles["rlnOpticsGroup"].astype(int), loaded.relion_df["rlnOpticsGroup"].astype(int)
+    )
+    assert set(particles["rlnOpticsGroup"].astype(int)) == {1, 2}
+
+
+def test_relion5_self_write_keeps_loaded_optics_table(tmp_path):
+    clean = test_data + "/motl_data/relion5/clean/"
+    path = str(tmp_path / "particles.star")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        loaded = RelionMotlv5(
+            input_particles=clean + "R5_tutorial_run_data.star",
+            input_tomograms=clean + "R5_tutorial_run_tomograms.star",
+        )
+        loaded.write_out(path)
+    frames, specifiers, _ = starfileio.Starfile.read(path)
+    written = frames[specifiers.index("data_optics")]
+    pd.testing.assert_frame_equal(
+        written.reset_index(drop=True).astype(str), loaded.optics_data.reset_index(drop=True).astype(str)
+    )
+
+
+def test_relion3_0_write_keeps_loaded_columns(tmp_path):
+    source = test_data + "/motl_data/relion_3.0.star"
+    path = str(tmp_path / "particles.star")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        loaded = RelionMotl(source)
+        loaded.write_out(path, use_original_entries=True, write_optics=False, version=3.0)
+    frames, specifiers, _ = starfileio.Starfile.read(path)
+    original, _, _ = starfileio.Starfile.read(source)
+    assert specifiers == ["data_"]
+    assert set(original[0].columns) <= set(frames[0].columns)
+
+
+@pytest.mark.parametrize(
+    "name, version, write_optics",
+    [("relion_3.0.star", 3.0, False), ("relion_3.1_optics2.star", 3.1, True), ("relion_4.0.star", 4.0, True)],
+)
+def test_relion_write_keeps_extra_geom_column(tmp_path, name, version, write_optics):
+    path = str(tmp_path / "particles.star")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        motl = RelionMotl(test_data + "/motl_data/" + name, binning=1.0 if version == 4.0 else None)
+        motl.df["geom1"] = np.arange(len(motl.df)) + 10.0
+        motl.write_out(path, version=version, write_optics=write_optics, extra_columns={"geom1": "ccGeom1"})
+    frames, specifiers, _ = starfileio.Starfile.read(path)
+    particles = frames[specifiers.index("data_" if version == 3.0 else "data_particles")]
+    np.testing.assert_allclose(particles["ccGeom1"].astype(float), motl.df["geom1"])
+
+
+@pytest.mark.parametrize("version", [3.1, 5.0])
+def test_relion_keep_all_entries_writes_extra_geom_column(tmp_path, version):
+    path = str(tmp_path / "particles.star")
+    clean = test_data + "/motl_data/relion5/clean/"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if version == 5.0:
+            motl = RelionMotlv5(
+                input_particles=clean + "R5_tutorial_run_data.star",
+                input_tomograms=clean + "R5_tutorial_run_tomograms.star",
+            )
+        else:
+            motl = RelionMotl(test_data + "/motl_data/relion_3.1_optics2.star")
+        motl.df["geom1"] = np.arange(len(motl.df)) + 10.0
+        motl.write_out(
+            path, use_original_entries=True, keep_all_entries=True, extra_columns={"geom1": "ccGeom1"}
+        )
+    frames, specifiers, _ = starfileio.Starfile.read(path)
+    particles = frames[specifiers.index("data_particles")]
+    np.testing.assert_allclose(particles["ccGeom1"].astype(float), motl.df["geom1"])
+
+
+def test_relion_keep_all_entries_extra_column_overwrites_kept_entry(tmp_path):
+    first = str(tmp_path / "first.star")
+    second = str(tmp_path / "second.star")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        motl = RelionMotl(test_data + "/motl_data/relion_3.1_optics2.star")
+        motl.df["geom1"] = np.arange(len(motl.df)) + 10.0
+        motl.write_out(first, extra_columns={"geom1": "ccGeom1"})
+        loaded = RelionMotl(first)
+        assert "ccGeom1" in loaded.relion_df.columns
+        loaded.df["geom1"] = np.arange(len(loaded.df)) + 100.0
+        loaded.write_out(
+            second, use_original_entries=True, keep_all_entries=True, extra_columns={"geom1": "ccGeom1"}
+        )
+    frames, specifiers, _ = starfileio.Starfile.read(second)
+    particles = frames[specifiers.index("data_particles")]
+    np.testing.assert_allclose(particles["ccGeom1"].astype(float), np.arange(len(loaded.df)) + 100.0)

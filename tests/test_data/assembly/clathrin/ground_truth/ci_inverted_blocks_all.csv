@@ -1,0 +1,3 @@
+tomo_id,object_id,subtomo_id,n_neighbours,n_agree,n_disagree,angle_to_mean_normal_deg
+534.0,30.0,802.0,3,1,2,114.68809934951159
+534.0,32.0,823.0,3,1,2,162.9247083557653

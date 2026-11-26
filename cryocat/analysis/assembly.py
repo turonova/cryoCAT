@@ -2024,6 +2024,13 @@ class MultiSubunitComplex:
         list
             Per-element results when the base implementation returns a
             non-DataFrame.
+
+        Notes
+        -----
+        On a merged :class:`NPC` the elements are the rings, so the method runs
+        on each ring's own motl, not on the merged motl.  After changing the
+        merged motl (for example cleaning it or re-indexing its subunits), call
+        :meth:`NPC.update_ring_motls` before any per-ring analysis.
         """
         elements = self._elements()
         if not elements:
@@ -6665,7 +6672,9 @@ class NPC(CnComplex):
         tomo_col = self.tomo_id_column
         starting_number = 1
         for rm in ordered:
-            rm.renumber_objects_sequentially(starting_number=starting_number)
+            rm.renumber_objects_sequentially(
+                starting_number=starting_number, object_id_column=aff_col, tomo_id_column=tomo_col
+            )
             starting_number = int(rm.df[aff_col].max()) + 1
 
         ring_pairs = mathutils.get_all_pairs(list(range(len(ordered))))
@@ -6736,6 +6745,14 @@ class NPC(CnComplex):
         ValueError
             If :meth:`merge` has not been called, or if ``store_sid_column``
             was ``None`` during :meth:`merge` (making back-tracking impossible).
+
+        Notes
+        -----
+        After :meth:`merge` the particles are held both in the merged motl and
+        in each ring's own motl, and only this method keeps the two in step.
+        :meth:`per_element` runs on the ring motls, so after changing the
+        merged motl (for example cleaning it or re-indexing its subunits), call
+        this method before any per-ring analysis.
         """
         if not self._rings_merged:
             raise ValueError("update_ring_motls requires a merged NPC — call merge() first.")
@@ -7756,7 +7773,9 @@ class NPC(CnComplex):
 
         starting_number = 1
         for r in ring_motls:
-            r.renumber_objects_sequentially(starting_number=starting_number)
+            r.renumber_objects_sequentially(
+                starting_number=starting_number, object_id_column=affiliation_column, tomo_id_column=tomo_id_column
+            )
             starting_number = int(r.df[affiliation_column].max()) + 1
 
         ring_pairs = mathutils.get_all_pairs(list(range(len(ring_motls))))
@@ -13335,13 +13354,21 @@ class PleomorphicAssembly(ContactGraph):
             return {key: self._physical_copy(mesh) for key, mesh in result.items()}
         return result
 
-    def get_shape_stats(self) -> pd.DataFrame:
+    def get_shape_stats(self, min_points: int | None = None) -> pd.DataFrame:
         """Return shape statistics for each object envelope in :attr:`_envelopes`.
 
         Call :meth:`envelope_from_faces` or :meth:`envelope_from_blocks` first
         to populate :attr:`_envelopes`.  Curvatures are computed internally on
         each mesh, in voxels; ``radius`` and ``fit_residual`` are scaled by
         :attr:`pixel_size` and ``area`` by its square.
+
+        Parameters
+        ----------
+        min_points : int, optional
+            Fewest envelope vertices the ellipsoid fit accepts; ``None`` (default)
+            checks no count (see :func:`cryocat.utils.geom.fit_ellipsoid`).  An
+            object whose fit fails keeps its row, with NaN for ``b_a``, ``c_a``
+            and the axis directions.
 
         Returns
         -------
@@ -13354,7 +13381,8 @@ class PleomorphicAssembly(ContactGraph):
               :meth:`envelope_from_faces` / :meth:`envelope_from_blocks`)
             * ``scope`` — block pool used when the envelopes were built
             * ``radius`` — ``1 / median(|H|)`` where *H* is the mean curvature
-              at each vertex; equivalent to the characteristic curvature radius
+              at each vertex; equivalent to the characteristic curvature radius;
+              NaN when the median is exactly zero
             * ``sphere_fraction`` — ``Σ(K_i · area_i) / (4π)`` where *K_i* is
               the Gaussian curvature and *area_i* the Voronoi area at vertex *i*;
               equals 1 for a topological sphere, < 1 for partial coverage
@@ -13366,7 +13394,8 @@ class PleomorphicAssembly(ContactGraph):
             * ``long_axis_x/y/z`` — unit vector along the longest ellipsoid axis
             * ``short_axis_x/y/z`` — unit vector along the shortest ellipsoid axis
             * ``fit_residual`` — RMS spread of per-vertex curvature radii around
-              the median radius
+              the median radius; vertices with zero mean curvature have no
+              curvature radius and are left out
 
         Raises
         ------
@@ -13388,7 +13417,7 @@ class PleomorphicAssembly(ContactGraph):
             # Radius: 1 / median(|H|) where H is mean curvature
             abs_H = np.abs(mesh._mean_curvature)
             median_abs_H = float(np.median(abs_H))
-            radius = 1.0 / median_abs_H if median_abs_H > 1e-15 else float("nan")
+            radius = 1.0 / median_abs_H if median_abs_H != 0 else float("nan")
 
             # Sphere fraction: area-weighted integral of Gaussian curvature / 4π
             sphere_fraction = float(
@@ -13401,12 +13430,12 @@ class PleomorphicAssembly(ContactGraph):
             # Axis ratios and directions from geometric ellipsoid fit
             _nan3 = [float("nan"), float("nan"), float("nan")]
             try:
-                _, radii_fit, evecs_fit, _ = geom.fit_ellipsoid(mesh.vertices)
+                _, radii_fit, evecs_fit, _ = geom.fit_ellipsoid(mesh.vertices, min_points=min_points)
                 idx_sorted = np.argsort(np.abs(radii_fit))[::-1]  # descending a >= b >= c
                 sorted_r = np.abs(radii_fit)[idx_sorted]
                 a_ax, b_ax, c_ax = float(sorted_r[0]), float(sorted_r[1]), float(sorted_r[2])
-                b_a = b_ax / a_ax if a_ax > 1e-15 else float("nan")
-                c_a = c_ax / a_ax if a_ax > 1e-15 else float("nan")
+                b_a = b_ax / a_ax if a_ax != 0 else float("nan")
+                c_a = c_ax / a_ax if a_ax != 0 else float("nan")
                 long_ax = evecs_fit[idx_sorted[0]].tolist()   # eigenvector of largest radius
                 short_ax = evecs_fit[idx_sorted[2]].tolist()  # eigenvector of smallest radius
             except Exception:
@@ -13415,10 +13444,15 @@ class PleomorphicAssembly(ContactGraph):
                 long_ax = _nan3
                 short_ax = _nan3
 
-            # fit_residual: RMS spread of per-vertex curvature radii around median
-            safe_H = np.where(abs_H > 1e-15, abs_H, 1e-15)
-            local_radii = 1.0 / safe_H
-            fit_residual = float(np.sqrt(np.mean((local_radii - radius) ** 2))) if not np.isnan(radius) else float("nan")
+            # fit_residual: RMS spread of per-vertex curvature radii around the median radius.  A vertex with
+            # zero mean curvature has no curvature radius (NaN) and is left out.
+            local_radii = np.full(abs_H.shape, np.nan)
+            curved = abs_H != 0
+            local_radii[curved] = 1.0 / abs_H[curved]
+            if np.isnan(radius) or not curved.any():
+                fit_residual = float("nan")
+            else:
+                fit_residual = float(np.sqrt(np.nanmean((local_radii - radius) ** 2)))
 
             rows.append({
                 self.tomo_id_column: tval,
@@ -13482,9 +13516,9 @@ class PleomorphicAssembly(ContactGraph):
             all output columns; the number of misses is printed to stdout.
         max_distance : float or None, default=None
             Maximum ray travel length for ``method="intersection"``, in
-            voxels like the block motl.
-            When ``None`` the bounding-box diagonal of the envelope is used,
-            which is always large enough to reach any point on the surface.
+            voxels like the block motl.  A hit farther away counts as a miss.
+            When ``None`` the ray is unlimited, as with
+            :func:`~cryocat.utils.geom.construct_rays` without a ``ray_length``.
             Ignored for ``method="projection"``.
 
         Returns
@@ -13568,14 +13602,8 @@ class PleomorphicAssembly(ContactGraph):
             )
 
         # ── intersection branch ───────────────────────────────────────────────
-        if max_distance is None:
-            v = np.asarray(envelope.vertices)
-            ray_length = float(np.linalg.norm(v.max(axis=0) - v.min(axis=0)))
-        else:
-            ray_length = float(max_distance)
-
-        directions = -block_normals * ray_length          # inverted normal, scaled
-        rays = np.hstack([q, directions]).astype(np.float32)  # (N, 6)
+        # along the inverted normal; without a cap the ray is unlimited
+        rays = geom.construct_rays(q, block_normals, ray_length=max_distance, reverse_direction=True)
         cast = envelope.cast_rays(rays)
 
         t_hit = np.asarray(cast["t_hit"], dtype=float)

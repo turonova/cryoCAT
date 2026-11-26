@@ -505,7 +505,7 @@ def test_write_out_relion5_with_tomos(tmp_path):
 
 def test_write_out_relionv5_alias_raises_same(tmp_path):
     with pytest.raises(UserInputError, match="requires tomogram data"):
-        Motl(_make_motl_df()).write_out(str(tmp_path / "x.star"), "relionv5")
+        Motl(_make_motl_df()).write_out(str(tmp_path / "x.star"), "relion5")
 
 
 def test_write_out_unknown_type_raises(tmp_path):

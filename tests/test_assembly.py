@@ -1,5 +1,7 @@
 import contextlib
+import copy
 import io
+import json
 
 import pytest
 import numpy as np
@@ -4413,6 +4415,28 @@ class TestAnnotateWithEnvelope:
         annot, _ = annot_and_psurf
         assert (annot["normal_angle"] < 60).all()
 
+    def test_intersection_hit_beyond_max_distance_is_a_miss(self):
+        from cryocat.core.surface import Mesh
+
+        plane = Mesh()
+        plane.vertices = np.array([[-50, -50, 0], [50, -50, 0], [50, 50, 0], [-50, 50, 0]], dtype=float)
+        plane.faces = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+        plane.normals = np.tile([0.0, 0.0, 1.0], (4, 1))
+        motl = _minimal_motl(2)
+        motl.df["x"] = 0.0
+        motl.df["z"] = [5.0, 20.0]   # zero angles: the ray goes down -z, onto the plane
+        ps = assembly.PleomorphicAssembly(
+            plane, block_layer=assembly.BlockLayer(motl, assembly.BlockDefinition.cyclic(3, [5.0, 0.0, 0.0])))
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            uncapped = ps.annotate_with_envelope(method="intersection")
+            capped = ps.annotate_with_envelope(method="intersection", max_distance=10.0)
+
+        np.testing.assert_allclose(uncapped["envelope_distance"], [5.0, 20.0], atol=1e-5)
+        pd.testing.assert_frame_equal(capped.iloc[[0]], uncapped.iloc[[0]])
+        hit_columns = [c for c in capped.columns if c not in ("tomo_id", "block_id")]
+        assert capped.loc[1, hit_columns].isna().all()
+
 
 # =============================================================================
 # unify_polarity(reference="envelope")
@@ -7525,7 +7549,7 @@ def missing_ball_ps():
     bd = assembly.BlockDefinition.cyclic(3, site_shift)
     bl = assembly.BlockLayer(sub_motl, bd)
     ps = assembly.PleomorphicAssembly(block_layer=bl)
-    ps.connect(max_distance=arm_length * 2.5)
+    ps.connect(max_distance=4.0)
     ps.infer_missing_blocks(min_real_support=2, site_shift=site_shift)
     return ps
 
@@ -7547,8 +7571,7 @@ class TestScopeParameter:
 
     def test_scope_all_more_faces_than_original(self, missing_ball_ps):
         ps = missing_ball_ps
-        if ps._added is None or len(ps._added.df) == 0:
-            pytest.skip("No inferred blocks found; test not applicable.")
+        assert ps._added is not None and len(ps._added.df) > 0, "No inferred blocks found."
         ps.connect(max_distance=ps._max_distance, scope="all")
         fs_all = ps.get_face_stats(scope="all")
         fs_orig = ps.get_face_stats(scope="original")
@@ -7559,16 +7582,14 @@ class TestScopeParameter:
 
     def test_scope_all_face_stats_has_added_columns(self, missing_ball_ps):
         ps = missing_ball_ps
-        if ps._added is None or len(ps._added.df) == 0:
-            pytest.skip("No inferred blocks found; test not applicable.")
+        assert ps._added is not None and len(ps._added.df) > 0, "No inferred blocks found."
         ps.connect(max_distance=ps._max_distance, scope="all")
         fs = ps.get_face_stats(scope="all")
         assert "n_added" in fs.columns, "Expected column 'n_added' in scope='all' face stats"
 
     def test_added_blocks_no_duplicate_real(self, missing_ball_ps):
         ps = missing_ball_ps
-        if ps._added is None or len(ps._added.df) == 0:
-            pytest.skip("No inferred blocks found; test not applicable.")
+        assert ps._added is not None and len(ps._added.df) > 0, "No inferred blocks found."
         real_xyz = ps.blocks.df[["x", "y", "z"]].values.astype(float)
         added_xyz = ps._added.df[["x", "y", "z"]].values.astype(float)
         from scipy.spatial.distance import cdist as _cdist
@@ -10292,3 +10313,1227 @@ def test_cluster_subunits_to_rings_writes_the_chosen_subunit_index_column():
     np.testing.assert_array_equal(chosen["geom2"].to_numpy(), input_df["geom2"].to_numpy())
     rest = [c for c in default.columns if c not in ("geom2", "geom5")]
     pd.testing.assert_frame_equal(chosen[rest], default[rest])
+
+
+# =============================================================================
+# Refactoring guard
+# =============================================================================
+#
+# Rebuilds the NPC and clathrin objects from the motls in test_data/assembly and
+# compares every result against the reference tables in ground_truth.
+#
+# Comparison goes through CSV on both sides: the reference tables were written with
+# to_csv, and columns holding lists or None do not survive that round trip
+# unchanged.  Writing the fresh result the same way puts both in the same form.
+#
+# Every reference file must have a producer here, and every producer must have a
+# reference file -- a missing pair fails rather than passing silently.
+#
+# The clathrin external surface is the one input that is not a motl: coat 67's
+# membrane, cropped to the region its triskelia reach, next to the clathrin motl.
+
+# --------------------------------------------------------------------------- #
+# NPC: paths and the inputs the reference tables were generated with
+# --------------------------------------------------------------------------- #
+
+NPC_DIR = Path(__file__).parent / "test_data" / "assembly" / "npc"
+NPC_TRUTH = NPC_DIR / "ground_truth"
+
+PIXEL_SIZE = 0.2176 * 4
+NPC_RADIUS = 50
+SYMMETRY = 8
+
+BASKET = "basket"
+TOMO = "tomo_id"
+PORE = "object_id"
+ORDER = "geom1"
+RING = "geom3"
+FLAG = "geom5"
+ORIG_S_ID = "geom4"
+DIAMETER_STORE = "geom6"
+
+RING_PATHS = [str(NPC_DIR / name) for name in
+              ("cr_motl.em", "ir_motl.em", "nr_motl.em", "lr_motl.em")]
+BASKET_PATH = str(NPC_DIR / "br_motl.em")
+
+RTOL = 1e-6
+ATOL = 1e-9
+
+
+# --------------------------------------------------------------------------- #
+# clathrin: paths and the inputs the reference tables were generated with
+# --------------------------------------------------------------------------- #
+
+CL_DIR = Path(__file__).parent / "test_data" / "assembly" / "clathrin"
+CL_TRUTH = CL_DIR / "ground_truth"
+TRISKELION = str(CL_DIR / "triskelion.em")
+
+CL_PIXEL_SIZE = 0.784                 # nm per voxel, bin4
+CL_SYMMETRY = "C3"
+SITE_SHIFT = [11.25, -0.75, 0.0]      # voxels, leg tip in the vertex frame
+MAX_DISTANCE = 10.0                   # voxels, tip to tip
+
+COAT = "object_id"
+
+GAP_CLUSTER_RADIUS = 5.0              # voxels
+INVERT_MAX_DISTANCE = 25.0            # voxels
+ENVELOPE_RADIUS = None
+ANNOTATE_MAX_DIST = 45 * 0.784        # nm; passed divided by CL_PIXEL_SIZE, as the method takes voxels
+
+MIN_SUPPORT = 2
+MIN_REAL_SUPPORT = 2
+MAX_ROUNDS = 5
+ANGLE_TOLERANCE = 30
+TIP_TOLERANCE = 10
+SITE_SHIFT_INFERENCE = [11.25, 0.75, 0]
+
+DROPOUT_SEED = 0
+DROPOUT_N = 20
+
+N_LEGS = 3
+
+SURFACE_DIR = CL_DIR
+SURFACE_PATTERN = "seg_obj_{obj:.1f}_cropped.vtp"
+SURFACE_OBJECTS = [67]
+SURFACE_TOMO = 1506.0
+SURFACE_READ = "mesh_curvatures"
+SURFACE_UNITS = None
+
+ENVELOPE_ANNOTATE_N = 3
+SCOPES = ("original", "inferred", "all")
+
+CURVATURES_FULL = (("mean_curvature", "get_mean_curvature"),
+                   ("gaussian_curvature", "get_gaussian_curvature"),
+                   ("shape_index", "get_shape_index"),
+                   ("curvedness", "get_curvedness"),
+                   ("surface_type", "get_surface_type"),
+                   ("principal_curvatures", "get_principal_curvatures"),
+                   ("curvature_directions", "get_curvature_directions"))
+CURVATURES_BASIC = CURVATURES_FULL[:5]
+
+
+# --------------------------------------------------------------------------- #
+# building the NPC objects, exactly as the reference tables were built
+# --------------------------------------------------------------------------- #
+
+def _base_npc():
+    npc = assembly.NPC(RING_PATHS, radius=NPC_RADIUS, pixel_size=PIXEL_SIZE)
+    npc.assign_subunit_index()
+    return npc
+
+
+def _add_basket(npc):
+    npc.add_component(BASKET_PATH, name=BASKET, assign_affiliation=True,
+                      reference_ring=3, affiliation_max_distance=30)
+    return npc
+
+
+def build_npc_unmerged():
+    """Ordered, basket added, not merged."""
+    return _add_basket(_base_npc())
+
+
+def build_npc_merged():
+    """Ordered, merged, basket added afterwards."""
+    npc = _base_npc()
+    npc.merge(npc_radius=NPC_RADIUS, ring_order=[0, 1, 2, 3], store_sid_column=ORIG_S_ID)
+    return _add_basket(npc)
+
+
+# --------------------------------------------------------------------------- #
+# building the clathrin objects, exactly as the reference tables were built
+# --------------------------------------------------------------------------- #
+
+def build_lattice():
+    """Connected clathrin lattice from the triskelion motl."""
+    surface = assembly.PleomorphicAssembly.from_blocks(
+        TRISKELION, CL_SYMMETRY, site_shift=SITE_SHIFT,
+        affiliation_column=COAT, tomo_id_column=TOMO, pixel_size=CL_PIXEL_SIZE)
+    surface.connect(MAX_DISTANCE)
+    return surface
+
+
+def build_legs():
+    """Leg subunits generated from the triskelion motl as their parent."""
+    return assembly.CnComplex.from_parent(
+        TRISKELION, N_LEGS, SITE_SHIFT,
+        affiliation_column=COAT, pixel_size=CL_PIXEL_SIZE)
+
+
+def lattice_for_object(object_id, tomo_id=None):
+    """A connected lattice holding one coat only.
+
+    Needed wherever a surface belongs to a single coat: annotate_with_envelope
+    filters by tomogram but not by object.
+    """
+    one = copy.deepcopy(cryomotl.Motl.load(TRISKELION))
+    mask = one.df[COAT] == object_id
+    if tomo_id is not None:
+        mask &= one.df[TOMO] == tomo_id
+    one.df = one.df[mask].reset_index(drop=True)
+    if one.df.empty:
+        return None
+    surface = assembly.PleomorphicAssembly.from_blocks(
+        one, CL_SYMMETRY, site_shift=SITE_SHIFT,
+        affiliation_column=COAT, tomo_id_column=TOMO, pixel_size=CL_PIXEL_SIZE)
+    surface.connect(MAX_DISTANCE)
+    return surface
+
+
+def build_dropout():
+    """Lattice with DROPOUT_N blocks removed, plus the motl of what was removed."""
+    full = cryomotl.Motl.load(TRISKELION)
+    rng = np.random.default_rng(DROPOUT_SEED)
+    ids = full.df["subtomo_id"].to_numpy()
+    removed_ids = rng.choice(ids, size=min(DROPOUT_N, len(ids)), replace=False)
+
+    kept = copy.deepcopy(full)
+    kept.df = kept.df[~kept.df["subtomo_id"].isin(removed_ids)].reset_index(drop=True)
+    removed = copy.deepcopy(full)
+    removed.df = removed.df[removed.df["subtomo_id"].isin(removed_ids)].reset_index(drop=True)
+
+    reduced = assembly.PleomorphicAssembly.from_blocks(
+        kept, CL_SYMMETRY, site_shift=SITE_SHIFT,
+        affiliation_column=COAT, tomo_id_column=TOMO, pixel_size=CL_PIXEL_SIZE)
+    reduced.connect(MAX_DISTANCE)
+    return reduced, removed
+
+
+def read_surface_mesh(object_id):
+    """The external surface of one coat, as the Mesh itself.
+
+    PleomorphicAssembly.read returns a wrapper and the .surface setter does not
+    unwrap, so what gets attached is wrapper.surface.
+
+    The mesh is cropped to the vertices within 1.1 * ANNOTATE_MAX_DIST of the
+    coat's triskelia; every per-vertex array is carried from the full mesh as it was.
+    """
+    path = SURFACE_DIR / SURFACE_PATTERN.format(obj=float(object_id))
+    kwargs = {} if SURFACE_UNITS is None else {"units": SURFACE_UNITS}
+    wrapper = assembly.PleomorphicAssembly.read(str(path), method=SURFACE_READ, **kwargs)
+    mesh = wrapper.surface
+    mesh.pixel_size = CL_PIXEL_SIZE   # the .vtp vertices are in nm
+    return mesh
+
+
+def first_of(value):
+    """Several methods return (motl, diagnostics)."""
+    return value[0] if isinstance(value, tuple) else value
+
+
+def second_of(value):
+    return value[1] if isinstance(value, tuple) and len(value) > 1 else None
+
+
+# --------------------------------------------------------------------------- #
+# comparison
+# --------------------------------------------------------------------------- #
+
+def _drop_index_columns(frame):
+    return frame.drop(columns=[c for c in frame.columns if c.startswith("Unnamed")])
+
+
+def _read_truth(path):
+    """Read a reference table, treating a file with no columns as an empty frame."""
+    if path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return _drop_index_columns(pd.read_csv(path))
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
+def _as_frame(value):
+    if value is None:
+        return None
+    if isinstance(value, pd.DataFrame):
+        return value.reset_index(drop=True)
+    if hasattr(value, "df"):
+        return value.df.reset_index(drop=True)
+    raise TypeError(f"cannot compare a {type(value).__name__}")
+
+
+def _through_csv(frame):
+    """Put a fresh result into the same form the reference was stored in."""
+    if frame.empty and frame.shape[1] == 0:
+        return pd.DataFrame()
+    buffer = io.StringIO()
+    frame.to_csv(buffer, index=False)
+    text = buffer.getvalue()
+    if not text.strip():
+        return pd.DataFrame()
+    return _drop_index_columns(pd.read_csv(io.StringIO(text)))
+
+
+SPLIT_POSITION_TABLES = frozenset({
+    "pre_st_centers_motl", "post_st_centers_motl", "pre_s2_centers_motl", "post_s2_centers_motl",
+    "cn_centers_motl",
+    "c1_gaps_motl_original_1", "ci_gaps_motl_original_1",
+    "c1_missing_block_motl_original", "ci_missing_block_motl_original",
+    "ci_missing_block_motl_inferred", "ci_missing_block_motl_all",
+    "ci_inferred_motl_1", "ci_blocks_motl_inferred", "ci_blocks_motl_all",
+    "ci_inverted_blocks_motl_all",
+    "cr_recovered_motl_1", "cr_adopted_motl",
+})
+"""Motl outputs whose positions are now split between x/y/z and the shifts.
+
+The reference holds the whole position in x/y/z; both sides are compared as
+x + shift_x and so on, and the shifts are not compared on their own."""
+
+MISMATCH_COLUMNS = ("mismatch_x", "mismatch_y", "mismatch_z")
+ELEMENT_LENGTH_COLUMNS = ("len_a", "len_b", "axis_component", "plane_component")
+RING_SPACING_COLUMNS = tuple(f"spacing_{a}_{b}" for a in range(1, 5) for b in range(a + 1, 5))
+SCALED_COLUMNS = {
+    "c1_contact_stats_original": (MISMATCH_COLUMNS, CL_PIXEL_SIZE),
+    "ci_contact_stats_all": (MISMATCH_COLUMNS, CL_PIXEL_SIZE),
+    "ci_contact_stats_inferred": (MISMATCH_COLUMNS, CL_PIXEL_SIZE),
+    "ci_contact_stats_original": (MISMATCH_COLUMNS, CL_PIXEL_SIZE),
+    "cn_measure_elements_fit": (ELEMENT_LENGTH_COLUMNS, CL_PIXEL_SIZE),
+    "cn_measure_elements_parent": (ELEMENT_LENGTH_COLUMNS, CL_PIXEL_SIZE),
+    "pre_s1_measure_elements_fit": (ELEMENT_LENGTH_COLUMNS, PIXEL_SIZE),
+    "post_s1_measure_elements_fit": (ELEMENT_LENGTH_COLUMNS, PIXEL_SIZE),
+    "pre_s1_object_stats": (("radius",), PIXEL_SIZE),
+    "post_s1_object_stats": (("radius",), PIXEL_SIZE),
+    "pre_s2_object_stats": (("radius",), PIXEL_SIZE),
+    "post_s2_object_stats": (("radius",), PIXEL_SIZE),
+    "cn_object_stats": (("radius",), CL_PIXEL_SIZE),
+    "subunit_spacing": (RING_SPACING_COLUMNS, PIXEL_SIZE),
+}
+"""Reference columns written unscaled that the code now reports scaled by the producer's pixel size."""
+
+UNSCALED_COLUMNS = {
+    "post_s1_cn_diameter_motl": (("geom4",), PIXEL_SIZE),
+    "cn_diameter_motl": (("geom4",), CL_PIXEL_SIZE),
+    "pre_st_compute_diameter_geom2_motl": (("geom6",), PIXEL_SIZE),
+    "post_st_compute_diameter_geom2_motl": (("geom6",), PIXEL_SIZE),
+}
+"""Reference columns written scaled by the producer's pixel size that the code now leaves in voxels."""
+
+CLOSEST_POINT_COLUMNS = ("closest_x", "closest_y", "closest_z")
+"""Closest points on the envelope, written in nm in the projection references and now in voxels."""
+
+ENVELOPE_VERTEX_TABLES = {
+    "ce_envelope_from_faces": CL_PIXEL_SIZE,
+    "ce_envelope_from_blocks": CL_PIXEL_SIZE,
+}
+"""Envelope references written with vertices in physical units; the envelopes are now in voxels."""
+ENVELOPE_VERTEX_COLUMNS = ("centroid_x", "centroid_y", "centroid_z")
+
+
+def _joined_positions(frame):
+    """Positions as x + shift_x and so on, with the shifts set to zero."""
+    frame = frame.copy()
+    for axis in ("x", "y", "z"):
+        frame[axis] = frame[axis] + frame[f"shift_{axis}"]
+        frame[f"shift_{axis}"] = 0.0
+    return frame
+
+
+def _in_current_units(stem, got, truth):
+    """Bring the reference to the units and position split the code now uses."""
+    if stem in SPLIT_POSITION_TABLES:
+        got, truth = _joined_positions(got), _joined_positions(truth)
+    if stem in SCALED_COLUMNS:
+        columns, pixel_size = SCALED_COLUMNS[stem]
+        truth = truth.copy()
+        truth[list(columns)] = truth[list(columns)] * pixel_size
+    if stem in UNSCALED_COLUMNS:
+        columns, pixel_size = UNSCALED_COLUMNS[stem]
+        truth = truth.copy()
+        truth[list(columns)] = truth[list(columns)] / pixel_size
+    if stem.endswith(("_projection", "_projection_capped")):
+        truth = truth.copy()
+        truth[list(CLOSEST_POINT_COLUMNS)] = truth[list(CLOSEST_POINT_COLUMNS)] / CL_PIXEL_SIZE
+    if stem in ENVELOPE_VERTEX_TABLES:
+        truth = truth.copy()
+        columns = list(ENVELOPE_VERTEX_COLUMNS)
+        truth[columns] = truth[columns] / ENVELOPE_VERTEX_TABLES[stem]
+    return got, truth
+
+
+def assert_matches_truth(value, truth_path, ignore_columns=()):
+    """Compare a result against its reference table, both as written to CSV.
+
+    *ignore_columns* are still required to be present and in the same position;
+    only their values are left out of the comparison.  See UNDETERMINED_COLUMNS.
+    The reference is first brought to the current units; see _in_current_units.
+    """
+    truth = _read_truth(truth_path)
+    got = _as_frame(value)
+    assert got is not None, f"{truth_path.name}: result is None but a reference exists"
+    got = _through_csv(got)
+
+    if truth.empty and truth.shape[1] == 0:
+        assert got.empty, f"{truth_path.name}: reference is empty, got {got.shape}"
+        return
+
+    assert list(got.columns) == list(truth.columns), (
+        f"{truth_path.name}: columns differ\n  got      {list(got.columns)}\n"
+        f"  expected {list(truth.columns)}")
+    assert got.shape == truth.shape, (
+        f"{truth_path.name}: shape {got.shape} against reference {truth.shape}")
+
+    if truth.empty:
+        return
+
+    drop = [c for c in ignore_columns if c in truth.columns]
+    if drop:
+        got = got.drop(columns=drop)
+        truth = truth.drop(columns=drop)
+    got, truth = _in_current_units(truth_path.stem, got, truth)
+
+    pd.testing.assert_frame_equal(got, truth, check_dtype=False, check_like=False,
+                                  rtol=RTOL, atol=ATOL, obj=truth_path.name)
+
+
+def _jsonable(obj):
+    """The same normalization the reference writer used."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating, np.integer, np.bool_)):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {str(k): _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v) for v in obj]
+    if isinstance(obj, float) and not np.isfinite(obj):
+        return None
+    return obj
+
+
+def _assert_same_json(got, truth, where):
+    if isinstance(truth, dict):
+        assert isinstance(got, dict), f"{where}: expected a dict, got {type(got).__name__}"
+        assert sorted(got) == sorted(truth), (
+            f"{where}: keys differ\n  got      {sorted(got)[:12]}\n"
+            f"  expected {sorted(truth)[:12]}")
+        for key in truth:
+            _assert_same_json(got[key], truth[key], f"{where}.{key}")
+    elif isinstance(truth, list):
+        assert isinstance(got, list), f"{where}: expected a list, got {type(got).__name__}"
+        assert len(got) == len(truth), (
+            f"{where}: {len(got)} entries against reference {len(truth)}")
+        for i, (g, t) in enumerate(zip(got, truth)):
+            _assert_same_json(g, t, f"{where}[{i}]")
+    elif isinstance(truth, bool) or truth is None:
+        assert got == truth, f"{where}: {got!r} against reference {truth!r}"
+    elif isinstance(truth, (int, float)):
+        assert got == pytest.approx(truth, rel=RTOL, abs=ATOL), (
+            f"{where}: {got!r} against reference {truth!r}")
+    else:
+        assert got == truth, f"{where}: {got!r} against reference {truth!r}"
+
+
+def assert_json_matches_truth(value, truth_path):
+    """Compare a nested result against its reference, both normalized the same way."""
+    assert value is not None, f"{truth_path.name}: result is None but a reference exists"
+    with truth_path.open(encoding="utf-8") as handle:
+        truth = json.load(handle)
+    _assert_same_json(_jsonable(value), truth, truth_path.stem)
+
+
+def _array_frame(name, value):
+    """The shape the reference writer gave a numpy result: one flat column."""
+    return pd.DataFrame({name: np.asarray(value).ravel()})
+
+
+def _mesh_dict_frame(meshes):
+    """The shape the reference writer gave a dict of meshes keyed by (tomo, object)."""
+    rows = []
+    for key, item in sorted(meshes.items(), key=lambda kv: str(kv[0])):
+        verts = np.asarray(item.get_vertices(), float)
+        rows.append({"key": str(key), "n_vertices": len(verts),
+                     "n_faces": len(np.asarray(item.faces)),
+                     "centroid_x": verts[:, 0].mean(),
+                     "centroid_y": verts[:, 1].mean(),
+                     "centroid_z": verts[:, 2].mean()})
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------- #
+# the NPC producers: one per reference file name
+# --------------------------------------------------------------------------- #
+
+def _measurement_producers(npc, prefix):
+    """Read-only methods, run on a pristine copy of *npc*."""
+    a = copy.deepcopy(npc)
+    out = {
+        f"{prefix}s1_object_stats": lambda: a.get_object_stats(),
+        f"{prefix}s1_occupancy": lambda: a.occupancy(),
+        f"{prefix}s1_normal_deviations": lambda: a.normal_deviations(),
+        f"{prefix}s1_circumference": lambda: a.circumference(),
+        f"{prefix}s1_duplicates": lambda: a.check_for_duplicates(),
+        f"{prefix}s1_flagged_pores": lambda: a.flagged_pores(flag_column=FLAG),
+        f"{prefix}s1_per_ring_occupancy": lambda: a.per_ring("occupancy"),
+        f"{prefix}s1_per_element_occupancy": lambda: a.per_element("occupancy"),
+        f"{prefix}s1_centre_comparison":
+            lambda: pd.DataFrame([{"key": str(k), "value": v}
+                                  for k, v in _as_dict(a.get_centre_comparison()).items()]),
+        f"{prefix}s1_measure_elements_fit":
+            lambda: a.measure_elements(0, 1, reference="fit"),
+    }
+    for gaps in ("holey", "full"):
+        for inc in (False, True):
+            tag = f"{gaps}_{'flagged' if inc else 'clean'}"
+            out[f"{prefix}s1_central_angles_{tag}"] = (
+                lambda g=gaps, i=inc: a.central_angles(gaps=g, include_flagged=i,
+                                                       flag_column=FLAG))
+    for inc in (False, True):
+        tag = "flagged" if inc else "clean"
+        out[f"{prefix}s1_ring_ellipticity_{tag}"] = (
+            lambda i=inc: a.ring_ellipticity(flag_column=FLAG,
+                                             include_flagged=i))
+    out[f"{prefix}s1_cn_diameter"] = lambda: a.diameter()[0]
+    out[f"{prefix}s1_cn_diameter_motl"] = lambda: a.diameter()[1]
+
+    for gaps in ("holey", "full"):
+        for deg in (True, False):
+            tag = f"{BASKET}_{gaps}_{'deg' if deg else 'rad'}"
+            out[f"{prefix}s1_component_{tag}"] = (
+                lambda g=gaps, d=deg: a.get_component_stats(name=BASKET,
+                                                            degrees=d, gaps=g))
+    return out
+
+
+def _as_dict(value):
+    """get_centre_comparison returns a list of per-complex dicts in some versions
+    and a dict in others; the reference was written as key/value rows."""
+    if isinstance(value, dict):
+        return value
+    return {i: v for i, v in enumerate(value)}
+
+
+def _static_producers(npc, prefix):
+    """Static methods, called on the object's own motl."""
+    a = copy.deepcopy(npc)
+
+    def plain():
+        return assembly.NPC.compute_diameter(
+            a.motl, pixel_size=PIXEL_SIZE, store_column=DIAMETER_STORE,
+            symmetry=SYMMETRY, tomo_id_column=TOMO, affiliation_column=PORE)
+
+    def mirrored():
+        motl = copy.deepcopy(a.motl)
+        motl.df["geom2"] = motl.df[ORDER].to_numpy()
+        return assembly.NPC.compute_diameter(
+            motl, pixel_size=PIXEL_SIZE, store_column=DIAMETER_STORE,
+            symmetry=SYMMETRY, tomo_id_column=TOMO, affiliation_column=PORE)
+
+    out = {
+        f"{prefix}st_centers_motl":
+            lambda: assembly.NPC.compute_centers(
+                a.motl, radius=NPC_RADIUS, tomo_id_column=TOMO,
+                affiliation_column=PORE),
+        f"{prefix}st_compute_diameter": lambda: plain()[0],
+        f"{prefix}st_compute_diameter_motl": lambda: plain()[1],
+        f"{prefix}st_compute_diameter_geom2": lambda: mirrored()[0],
+        f"{prefix}st_compute_diameter_geom2_motl": lambda: mirrored()[1],
+    }
+    for i in range(1, len(RING_PATHS) + 1):
+        out[f"{prefix}st_merge_rings_motl_{i}"] = (
+            lambda k=i: assembly.NPC.merge_rings(
+                RING_PATHS, npc_radius=NPC_RADIUS, tomo_id_column=TOMO,
+                affiliation_column=PORE)[k - 1])
+    return out
+
+
+def _merge_producers(npc, prefix):
+    """Methods that need the merged state, on a copy merged with no arguments."""
+    b = copy.deepcopy(npc)
+    merged = b.merge()
+    out = {
+        f"{prefix}s2_merged_motl": lambda: merged,
+        f"{prefix}s2_occupancy": lambda: b.occupancy(),
+        f"{prefix}s2_object_stats": lambda: b.get_object_stats(),
+        f"{prefix}s2_ring_spacing": lambda: b.ring_spacing(),
+        f"{prefix}s2_inter_ring_twist_deg": lambda: b.inter_ring_twist(degrees=True),
+        f"{prefix}s2_inter_ring_twist_rad": lambda: b.inter_ring_twist(degrees=False),
+        f"{prefix}s2_ring_ellipticity": lambda: b.ring_ellipticity(),
+        f"{prefix}s2_centers_motl":
+            lambda: assembly.NPC.compute_centers(
+                b.motl, radius=NPC_RADIUS, tomo_id_column=TOMO,
+                affiliation_column=PORE),
+    }
+    stats = b.get_subunit_stats()
+    for i, part in enumerate(b.split_by_ring(stats), start=1):
+        out[f"{prefix}s2_split_by_ring_{i}"] = lambda p=part: p
+    return out
+
+
+def _mutation_producers(npc, prefix):
+    """Re-ordering and re-orientation, each on its own copy."""
+    c = copy.deepcopy(npc)
+    order = c.assign_subunit_index(flag_column=FLAG)
+
+    d = copy.deepcopy(npc)
+    d.unify_nn_orientations()
+
+    return {
+        f"{prefix}s3_assign_order_motl": lambda: order,
+        f"{prefix}s3_order_duplicates": lambda: c.check_for_duplicates(),
+        f"{prefix}s3_order_flagged": lambda: c.flagged_pores(flag_column=FLAG),
+        f"{prefix}s4_unified_motl": lambda: d.motl,
+    }
+
+
+def _legacy_producers(npc):
+    """The seven tables written before the staged reference existed, from the
+    merged object with the basket."""
+    a = copy.deepcopy(npc)
+    return {
+        "subunit_stats": lambda: a.get_subunit_stats(include_flagged=True),
+        "ring_summary": lambda: a.ring_summary(),
+        "pore_defects": lambda: a.classify_pores(),
+        "subunit_spacing": lambda: a.get_subunit_spacing(include_flagged=True),
+        "subunit_orientation": lambda: a.get_subunit_orientation(include_flagged=True),
+        "basket_stats": lambda: a.get_component_stats(name=BASKET),
+        "ring_frame_coords": lambda: a.get_ring_frame_coords(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# the clathrin producers: one per reference file name
+# --------------------------------------------------------------------------- #
+
+def _lattice_table_producers(surface, prefix, scopes=SCOPES):
+    """The six per-scope tables, plus the face inference."""
+    out = {}
+    for scope in scopes:
+        out[f"{prefix}contact_stats_{scope}"] = (
+            lambda s=scope: surface.get_contact_stats(scope=s))
+        out[f"{prefix}face_stats_{scope}"] = (
+            lambda s=scope: surface.get_face_stats(scope=s))
+        out[f"{prefix}block_stats_{scope}"] = (
+            lambda s=scope: surface.get_block_stats(scope=s))
+        out[f"{prefix}object_stats_{scope}"] = (
+            lambda s=scope: surface.get_object_stats(scope=s))
+        out[f"{prefix}bond_elevations_{scope}"] = (
+            lambda s=scope: surface.get_bond_elevations(scope=s))
+        out[f"{prefix}object_grouping_{scope}"] = (
+            lambda s=scope: surface.check_object_grouping(scope=s))
+    out[f"{prefix}face_inference"] = lambda: surface.get_face_inference()
+    return out
+
+
+def _lattice_motl_producers(surface, prefix, scopes=SCOPES):
+    """The motl outputs.
+
+    get_faces_as_motl randomizes the in-plane angle by default, which would make
+    the reference unreproducible, so it is switched off here as it was there.
+    """
+    out = {}
+    for scope in scopes:
+        out[f"{prefix}sites_motl_{scope}"] = (
+            lambda s=scope: surface.get_sites_as_motl(scope=s))
+        out[f"{prefix}blocks_motl_{scope}"] = (
+            lambda s=scope: surface.get_blocks_as_motl(scope=s))
+        out[f"{prefix}faces_motl_{scope}"] = (
+            lambda s=scope: surface.get_faces_as_motl(scope=s,
+                                                      randomize_phi_angle=False))
+        out[f"{prefix}missing_block_motl_{scope}"] = (
+            lambda s=scope: surface.get_missing_block_motl(scope=s))
+        out[f"{prefix}inverted_blocks_{scope}"] = (
+            lambda s=scope: surface.get_inverted_blocks(INVERT_MAX_DISTANCE, scope=s))
+        out[f"{prefix}inverted_blocks_motl_{scope}"] = (
+            lambda s=scope: surface.get_inverted_blocks_as_motl(INVERT_MAX_DISTANCE,
+                                                                scope=s))
+        # the gaps come back as several motls, one reference file each
+        gaps = surface.get_gaps_as_motl(GAP_CLUSTER_RADIUS, scope=scope)
+        for i, part in enumerate(gaps, start=1):
+            out[f"{prefix}gaps_motl_{scope}_{i}"] = lambda p=part: p
+
+    for size in (5, 6, 7):
+        out[f"{prefix}faces_motl_size{size}"] = (
+            lambda n=size: surface.get_faces_as_motl(size=n, randomize_phi_angle=False))
+        out[f"{prefix}face_vertices_motl_size{size}"] = (
+            lambda n=size: surface.get_face_vertices_as_motl(size=n))
+    out[f"{prefix}face_vertices_motl_all"] = (
+        lambda: surface.get_face_vertices_as_motl())
+
+    # regrouping returns a new motl and must not touch the original
+    out[f"{prefix}regroup_split_merge"] = (
+        lambda: copy.deepcopy(surface).regroup_objects(split=True, merge=True))
+    out[f"{prefix}regroup_split_only"] = (
+        lambda: copy.deepcopy(surface).regroup_objects(split=True, merge=False))
+    out[f"{prefix}regroup_merge_only"] = (
+        lambda: copy.deepcopy(surface).regroup_objects(split=False, merge=True))
+    return out
+
+
+def _polarity_producers(ps, prefix="cp_"):
+    """unify_polarity mutates, so each reference runs on its own copy, and the
+    flips invalidate the contact graph, so each copy is reconnected.
+
+    Only neighbours and centroid are here; the envelope reference needs an
+    attached surface and lives with the external surfaces below.
+    """
+    out, scalars = {}, {}
+    for reference in ("neighbours", "centroid"):
+        holder = copy.deepcopy(ps)
+        n_flipped = holder.unify_polarity(max_block_distance=INVERT_MAX_DISTANCE,
+                                          reference=reference)
+        holder.connect(MAX_DISTANCE)
+        scalars[f"{prefix}unify_{reference}_n_flipped"] = int(n_flipped)
+        out[f"{prefix}unify_{reference}_blocks_motl"] = (
+            lambda s=holder: s.get_blocks_as_motl())
+        out[f"{prefix}unify_{reference}_block_stats"] = (
+            lambda s=holder: s.get_block_stats())
+    return out, scalars
+
+
+def _inference_producers(ps, prefix="ci_"):
+    """infer_missing_blocks creates the inferred scope, so every table and motl
+    is written again here, now across all three scopes."""
+    ps_inf = copy.deepcopy(ps)
+    inferred = ps_inf.infer_missing_blocks(
+        min_support=MIN_SUPPORT, min_real_support=MIN_REAL_SUPPORT,
+        max_rounds=MAX_ROUNDS, site_shift=SITE_SHIFT_INFERENCE,
+        tip_tolerance=TIP_TOLERANCE, angle_tolerance=ANGLE_TOLERANCE)
+
+    out = {
+        f"{prefix}inferred_motl_1": lambda: first_of(inferred),
+        f"{prefix}inferred_motl_2": lambda: second_of(inferred),
+        f"{prefix}face_filling_summary": lambda: ps.get_face_filling_summary(ps_inf),
+    }
+    out.update(_lattice_table_producers(ps_inf, prefix))
+    out.update(_lattice_motl_producers(ps_inf, prefix))
+    return out, ps_inf
+
+
+def _recovery_producers(prefix="cr_"):
+    """A seeded dropout, the lattice rebuilt without those blocks, then
+    recover_orientations and adopt_recovered -- the only route through those two."""
+    reduced, removed = build_dropout()
+    recovered = reduced.recover_orientations(removed, min_neighbours=2)
+    adopted = copy.deepcopy(reduced).adopt_recovered(
+        first_of(recovered), diagnostics=second_of(recovered))
+
+    return {
+        f"{prefix}removed_motl": lambda: removed,
+        f"{prefix}reduced_block_stats": lambda: reduced.get_block_stats(),
+        f"{prefix}recovered_motl_1": lambda: first_of(recovered),
+        f"{prefix}recovered_motl_2": lambda: second_of(recovered),
+        f"{prefix}adopted_motl": lambda: adopted,
+    }
+
+
+def _annotate_producers(target, prefix, methods=("projection", "intersection")):
+    """annotate_with_envelope, uncapped and capped, for an attached surface."""
+    out = {}
+    for method in methods:
+        for tag, extra in ((method, {}),
+                           (f"{method}_capped", {"max_distance": ANNOTATE_MAX_DIST / CL_PIXEL_SIZE})):
+            out[f"{prefix}_{tag}"] = (lambda m=method, e=extra, t=target:
+                                      t.annotate_with_envelope(method=m, **e))
+    return out
+
+
+def _with_normals(mesh):
+    """Give a mesh its vertex normals if it has none.
+
+    annotate_with_envelope reads mesh.normals directly rather than through
+    get_normals(), and Mesh.from_ball_pivoting -- the route envelope_from_blocks
+    takes -- never sets them.  envelope_from_faces computes them itself, so this
+    is a no-op there.  It is the same Open3D computation either way, so the
+    reference values do not depend on where it happens.
+    """
+    if mesh.normals is None:
+        mesh.compute_normals()
+    return mesh
+
+
+def _curvature_producers(target, prefix, accessors):
+    """The mesh accessors, each written as one flat column."""
+    out = {}
+    for name, call in accessors:
+        full = f"{prefix}_{name}"
+        out[full] = (lambda c=call, n=full, t=target:
+                     _array_frame(n, getattr(t, c)()))
+    return out
+
+
+def _internal_envelope_producers(ps, prefix="ce_", scope="original"):
+    """The envelope built from the lattice itself, both builders.
+
+    annotate_with_envelope and the mesh accessors read the attached .surface, not
+    _envelopes, so each coat's envelope is attached to that coat's own lattice.
+    Only the largest ENVELOPE_ANNOTATE_N coats are annotated, and only by
+    projection: the blocks lie on their own envelope, so a ray cast from them
+    hits or misses depending on float rounding (see RETIRED_REFERENCES).
+    """
+    out, scalars = {}, {}
+    for builder in ("faces", "blocks"):
+        holder = copy.deepcopy(ps)
+        if builder == "faces":
+            envs = holder.envelope_from_faces(scope=scope)
+        else:
+            envs = holder.envelope_from_blocks(radius=ENVELOPE_RADIUS, min_blocks=4,
+                                               scope=scope)
+        out[f"{prefix}envelope_from_{builder}"] = lambda e=envs: _mesh_dict_frame(e)
+        if not envs:
+            continue
+        # On a copy: get_shape_stats computes curvatures on the envelopes the producers below use.
+        out[f"{prefix}shape_stats_{builder}"] = lambda h=copy.deepcopy(holder): h.get_shape_stats()
+
+        order = sorted(envs.items(),
+                       key=lambda kv: -len(np.asarray(kv[1].get_vertices())))
+        for (tval, aval), mesh in order[:ENVELOPE_ANNOTATE_N]:
+            label = f"{prefix}{builder}_obj{int(aval)}"
+            target = lattice_for_object(aval, tomo_id=tval)
+            if target is None:
+                continue
+            target.surface = _with_normals(mesh)   # the Mesh itself, not a wrapper
+            out.update(_annotate_producers(target, label, methods=("projection",)))
+            out.update(_curvature_producers(target, label, CURVATURES_FULL))
+            scalars[f"{label}_area"] = float(target.get_surface_area())
+    return out, scalars
+
+
+def _external_surface_producers(ps, prefix="cs_"):
+    """The cropped external surface of each coat in SURFACE_OBJECTS, tomogram 1506.
+
+    The uncapped intersection is left out: its rays reach beyond the crop (see
+    SURFACE_LEFT_OUT).  unify_polarity(reference='envelope') also lives here,
+    since it is the only reference that needs an attached surface.
+    """
+    out, scalars = {}, {}
+    out[f"{prefix}blocks_per_tomo"] = (
+        lambda: ps.blocks.df.groupby(TOMO).size().rename("n_blocks").reset_index())
+    out[f"{prefix}blocks_per_object"] = (
+        lambda: ps.blocks.df.groupby([TOMO, COAT]).size()
+                  .rename("n_blocks").reset_index())
+
+    for object_id in SURFACE_OBJECTS:
+        label = f"{prefix}obj{int(object_id)}"
+        mesh = read_surface_mesh(object_id)
+
+        target = lattice_for_object(object_id, tomo_id=SURFACE_TOMO)
+        if target is None:
+            continue
+        target.surface = mesh
+        out[f"{label}_block_stats"] = lambda t=target: t.get_block_stats()
+        out.update({stem: producer for stem, producer in _annotate_producers(target, label).items()
+                    if stem not in SURFACE_LEFT_OUT})
+        out.update(_curvature_producers(target, label, CURVATURES_BASIC))
+        scalars[f"{label}_area"] = float(target.get_surface_area())
+
+        flipped = lattice_for_object(object_id, tomo_id=SURFACE_TOMO)
+        flipped.surface = read_surface_mesh(object_id)
+        n_flipped = flipped.unify_polarity(reference="envelope")
+        flipped.connect(MAX_DISTANCE)
+        scalars[f"{label}_unify_envelope_n_flipped"] = int(n_flipped)
+        out[f"{label}_unify_envelope_blocks_motl"] = (
+            lambda s=flipped: s.get_blocks_as_motl())
+        out[f"{label}_unify_envelope_block_stats"] = (
+            lambda s=flipped: s.get_block_stats())
+    return out, scalars
+
+
+def _leg_producers(legs, prefix="cn_"):
+    """The CnComplex built from the triskelion motl as parent -- the branch the
+    NPC reference could not reach.
+
+    from_parent registers no states, so derive_initial_state and
+    add_subunit_state run first; without them get_centre_comparison returns an
+    empty dict and measure_elements has nothing to compare.
+    """
+    out, scalars, nested = {}, {}, {}
+
+    out[f"{prefix}legs_motl"] = lambda: legs.motl
+    out[f"{prefix}occupancy"] = lambda: legs.occupancy()
+    out[f"{prefix}object_stats"] = lambda: legs.get_object_stats()
+    out[f"{prefix}centers_motl"] = lambda: legs.get_centers_as_motl()
+    out[f"{prefix}circumference"] = lambda: legs.circumference()
+    out[f"{prefix}duplicates"] = lambda: legs.check_for_duplicates()
+    out[f"{prefix}normal_deviations"] = lambda: legs.normal_deviations()
+    for gaps in ("holey", "full"):
+        out[f"{prefix}central_angles_{gaps}"] = (
+            lambda g=gaps: legs.central_angles(gaps=g))
+    out[f"{prefix}diameter"] = lambda: legs.diameter()[0]
+    out[f"{prefix}diameter_motl"] = lambda: legs.diameter()[1]
+
+    scalars[f"{prefix}central_angle"] = legs.central_angle
+    scalars[f"{prefix}interior_angle"] = legs.interior_angle
+
+    # two registered states, so measure_elements has something to compare
+    staged = copy.deepcopy(legs)
+    staged.derive_initial_state()
+    reordered = copy.deepcopy(legs)
+    reordered.assign_subunit_index()
+    staged.add_subunit_state(reordered.motl, label="reordered")
+    labels = [getattr(state, "label", None) for state in staged._states]
+
+    nested[f"{prefix}centre_comparison"] = lambda: staged.get_centre_comparison()
+    if len(labels) >= 2:
+        for reference in ("parent", "fit"):
+            out[f"{prefix}measure_elements_{reference}"] = (
+                lambda r=reference: staged.measure_elements(labels[0], labels[1],
+                                                            reference=r))
+    out[f"{prefix}per_element_occupancy"] = lambda: staged.per_element("occupancy")
+
+    # re-ordering mutates, so the reference comes from its own copy
+    ordered = copy.deepcopy(legs)
+    residuals = ordered.assign_subunit_index()
+    nested[f"{prefix}assign_order_residuals"] = lambda: residuals
+    out[f"{prefix}ordered_motl"] = lambda: ordered.motl
+    return out, scalars, nested
+
+
+# --------------------------------------------------------------------------- #
+# fixtures
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture(scope="module")
+def npc_producers():
+    """Map every NPC reference file stem to the call that must reproduce it."""
+    unmerged = build_npc_unmerged()
+    merged = build_npc_merged()
+
+    producers = {}
+    for base, prefix in ((unmerged, "pre_"), (merged, "post_")):
+        producers.update(_measurement_producers(base, prefix))
+        producers.update(_static_producers(base, prefix))
+        producers.update(_merge_producers(base, prefix))
+        producers.update(_mutation_producers(base, prefix))
+    # Results pooled over the whole pore are refused before merge(); these five
+    # recorded ring 1 only on the unmerged object and are not produced for it.
+    for stem in ("pre_s1_normal_deviations", "pre_s1_duplicates", "pre_s3_order_duplicates",
+                 "pre_s1_cn_diameter", "pre_s1_cn_diameter_motl"):
+        del producers[stem]
+    # These four recorded the basket attached to ring 1 instead of the requested ring 3.
+    for stem in ("pre_s1_component_basket_holey_deg", "pre_s1_component_basket_holey_rad",
+                 "pre_s1_component_basket_full_deg", "pre_s1_component_basket_full_rad"):
+        del producers[stem]
+    producers.update(_legacy_producers(merged))
+    return producers
+
+
+@pytest.fixture(scope="module")
+def clathrin_objects():
+    """The lattice and the leg subunits, built once."""
+    ps = build_lattice()
+    legs = build_legs()
+    return {"ps": ps, "legs": legs}
+
+
+@pytest.fixture(scope="module")
+def clathrin_producers(clathrin_objects):
+    """Map every clathrin reference file stem to the call that must reproduce it."""
+    ps = clathrin_objects["ps"]
+    legs = clathrin_objects["legs"]
+
+    frames, scalars, nested = {}, {}, {}
+
+    frames.update(_lattice_table_producers(ps, "c1_", scopes=("original",)))
+    frames.update(_lattice_motl_producers(ps, "c1_", scopes=("original",)))
+
+    part, part_scalars = _polarity_producers(ps)
+    frames.update(part)
+    scalars.update(part_scalars)
+
+    part, ps_inf = _inference_producers(ps)
+    frames.update(part)
+    clathrin_objects["ps_inf"] = ps_inf
+
+    frames.update(_recovery_producers())
+
+    part, part_scalars = _internal_envelope_producers(ps)
+    frames.update(part)
+    scalars.update(part_scalars)
+
+    part, part_scalars = _external_surface_producers(ps)
+    frames.update(part)
+    scalars.update(part_scalars)
+
+    part, part_scalars, part_nested = _leg_producers(legs)
+    frames.update(part)
+    scalars.update(part_scalars)
+    nested.update(part_nested)
+
+    return {"frames": frames, "scalars": scalars, "nested": nested}
+
+
+# --------------------------------------------------------------------------- #
+# the reference files, collected at import
+# --------------------------------------------------------------------------- #
+
+def _truth_files(directory, suffix=".csv", skip=()):
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.glob(f"*{suffix}") if p.stem not in skip)
+
+
+NPC_SKIP = {"manifest", "pre_manifest", "post_manifest",
+            "scalars", "pre_scalars", "post_scalars"}
+RETIRED_REFERENCES = {
+    f"ce_{builder}_obj{obj}_intersection{cap}"
+    for builder in ("faces", "blocks") for obj in (17, 19, 31) for cap in ("", "_capped")
+}
+"""References no longer checked.
+
+The internal-envelope intersections: the blocks lie on their own envelope, so these
+results flip between hit and miss with float rounding."""
+SURFACE_LEFT_OUT = {"cs_obj67_intersection"}
+"""External-surface references not checked on the cropped mesh.
+
+The uncapped rays hit the full membrane up to about 132 voxels from the
+triskelia; a mesh cropped that wide is the whole mesh."""
+REMOVED_SURFACE_OBJECTS = (66, 68, 69, 70, 72)
+"""Coats whose external-surface references are no longer checked."""
+CL_SKIP = {"manifest", "scalars"} | RETIRED_REFERENCES | SURFACE_LEFT_OUT
+
+
+def _of_removed_surface(stem):
+    return stem.startswith(tuple(f"cs_obj{o}_" for o in REMOVED_SURFACE_OBJECTS))
+
+
+TRUTH_FILES = _truth_files(NPC_TRUTH, skip=NPC_SKIP)
+CL_TRUTH_FILES = [p for p in _truth_files(CL_TRUTH, skip=CL_SKIP)
+                  if not _of_removed_surface(p.stem)]
+CL_TRUTH_JSON = _truth_files(CL_TRUTH, suffix=".json", skip=CL_SKIP)
+
+
+def _cl_scalar_truth():
+    path = CL_TRUTH / "scalars.csv"
+    if not path.is_file():
+        return {}
+    frame = pd.read_csv(path)
+    return dict(zip(frame["name"], frame["value"]))
+
+
+CL_SCALAR_TRUTH = _cl_scalar_truth()
+CL_SCALAR_NAMES = sorted(n for n in CL_SCALAR_TRUTH if not _of_removed_surface(n))
+
+
+UNDETERMINED_COLUMNS = ("phi",)
+
+
+def _undetermined_columns(stem):
+    """Columns whose value cannot be reproduced, so only their presence is checked.
+
+    get_gaps_as_motl takes its angles from geom.normals_to_euler_angles, which
+    ends with ``phi = np.random.rand(n) * 360`` on the unseeded global generator.
+    A normal fixes theta and psi only, so phi is a different number on every
+    call and no argument switches it off, unlike get_faces_as_motl.
+    """
+    return UNDETERMINED_COLUMNS if "_gaps_motl_" in stem else ()
+
+
+# --------------------------------------------------------------------------- #
+# NPC tests
+# --------------------------------------------------------------------------- #
+
+def test_ground_truth_present():
+    assert TRUTH_FILES, f"no reference tables found in {NPC_TRUTH}"
+
+
+@pytest.mark.parametrize("truth_path", TRUTH_FILES, ids=lambda p: p.stem)
+def test_npc_reference(truth_path, npc_producers):
+    """Every NPC reference table is reproduced by the same call that made it."""
+    producer = npc_producers.get(truth_path.stem)
+    if producer is None:
+        pytest.fail(f"{truth_path.name} has no producer in this file — either the "
+                    f"reference is stale or a call is missing from the test")
+    assert_matches_truth(producer(), truth_path)
+
+
+def test_every_producer_has_a_reference(npc_producers):
+    """Nothing is computed by the test without a reference to check it against."""
+    stems = {p.stem for p in TRUTH_FILES}
+    missing = sorted(name for name in npc_producers if name not in stems)
+    assert not missing, f"producers with no reference table: {missing}"
+
+
+def test_scalars_match():
+    """central_angle and interior_angle are properties, not methods."""
+    npc = build_npc_unmerged()
+    assert npc.central_angle == pytest.approx(360.0 / SYMMETRY)
+    assert npc.interior_angle == pytest.approx((SYMMETRY - 2) * 180.0 / SYMMETRY)
+
+
+def test_double_merge_is_a_noop():
+    """Merging an already merged object must not duplicate or drop particles."""
+    npc = build_npc_merged()
+    before = npc.motl.df.shape
+    npc.merge()
+    assert npc.motl.df.shape == before
+
+
+def test_merge_refuses_without_subunit_order():
+    """An unordered merge must keep refusing, with a message that says why."""
+    npc = assembly.NPC(RING_PATHS, radius=NPC_RADIUS, pixel_size=PIXEL_SIZE)
+    with pytest.raises(ValueError, match="no subunit index"):
+        npc.merge()
+
+
+def test_central_angles_refuses_on_duplicate_order():
+    """Ordered pairing must keep refusing when the order column has duplicates."""
+    npc = assembly.NPC(RING_PATHS, radius=NPC_RADIUS, pixel_size=PIXEL_SIZE)
+    with pytest.raises(ValueError, match="duplicate"):
+        npc.central_angles()
+
+
+def test_subunit_spacing_refuses_without_merge():
+    """Methods documented as needing a merge must keep refusing without one."""
+    npc = build_npc_unmerged()
+    with pytest.raises(ValueError, match="requires a merged NPC"):
+        npc.get_subunit_spacing(include_flagged=True)
+
+
+def test_pass_through_columns_untouched():
+    """A column the methods do not write stays exactly as it was loaded."""
+    npc = build_npc_merged()
+    before = npc.motl.df["score"].to_numpy(copy=True)
+    npc.get_subunit_stats(include_flagged=True)
+    npc.get_subunit_spacing(include_flagged=True)
+    npc.get_subunit_orientation(include_flagged=True)
+    npc.ring_summary()
+    np.testing.assert_array_equal(npc.motl.df["score"].to_numpy(), before)
+
+
+def test_tomograms_are_not_pooled():
+    """Per-object results stay keyed by tomogram, with no row collapsed across them."""
+    npc = build_npc_merged()
+    stats = npc.get_object_stats()
+    assert TOMO in stats.columns
+    assert stats[TOMO].nunique() == npc.motl.df[TOMO].nunique()
+    key = [TOMO, PORE] + ([RING] if RING in stats.columns else [])
+    assert not stats.duplicated(subset=key).any(), (
+        f"duplicate rows for the same {key}")
+
+
+# --------------------------------------------------------------------------- #
+# clathrin tests
+# --------------------------------------------------------------------------- #
+
+def test_clathrin_ground_truth_present():
+    assert CL_TRUTH_FILES, f"no reference tables found in {CL_TRUTH}"
+
+
+@pytest.mark.parametrize("truth_path", CL_TRUTH_FILES, ids=lambda p: p.stem)
+def test_clathrin_reference(truth_path, clathrin_producers):
+    """Every clathrin reference table is reproduced by the same call that made it."""
+    producer = clathrin_producers["frames"].get(truth_path.stem)
+    if producer is None:
+        pytest.fail(f"{truth_path.name} has no producer in this file — either the "
+                    f"reference is stale or a call is missing from the test")
+    assert_matches_truth(producer(), truth_path,
+                         ignore_columns=_undetermined_columns(truth_path.stem))
+
+
+@pytest.mark.parametrize("truth_path", CL_TRUTH_JSON, ids=lambda p: p.stem)
+def test_clathrin_nested_reference(truth_path, clathrin_producers):
+    """The nested results, compared entry by entry against their JSON reference."""
+    producer = clathrin_producers["nested"].get(truth_path.stem)
+    if producer is None:
+        pytest.fail(f"{truth_path.name} has no producer in this file — either the "
+                    f"reference is stale or a call is missing from the test")
+    assert_json_matches_truth(producer(), truth_path)
+
+
+@pytest.mark.parametrize("name", CL_SCALAR_NAMES)
+def test_clathrin_scalar(name, clathrin_producers):
+    """Flip counts, surface areas and the two angles."""
+    got = clathrin_producers["scalars"].get(name)
+    assert got is not None, f"{name} has no producer in this file"
+    assert float(got) == pytest.approx(float(CL_SCALAR_TRUTH[name]),
+                                       rel=RTOL, abs=ATOL)
+
+
+def test_every_clathrin_producer_has_a_reference(clathrin_producers):
+    """Nothing is computed by the test without a reference to check it against."""
+    frame_stems = {p.stem for p in CL_TRUTH_FILES}
+    json_stems = {p.stem for p in CL_TRUTH_JSON}
+    scalar_names = set(CL_SCALAR_NAMES)
+
+    missing = sorted(name for name in clathrin_producers["frames"]
+                     if name not in frame_stems)
+    missing += sorted(name for name in clathrin_producers["nested"]
+                      if name not in json_stems)
+    missing += sorted(name for name in clathrin_producers["scalars"]
+                      if name not in scalar_names)
+    assert not missing, f"producers with no reference: {missing}"
+
+
+def test_pixel_size_does_not_scale_block_coordinates(clathrin_objects):
+    """pixel_size only scales the reported distances.
+
+    The site shift and the connection distance are in voxels, so a lattice built
+    with pixel_size=1.0 must hold the same blocks and find the same faces as one
+    built with the real pixel size.  Mixing nm into those two arguments is what
+    silently cost most of the heptagons once.
+    """
+    in_voxels = assembly.PleomorphicAssembly.from_blocks(
+        TRISKELION, CL_SYMMETRY, site_shift=SITE_SHIFT,
+        affiliation_column=COAT, tomo_id_column=TOMO, pixel_size=1.0)
+    in_voxels.connect(MAX_DISTANCE)
+
+    scaled = clathrin_objects["ps"]
+    np.testing.assert_allclose(in_voxels.get_blocks_as_motl().get_coordinates(),
+                               scaled.get_blocks_as_motl().get_coordinates(),
+                               rtol=RTOL, atol=ATOL)
+    assert (in_voxels.get_face_stats().shape[0]
+            == scaled.get_face_stats().shape[0])
+
+
+def test_face_motl_is_reproducible_without_phi_randomization(clathrin_objects):
+    """Two calls with randomize_phi_angle=False must agree exactly."""
+    ps = clathrin_objects["ps"]
+    first = ps.get_faces_as_motl(randomize_phi_angle=False).df
+    second = ps.get_faces_as_motl(randomize_phi_angle=False).df
+    pd.testing.assert_frame_equal(first.reset_index(drop=True),
+                                  second.reset_index(drop=True))
+
+
+def test_gap_positions_are_reproducible(clathrin_objects):
+    """The gap clustering itself must be deterministic, phi aside.
+
+    phi comes from the unseeded global numpy generator (see
+    _undetermined_columns), so it is left out; everything that the clustering
+    actually determines has to agree between two calls.
+    """
+    ps = clathrin_objects["ps"]
+    first = ps.get_gaps_as_motl(GAP_CLUSTER_RADIUS)[0].df.reset_index(drop=True)
+    second = ps.get_gaps_as_motl(GAP_CLUSTER_RADIUS)[0].df.reset_index(drop=True)
+    keep = [c for c in first.columns if c not in UNDETERMINED_COLUMNS]
+    pd.testing.assert_frame_equal(first[keep], second[keep])
+
+
+def test_connect_twice_changes_nothing(clathrin_objects):
+    """Connecting an already connected lattice must not add or drop contacts."""
+    ps = copy.deepcopy(clathrin_objects["ps"])
+    before = ps.get_contact_stats()
+    ps.connect(MAX_DISTANCE)
+    pd.testing.assert_frame_equal(ps.get_contact_stats().reset_index(drop=True),
+                                  before.reset_index(drop=True))
+
+
+def test_inference_leaves_the_original_scope_alone(clathrin_objects,
+                                                   clathrin_producers):
+    """The inferred blocks go into their own scope and do not rewrite the original."""
+    ps = clathrin_objects["ps"]
+    ps_inf = clathrin_objects["ps_inf"]
+    for method in ("get_contact_stats", "get_face_stats", "get_block_stats"):
+        plain = getattr(ps, method)(scope="original").reset_index(drop=True)
+        after = getattr(ps_inf, method)(scope="original").reset_index(drop=True)
+        pd.testing.assert_frame_equal(after, plain, check_dtype=False,
+                                      rtol=RTOL, atol=ATOL, obj=method)
+
+
+def test_semantic_columns_untouched(clathrin_objects):
+    """score, class and subtomo_mean belong to the caller, not to the block layer."""
+    loaded = cryomotl.Motl.load(TRISKELION).df
+    blocks = clathrin_objects["ps"].blocks.df
+    assert len(blocks) == len(loaded)
+    for column in ("score", "class", "subtomo_mean"):
+        if column in loaded.columns and column in blocks.columns:
+            np.testing.assert_array_equal(blocks[column].to_numpy(),
+                                          loaded[column].to_numpy())
+
+
+def test_clathrin_tomograms_are_not_pooled(clathrin_objects):
+    """Per-coat results stay keyed by tomogram, with no row collapsed across them."""
+    stats = clathrin_objects["ps"].get_object_stats()
+    assert TOMO in stats.columns
+    assert not stats.duplicated(subset=[TOMO, COAT]).any(), (
+        f"duplicate rows for the same {[TOMO, COAT]}")
