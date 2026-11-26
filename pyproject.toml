@@ -48,6 +48,8 @@ license = {text = "GPLv3+"}
 # NVIDIA-maintained CUDA target for Numba (the built-in numba.cuda is deprecated).
 # Used by memthick GPU matching; install with: pip install "cryocat[gpu]"
 gpu = ["numba-cuda"]
+# Browser tests in tests/app use dash_duo; install with: pip install "cryocat[test]"
+test = ["dash[testing]"]
 [tool.setuptools]
 packages = ["cryocat"]
 # include-package-data = true
@@ -75,4 +77,4 @@ markers = [
     "needs_data: requires real tomogram/motl files not in the repo",
     "integration: end-to-end tests that run the full pipeline against real data (slow)",
 ]
-addopts = "-m 'not slow and not needs_data' --strict-markers"
+addopts = "-m 'not slow and not needs_data' --strict-markers --webdriver Firefox --headless"

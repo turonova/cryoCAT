@@ -1,29 +1,16 @@
 """T0 — Minimal test harness: id collection and app coupling.
 
-Three checks are run against both apps.  The tango parametrisation is marked
+Two checks are run against both apps.  The tango parametrisation is marked
 xfail because tango's ~40 top-level global stores are not yet migrated to
 prefix-scoped state (doc 7, §2.4).
 
 The suite parametrisation must PASS.  If it does not, the failures are real
 defects — do not adjust the permitted-id set to paper over them.
-
-Dependency on Dash version
---------------------------
-Dash 4.1.0 does not expose ``allow_duplicate`` in its programmatic API:
-* ``app._callback_list`` entries always have ``allow_duplicate=None``.
-* ``app.callback_map`` deduplicates entries (last-write wins), and its Output
-  objects show ``allow_duplicate=False`` regardless of the original setting.
-
-Check 3 is therefore informational: it counts outputs written by multiple
-callbacks and prints the tally, but cannot verify ``allow_duplicate=True``
-from the API.  Tighten the check when Dash exposes this, or move it to a
-source-code grep (doc 3).
 """
 
 from __future__ import annotations
 
 import json
-from collections import Counter
 
 import dash
 import pytest
@@ -260,29 +247,155 @@ def test_callback_ids_resolve(app_name, request):
     )
 
 
+
 # ---------------------------------------------------------------------------
-# Check 3 — Duplicate output report (informational; see module docstring)
+# Every page and component module imports and builds its layout
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("app_name", APPS)
-def test_duplicate_output_report(app_name, request, capsys):
-    """Report outputs with multiple writers.
+import importlib
+import inspect
+import pkgutil
 
-    This check always passes — it exists to surface the count so a reviewer
-    can spot regressions.  Verify allow_duplicate=True in source code.
+from dash import html
+
+
+def _page_modules() -> list[str]:
+    from cryocat.app.suite.tools import TOOLS
+    return [t["module"] for t in TOOLS]
+
+
+def _app_modules() -> list[str]:
+    """Every module under cryocat/app except the page modules (tested separately)."""
+    import cryocat.app
+    pages = set(_page_modules())
+    names = []
+    for info in pkgutil.walk_packages(cryocat.app.__path__, "cryocat.app."):
+        if info.name not in pages and ".e2e" not in info.name:
+            names.append(info.name)
+    return sorted(names)
+
+
+def _page_layout(module):
+    layout = module.layout
+    return layout() if callable(layout) else layout
+
+
+# Builders whose arguments beyond the prefix have no default.
+_BUILDER_ARGS: dict[str, dict] = {
+    "get_builder_field": {"panel": html.Div(), "title": "Builder", "target_id": "gt-target"},
+    "get_table_source": {"compute_children": []},
+    "get_relion_options": {"for_load": True},
+}
+
+
+def _layout_builders(module) -> list:
+    """Public ``get_*`` functions defined in a component module or the motl sidebar."""
+    if not module.__name__.startswith("cryocat.app.components.") and module.__name__ != "cryocat.app.suite.motlsidebar":
+        return []
+    return [
+        fn for name, fn in vars(module).items()
+        if name.startswith("get_") and inspect.isfunction(fn) and fn.__module__ == module.__name__
+    ]
+
+
+def _call_builder(fn):
+    params = inspect.signature(fn).parameters
+    kwargs = dict(_BUILDER_ARGS.get(fn.__name__, {}))
+    args = ["gt"] if "prefix" in params else []
+    return fn(*args, **kwargs)
+
+
+@pytest.mark.parametrize("module_name", _page_modules())
+def test_page_builds_its_layout(module_name):
+    """The page imports, exposes a layout with components, and a register_callbacks function."""
+    module = importlib.import_module(module_name)
+    assert collect_ids(_page_layout(module)), f"{module_name}: layout has no component ids"
+    assert callable(getattr(module, "register_callbacks", None))
+
+
+@pytest.mark.parametrize("module_name", _app_modules())
+def test_app_module_imports_and_builds(module_name):
+    """The module imports; each of its get_* layout builders returns a component tree."""
+    module = importlib.import_module(module_name)
+    for fn in _layout_builders(module):
+        built = _call_builder(fn)
+        assert built is not None, f"{module_name}.{fn.__name__} returned None"
+
+
+# ---------------------------------------------------------------------------
+# Every callback id of a page exists in that page's layout
+# ---------------------------------------------------------------------------
+
+def _shell_ids(suite_app) -> set:
+    """Ids of the app-level layout (pool stores, modals, log panel), without any page."""
+    page_ids: set = set()
+    for name in _page_modules():
+        page_ids |= collect_ids(_page_layout(importlib.import_module(name)))
+    return collect_ids(suite_app.layout) - page_ids
+
+
+def _parse_dep(raw):
+    if isinstance(raw, str) and raw.startswith("{"):
+        return json.loads(raw)
+    return raw
+
+
+def _page_deps(app) -> list[tuple[str, object]]:
+    deps = []
+    for item in app._callback_list:
+        for role in ("inputs", "state"):
+            for dep in item.get(role, []):
+                deps.append((role, _parse_dep(dep["id"])))
+    for entry in app.callback_map.values():
+        out = entry["output"]
+        for o in (out if isinstance(out, list) else [out]):
+            deps.append(("output", _parse_dep(o.component_id)))
+    return deps
+
+
+def _is_wild(v) -> bool:
+    return (isinstance(v, list) and v in _WILDCARD_JSON) or (not isinstance(v, (list, dict)) and v in _WILDCARDS)
+
+
+def _static_types(ids: set) -> set:
+    return {dict(i).get("type") for i in ids if isinstance(i, tuple)}
+
+
+@pytest.mark.parametrize("module_name", _page_modules())
+def test_page_callback_ids_exist_in_its_layout(module_name, suite_app, monkeypatch):
+    """Each Input, State and Output of the page's callbacks is in its layout, the app shell or DYNAMIC_IDS.
+
+    A pattern dependency is created by a pattern the page defines when its ``type``
+    is used by a component of the page or shell, or by no static component at all
+    (a form or graph its callbacks build). It fails when only another page's
+    components use that type.
     """
-    app = _app(app_name, request)
-    counts = Counter(item["output"] for item in app._callback_list)
-    multi = {out: n for out, n in counts.items() if n > 1}
+    from cryocat.app.components import builderfield
 
-    if multi:
-        with capsys.disabled():
-            print(
-                f"\n  [{app_name}] {len(multi)} output spec(s) written by multiple "
-                f"callbacks (total extra callbacks: {sum(multi.values()) - len(multi)})."
-                "\n  Each must have allow_duplicate=True in source (§3). "
-                "Run pytest -s to see this message."
-            )
+    module = importlib.import_module(module_name)
+    layout = _page_layout(module)
+    shell = _shell_ids(suite_app)
+    known = collect_ids(layout) | shell | {c for _, c in getattr(module, "DYNAMIC_IDS", [])}
+    own_types = _static_types(known)
+    other_types: set = set()
+    for name in _page_modules():
+        if name != module_name:
+            other_types |= _static_types(collect_ids(_page_layout(importlib.import_module(name))))
 
-    # The count must be non-negative; any real assertion lives in source review.
-    assert all(n >= 1 for n in multi.values())
+    # The suite app already registered this page once; builderfield refuses a second prefix.
+    monkeypatch.setattr(builderfield, "_REGISTERED", set())
+    app = dash.Dash(__name__, suppress_callback_exceptions=True)
+    app.layout = html.Div(layout)
+    module.register_callbacks(app)
+
+    missing = set()
+    for role, dep in _page_deps(app):
+        if isinstance(dep, dict):
+            dep_type = dep.get("type")
+            if not _is_wild(dep_type) and dep_type not in own_types and dep_type in other_types:
+                missing.add(f"{role}: {json.dumps(dep, default=str, sort_keys=True)}")
+        elif dep not in known:
+            missing.add(f"{role}: {dep}")
+    assert not missing, f"{module_name}: {len(missing)} callback id(s) not in its layout:\n" + "\n".join(
+        f"  {m}" for m in sorted(missing)
+    )

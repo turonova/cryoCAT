@@ -181,3 +181,81 @@ def test_r8_new_callable_appears_in_registry_and_form():
     # 5 — gui_ready
     ok, reason = discovery.gui_ready(entry)
     assert ok, f"gui_ready reported not renderable: {reason}"
+
+
+# ---------------------------------------------------------------------------
+# Every registered entry builds its form
+# ---------------------------------------------------------------------------
+
+def _registry_entries():
+    from cryocat.app import discovery
+    return discovery.entries()
+
+
+def _resolve_owner(owner: str):
+    """Import the module part of *owner* and walk the remaining attribute names."""
+    import importlib
+    parts = owner.split(".")
+    for cut in range(len(parts), 0, -1):
+        try:
+            obj = importlib.import_module(".".join(parts[:cut]))
+        except ImportError:
+            continue
+        for name in parts[cut:]:
+            obj = getattr(obj, name)
+        return obj
+    raise ImportError(f"no importable module in {owner!r}")
+
+
+def _form_params(rows) -> set[str]:
+    """Names of the parameters that received a control in a built form."""
+    found: set[str] = set()
+
+    def _walk(node):
+        if isinstance(node, (list, tuple)):
+            for child in node:
+                _walk(child)
+            return
+        if node is None or isinstance(node, (str, int, float)):
+            return
+        nid = getattr(node, "id", None)
+        if isinstance(nid, dict) and "param" in nid:
+            found.add(nid["param"])
+        _walk(getattr(node, "children", None))
+
+    _walk(rows)
+    return found
+
+
+@pytest.mark.parametrize("entry", _registry_entries(), ids=lambda e: e.key)
+def test_registry_entry_builds_its_form(entry):
+    """The entry points to an existing callable, its form builds, and every parameter gets a widget."""
+    import inspect
+    import warnings
+    from cryocat.app.formgen import build_form
+
+    owner = _resolve_owner(entry.owner)
+    attr = inspect.getattr_static(owner, entry.fn.__name__, None)
+    assert attr is not None, f"{entry.owner} has no attribute {entry.fn.__name__!r}"
+    target = getattr(attr, "__func__", attr)
+    assert inspect.unwrap(target) is inspect.unwrap(entry.fn), (
+        f"{entry.owner}.{entry.fn.__name__} is not the registered callable"
+    )
+
+    # Parameters supplied outside the form: the path field and the motl pickers.
+    supplied = {entry.path_arg} - {""}
+    if entry.motls:
+        supplied |= {"motl1", "motl2"} if entry.motls.get("arity") == "pair" else {entry.motls["param"]}
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*get_type_hints failed.*")
+        rows = build_form(entry, exclude=supplied)
+
+    hidden = set(entry.hide) | supplied | {"self", "cls"}
+    expected = {
+        name for name, p in inspect.signature(entry.fn).parameters.items()
+        if name not in hidden
+        and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    }
+    missing = expected - _form_params(rows)
+    assert not missing, f"{entry.key}: no widget for {sorted(missing)}"

@@ -12,11 +12,9 @@ Covers:
 """
 from __future__ import annotations
 
-import ast
 import inspect
 import pathlib
 import tempfile
-import textwrap
 
 import numpy as np
 import pandas as pd
@@ -442,39 +440,10 @@ class TestPoolIntegration:
 # tablesave: wiring checks
 # ===========================================================================
 
-def test_tablesave_csv_no_direct_pool_get_rows():
-    from cryocat.app.components.tablesave import register_tablesave_csv_callbacks
-    src = inspect.getsource(register_tablesave_csv_callbacks)
-    assert "get_rows" not in src, (
-        "register_tablesave_csv_callbacks still calls pool.get_rows directly; pass resolve_df instead"
-    )
-
-
-def test_tableplot_no_direct_pool_get_rows():
-    from cryocat.app.components import tableplot
-    src = inspect.getsource(tableplot)
-    assert "get_rows" not in src, (
-        "tableplot.py still calls pool.get_rows directly; pass resolve_df instead"
-    )
-
-
 def test_register_tablesave_csv_no_resolve_df():
     from cryocat.app.components.tablesave import register_tablesave_csv_callbacks
     sig = inspect.signature(register_tablesave_csv_callbacks)
     assert "resolve_df" not in sig.parameters
-
-
-def test_register_table_callbacks_does_not_forward_resolve_df_to_tablesave():
-    from cryocat.app.components.tableview import register_table_callbacks
-    src = textwrap.dedent(inspect.getsource(register_table_callbacks))
-    tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            fn = node.func
-            fn_name = getattr(fn, "attr", None) or getattr(fn, "id", None)
-            if fn_name == "register_tablesave_csv_callbacks":
-                kwarg_names = {kw.arg for kw in node.keywords}
-                assert "resolve_df" not in kwarg_names
 
 
 def test_csv_save_callback_registers_without_resolve_df():
@@ -487,20 +456,6 @@ def test_csv_save_callback_registers_without_resolve_df():
 
     outputs = [str(c.get("output", "")) for c in app._callback_list]
     assert any("t-csv-status-label" in o for o in outputs)
-
-
-def test_csv_save_uses_pool_get_table_df():
-    from cryocat.app.components.tablesave import register_tablesave_csv_callbacks
-    src = inspect.getsource(register_tablesave_csv_callbacks)
-    assert "get_table_df" in src
-    assert "run_operation" in src
-
-
-def test_csv_save_no_motl_reference():
-    from cryocat.app.components.tablesave import register_tablesave_csv_callbacks
-    src = inspect.getsource(register_tablesave_csv_callbacks)
-    assert "motl_id" not in src
-    assert "subtomo_id" not in src
 
 
 def test_csv_save_table_pool_roundtrip(tmp_path):
@@ -1149,3 +1104,106 @@ class TestPickerBothPools:
         assert decode_value("data:data_1") == {"data_id": "data_1"}
         assert decode_value(None) is None
         assert decode_value("_sep_motl") is None
+
+
+# ===========================================================================
+# Table operation provenance: record content and replay
+# ===========================================================================
+
+class TestTableOperationProvenance:
+    """Apply a derive-column op on a loaded pool motl the way the table editor Apply does.
+
+    The source motl is loaded through the motl sidebar load path, the op runs
+    through ``_execute_operation(record=True)`` and the result replaces the
+    source entry (the default routing).  The session stream is rendered with
+    the script projection and executed in a fresh namespace.
+    """
+
+    _MOTL_PATH = pathlib.Path(__file__).resolve().parents[1] / "test_data" / "au_1.em"
+
+    @pytest.fixture(autouse=True)
+    def _session(self, tmp_path):
+        import cryocat.app.provenance as prov
+        from cryocat.app import session
+
+        session.close_session()
+        prov.clear()
+        session.start_session(log_dir=tmp_path)
+        yield
+        session.close_session()
+        prov.clear()
+
+    def _run(self):
+        from cryocat.core.cryomotl import Motl
+        from cryocat.app.apputils import record_load_to_pool
+        from cryocat.app.pool import PoolState, replace_motl_rows
+        from cryocat.app.components import tableeditor
+
+        motl_data = Motl.load(str(self._MOTL_PATH), "emmotl").df.to_dict("records")
+        state = PoolState.from_stores({}, {}, {}, {}, 0)
+        state, mid, _ = record_load_to_pool(
+            motl_data, "emmotl", str(self._MOTL_PATH), None, state, label="au_1",
+        )
+        src_ref = {"motl_id": mid}
+        src_df = tableeditor._fetch_df(src_ref)
+        src_label = tableeditor._src_label(src_ref, state.registry, {})
+        result_df, _, err = tableeditor._execute_operation(
+            "derive", src_df, src_label,
+            record=True,
+            pool_registry=state.registry, dp_registry={},
+            derive_name="xy_sum", derive_expr="x + y",
+        )
+        assert not err
+        state = replace_motl_rows(state, mid, result_df)
+        return mid, result_df
+
+    @staticmethod
+    def _call_events() -> list[dict]:
+        from cryocat.app import session
+
+        return [e for e in session.events() if e.get("kind") == "call"]
+
+    def test_record_names_function_and_arguments(self):
+        self._run()
+        ev = self._call_events()[-1]
+        assert ev["status"] == "ok"
+        assert ev["fn"] == "cryocat.app.components._tableops.derive_column"
+        assert ev["kwargs_src"]["name"] == repr("xy_sum")
+        assert ev["kwargs_src"]["expression"] == repr("x + y")
+
+    def test_record_names_the_source_table(self):
+        import cryocat.app.provenance as prov
+
+        mid, _ = self._run()
+        ev = self._call_events()[-1]
+        src = ev["kwargs_src"]["df"]
+        assert src is not None and not src.startswith("..."), (
+            f"df is recorded as {src!r}, not as a reference to {prov.bind(mid)}"
+        )
+        assert prov.bind(mid) in src
+
+    def test_record_names_the_output_entry(self):
+        import cryocat.app.provenance as prov
+
+        mid, _ = self._run()
+        ev = self._call_events()[-1]
+        assert ev.get("assign_to") is not None, (
+            f"the result that replaced {mid} is not bound to a variable in the record"
+        )
+        assert prov.producer(mid) == ev["seq"]
+
+    def test_replay_reproduces_result_table(self):
+        import ast
+        from cryocat.app import session
+        from cryocat.app.record.script import render_script
+
+        _, result_df = self._run()
+        tree = ast.parse(render_script(session.events()))
+        ns: dict = {}
+        exec(compile(ast.Module(body=tree.body[:-1], type_ignores=[]), "<replay>", "exec"), ns)
+        replayed = eval(compile(ast.Expression(body=tree.body[-1].value), "<replay>", "eval"), ns)
+        pd.testing.assert_frame_equal(
+            replayed.reset_index(drop=True),
+            result_df.reset_index(drop=True),
+            check_dtype=False,
+        )

@@ -580,3 +580,125 @@ def test_compute_entry_metadata_single_unique_pass(monkeypatch):
         f"Expected 1 pd.unique() call, got {len(unique_calls)}. "
         "Use pd.unique(df['tomo_id']) then sort the small result."
     )
+
+
+# ── Cross-pool consistency ────────────────────────────────────────────────────────
+# Motl pool ids are referenced from groups, the undo snapshots, the provenance
+# table, and the motl_links of data/table pool entries.  After each operation
+# every reference must point at an entry that still exists.
+
+def _assert_motl_pool_aligned(s: PoolState) -> None:
+    """Registry, meta and server-side payloads hold exactly the same ids."""
+    from cryocat.app.pool import _payloads
+    assert set(s.registry) == set(s.meta)
+    assert set(s.registry) == set(_payloads)
+    for mid, entry in s.registry.items():
+        assert entry["n_rows"] == len(get_rows(mid))
+
+
+def _nn_style_table(motl_id: str, n: int = 4) -> tuple[dict, pd.DataFrame]:
+    """Register a motl-derived table the way the NN page does: table pool + data pool."""
+    from cryocat.app import datapool
+    from cryocat.app.suite.pages._motl_link import ordered_selection_to_motl_links
+
+    df = pd.DataFrame({"qp_subtomo_id": list(range(1, n + 1)), "nn_dist": [1.0] * n})
+    links = ordered_selection_to_motl_links([motl_id])
+    ref = datapool.insert(df, label="nn_1", id_column="qp_subtomo_id", motl_links=links)
+    ds, dp_id = datapool.insert_entry(
+        datapool.DataPoolState.from_stores(None, None), df,
+        label="nn_1", reader="nn", source_path="", motl_links=links, entry_kind="nn",
+    )
+    return {**ref, "data_id": dp_id}, df
+
+
+class TestCrossPoolConsistency:
+    def test_add_keeps_registry_meta_payloads_and_groups_aligned(self):
+        from cryocat.app.pool import GroupState, create_group
+        s = _empty()
+        ids = []
+        for n in (2, 3, 4):
+            s, mid = insert_motl(s, pd.DataFrame({"x": range(n)}))
+            ids.append(mid)
+        g, gid = create_group(GroupState.from_store(None), ids[:2])
+        _assert_motl_pool_aligned(s)
+        assert len(set(ids)) == 3
+        assert s.next_id == 3
+        assert set(g.groups[gid]["members"]) <= set(s.registry)
+
+    def test_remove_keeps_registry_meta_payloads_and_groups_aligned(self):
+        # Same reducer pair the pool list's close button runs.
+        from cryocat.app.pool import GroupState, create_group, purge_motl_from_groups
+        s, a = insert_motl(_empty(), _ROWS)
+        s, b = insert_motl(s, _ROWS)
+        g, gid = create_group(GroupState.from_store(None), [a, b])
+        s = remove_motl(s, a)
+        g = purge_motl_from_groups(g, a)
+        _assert_motl_pool_aligned(s)
+        assert g.groups[gid]["members"] == [b]
+
+    def test_remove_drops_undo_snapshot(self):
+        from cryocat.app.pool import _snapshots, save_snapshot
+        s, mid = insert_motl(_empty(), _ROWS)
+        save_snapshot(mid, _ROWS)
+        s = remove_motl(s, mid)
+        assert set(_snapshots) <= set(s.registry)
+
+    def test_remove_drops_provenance_record(self):
+        import cryocat.app.provenance as prov
+        s, mid = insert_motl(_empty(), _ROWS)
+        prov.record(mid, 0)
+        s = remove_motl(s, mid)
+        assert prov.producer(mid) is None
+
+    def test_rename_keeps_id_payload_and_group_membership(self):
+        from cryocat.app.pool import GroupState, create_group
+        s, mid = insert_motl(_empty(), _ROWS, label="old")
+        g, gid = create_group(GroupState.from_store(None), [mid])
+        n = s.next_id
+        s = replace_motl_rows(s, mid, get_rows(mid), label="new")
+        assert s.registry[mid]["label"] == "new"
+        assert list(s.registry) == [mid]
+        assert s.next_id == n
+        assert g.groups[gid]["members"] == [mid]
+        _assert_motl_pool_aligned(s)
+
+    def test_commit_rows_on_derived_table_keeps_table_and_data_pool_in_step(self):
+        from cryocat.app import datapool
+        from cryocat.app.pool import commit_rows
+        s, mid = insert_motl(_empty(), _ROWS)
+        ref, df = _nn_style_table(mid)
+        kept = df.iloc[:2]
+        *_, new_ref = commit_rows(ref, kept, *s.to_stores())
+        assert new_ref["n_rows"] == 2
+        assert len(datapool.get_payload(new_ref["data_id"])) == 2
+        assert len(datapool.resolve_df(new_ref)) == 2
+
+    def test_create_pool_entry_from_derived_table_keeps_motl_links(self):
+        from cryocat.app import datapool
+        from cryocat.app.pool import create_pool_entry
+        s, mid = insert_motl(_empty(), _ROWS)
+        ref, df = _nn_style_table(mid)
+        *_, new_ref = create_pool_entry(ref, df.iloc[:2], *s.to_stores(), label="subset")
+        assert len(datapool.resolve_df(new_ref)) == 2
+        assert new_ref["motl_links"] == ref["motl_links"]
+
+    def test_remove_source_motl_leaves_no_dangling_data_pool_link(self):
+        from cryocat.app import datapool
+        from cryocat.app.suite.pages._motl_link import (
+            get_motl_role_ids,
+            ordered_selection_to_motl_links,
+        )
+        s, mid = insert_motl(_empty(), _ROWS)
+        ds, _ = datapool.insert_entry(
+            datapool.DataPoolState.from_stores(None, None), pd.DataFrame({"qp_subtomo_id": [1, 2]}),
+            label="nn_1", reader="nn", source_path="",
+            motl_links=ordered_selection_to_motl_links([mid]), entry_kind="nn",
+        )
+        s = remove_motl(s, mid)
+        linked = {
+            m
+            for entry in ds.registry.values()
+            for role in (entry.get("motl_links") or {})
+            for m in get_motl_role_ids(entry["motl_links"], role)
+        }
+        assert linked <= set(s.registry), f"data pool links to removed motls: {linked - set(s.registry)}"

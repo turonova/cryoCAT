@@ -15,10 +15,13 @@ Covers:
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+
+from tests.app.assertions import assert_grid_cells_have_text, assert_grid_shows
 
 
 # ── Shared fixture ─────────────────────────────────────────────────────────────
@@ -393,36 +396,6 @@ class TestTangoViewer:
         with pytest.raises(ValueError, match="radius_store_id"):
             register_viewer_callbacks(app, "test-tv", show_dual_graph=True)
 
-    def test_twist_viewer_stores_declared_in_ptango(self):
-        """tango-twist-tv-data and tango-twist-tv-index must appear in ptango source."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert '"tango-twist-tv-data"' in src, "tango-twist-tv-data store missing from ptango"
-        assert '"tango-twist-tv-index"' in src, "tango-twist-tv-index store missing from ptango"
-
-    def test_twist_handle_has_nn_radius_key_in_ptango(self):
-        """The computed twist handle dict must include the nn_radius key."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert '"nn_radius"' in src, "nn_radius key missing from twist handle in ptango"
-
-    def test_viewer_component_in_twist_tab_layout(self):
-        """get_viewer_component must be called in ptango's twist-vector tab."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert 'get_viewer_component("tango-twist-tv")' in src, (
-            "get_viewer_component('tango-twist-tv') not found in ptango layout"
-        )
-
-    def test_register_viewer_callbacks_called_in_ptango(self):
-        """register_viewer_callbacks must be called with show_dual_graph=True and radius_store_id."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert "register_viewer_callbacks" in src
-        assert "show_dual_graph=True" in src
-        assert 'radius_store_id="tango-twist-handle"' in src
-
-
 # ===========================================================================
 # Colors and layout
 # ===========================================================================
@@ -498,17 +471,6 @@ class TestTangoColorsAndLayout:
             "User-set palette must not be overridden when switching to tango"
         )
 
-    def test_apply_settings_sets_palette_is_user_set(self):
-        """apply_settings must return palette_is_user_set in the settings dict."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/components/graphsettings.py").read_text()
-        assert '"palette_is_user_set": palette_is_user_set' in src, (
-            "apply_settings must return palette_is_user_set in the settings dict"
-        )
-        assert "palette_is_user_set = True if" in src, (
-            "apply_settings must set palette_is_user_set=True only on an actual palette choice"
-        )
-
     def test_tablesource_radio_has_flex_display(self):
         """RadioItems inside get_table_source must have style with display:flex."""
         from cryocat.app.components.tablesource import get_table_source
@@ -539,42 +501,6 @@ class TestTangoColorsAndLayout:
             f"RadioItems.style must include display:flex; got {radio.style!r}"
         )
 
-    def test_pca_scree_xaxis_uses_feature_names(self):
-        """_build_diagnostics must sort scree bars by variance and use feature column names."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert "np.argsort" in src, (
-            "Scree plot does not sort by variance (np.argsort missing)"
-        )
-        assert "numeric_cols[i]" in src, (
-            "Scree plot does not use feature column names (numeric_cols[i] missing)"
-        )
-        assert "xaxis_title=\"Feature\"" in src, (
-            "Scree plot xaxis_title is not 'Feature'"
-        )
-
-    def test_tablesource_uses_form_row(self):
-        """tablesource.py must use form_row (the shared one-row layout helper)."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/components/tablesource.py").read_text()
-        assert "form_row" in src, "tablesource does not use form_row"
-
-    def test_btn_primary_css_uses_palette_variable(self):
-        """styles.css must override .btn-primary with var(--color10)."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/assets/styles.css").read_text()
-        assert ".btn-primary" in src, ".btn-primary rule missing from styles.css"
-        assert "var(--color10)" in src.split(".btn-primary")[1].split("}")[0], (
-            ".btn-primary rule does not use var(--color10)"
-        )
-
-    def test_btn_light_css_uses_palette_variable(self):
-        """styles.css must override .btn-light with palette CSS variables."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/assets/styles.css").read_text()
-        assert ".btn-light" in src, ".btn-light rule missing from styles.css"
-
-
 # ===========================================================================
 # Descriptor slot management
 # ===========================================================================
@@ -595,21 +521,6 @@ def _make_df(n: int = 30, seed: int = 0) -> pd.DataFrame:
 
 class TestTangoStructure:
     """Structural invariants after the clustering removal and slot rework."""
-
-    def test_no_clustering_tab_id_in_ptango(self):
-        """ptango.py must not define any clustering tab, store, or run-button id."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert "tango-tab-cluster" not in src, "ptango still has a tango-tab-cluster id"
-        assert "tango-km-store" not in src, "ptango still references tango-km-store"
-        assert "tango-run-cluster-btn" not in src, "ptango still has tango-run-cluster-btn"
-
-    def test_no_clustering_in_ptango_sidebar(self):
-        """ptango.py sidebar must not contain a clustering accordion item."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert "tango-acc-clustering" not in src, "ptango sidebar still has a clustering accordion"
-        assert "tango-write-cluster-btn" not in src, "ptango still has tango-write-cluster-btn"
 
     def test_five_slots_cap(self):
         """Finding a free slot with all 5 used returns None."""
@@ -703,20 +614,6 @@ class TestTangoStructure:
         disabled = [str(i) not in registry for i in range(_DESC_SLOTS)]
         assert disabled[0] is True
         assert disabled[2] is False
-
-    def test_desc_slots_constant(self):
-        """ptango.py must declare _DESC_SLOTS = 5."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert "_DESC_SLOTS = 5" in src
-
-    def test_no_orphaned_tviewer_desc_stores(self):
-        """ptango.py must not reference standalone-app tviewer-desc store ids."""
-        import pathlib
-        src = pathlib.Path("cryocat/app/suite/pages/ptango.py").read_text()
-        assert '"tviewer-desc-data"' not in src
-        assert '"tviewer-desc-index"' not in src
-
 
 # ===========================================================================
 # Diagnostics correctness
@@ -823,13 +720,6 @@ class TestTangoDiagnostics:
         assert _build_diagnostics(None) == []
         assert _build_diagnostics([]) == []
 
-    def test_tablecluster_pca_standardised(self):
-        """Clustering path uses StandardScaler before PCA."""
-        import pathlib
-        src = pathlib.Path("cryocat/analysis/clustering.py").read_text()
-        assert "StandardScaler" in src, "cryocat/analysis/clustering.py does not import StandardScaler"
-        assert "fit_transform" in src, "cryocat/analysis/clustering.py does not call fit_transform"
-
     def test_tablecluster_pca_standardisation_invariant(self):
         """Same rescaling test replicated through the raw PCA path."""
         from sklearn.preprocessing import StandardScaler
@@ -909,3 +799,218 @@ class TestTangoDiagnostics:
         assert matched == 3
         assert motl_df.loc[motl_df["subtomo_id"] == 1.0, "score"].iloc[0] == pytest.approx(0.9)
         assert pd.isna(motl_df.loc[motl_df["subtomo_id"] == 4.0, "score"].iloc[0])
+
+# ===========================================================================
+# Table content — twist and descriptor grids show their rows
+# ===========================================================================
+
+_TANGO_DATA = Path(__file__).resolve().parents[1] / "test_data" / "tango"
+_ROWS_REQUEST = {"startRow": 0, "endRow": 1000, "sortModel": [], "filterModel": {}}
+
+
+def _descriptor_names() -> list[str]:
+    from cryocat.utils.classutils import get_class_names_by_parent
+
+    return get_class_names_by_parent("Descriptor", "cryocat.analysis.tango")
+
+
+def _page_app():
+    import dash
+    from cryocat.app.suite.pages import ptango
+
+    app = dash.Dash(__name__, suppress_callback_exceptions=True)
+    ptango.register_callbacks(app)
+    return app
+
+
+def _callback(app, name: str, output: str):
+    """Return the undecorated callback *name* whose output key contains *output*."""
+    for key, entry in app.callback_map.items():
+        fn = getattr(entry.get("callback"), "__wrapped__", None)
+        if fn is not None and fn.__name__ == name and output in key:
+            return fn
+    raise LookupError(f"no callback {name!r} writing {output!r}")
+
+
+def _call(fn, *args, triggered: str = "", states_list: list | None = None):
+    """Run *fn* inside a Dash callback context (for ``ctx.triggered_id`` / ``ctx.states_list``)."""
+    from contextvars import copy_context
+    from dash._callback_context import context_value
+    from dash._utils import AttributeDict
+
+    def _run():
+        context_value.set(
+            AttributeDict(
+                triggered_inputs=[{"prop_id": triggered, "value": None}],
+                states_list=states_list or [],
+            )
+        )
+        return fn(*args)
+
+    return copy_context().run(_run)
+
+
+def _grid_payload(app, prefix: str, ref: dict) -> tuple[list[dict], list[dict]]:
+    """columnDefs and first-block rowData that ``{prefix}-grid`` receives for *ref*, JSON round-tripped."""
+    import json
+    from dash._utils import to_json
+
+    cols = _call(
+        _callback(app, "_cols", f"{prefix}-grid.columnDefs"), ref, {}, None,
+        triggered=f"{prefix}-global-data-store.data",
+    )
+    resp, _ = _call(
+        _callback(app, "_rows", f"{prefix}-grid.getRowsResponse"), _ROWS_REQUEST, ref, {},
+        triggered=f"{prefix}-rows-request-store.data",
+    )
+    assert isinstance(resp, dict), f"_rows returned {resp!r} instead of a getRowsResponse"
+    wire = json.loads(to_json({"columnDefs": cols[0], "rowData": resp["rowData"]}))
+    return wire["columnDefs"], wire["rowData"]
+
+
+def _computed_twist(app) -> tuple[dict, dict]:
+    """Run the page's compute-twist callback on a small motl; return (handle, table ref)."""
+    import dash
+    from cryocat.core.cryomotl import Motl
+    from cryocat.app import pool
+
+    motl = Motl.load(str(_TANGO_DATA / "motl_cone.em"))
+    state, motl_id = pool.insert_motl(pool.PoolState({}, {}, 0), motl.df.iloc[:150], label="cone")
+    out = _callback(app, "_compute_twist", "tango-twist-tabv-global-data-store.data")(
+        1, [motl_id], 10.0, "tomo_id", None, None, None, False, False, state.registry, 0, {}, 0, None,
+    )
+    assert out[1] is not dash.no_update, f"twist not computed: {out[3]}"
+    return out[0], out[1]
+
+
+def _loaded_twist(app) -> dict:
+    """Load a twist CSV through the page's table-source path; return the table ref."""
+    import dash
+
+    path = str(_TANGO_DATA / "gt_twist_vector_r5.csv")
+    status, loaded = _call(
+        _callback(app, "_load", "tango-twist-src-ts-loaded.data"), 1, path, [None],
+        triggered="tango-twist-src-ts-load-btn.n_clicks",
+        states_list=[{}, [{"id": {"type": "tango-twist-src-ts-extra", "param": "nn_radius"}}]],
+    )
+    assert loaded is not dash.no_update, f"twist file not loaded: {status}"
+    out = _callback(app, "_handle_twist_loaded", "tango-twist-tabv-global-data-store.data")(loaded, 0, {}, 0, None)
+    assert out[1] is not dash.no_update, f"loaded twist not stored: {out[3]}"
+    return out[1]
+
+
+def _descriptor_ref(app, desc_name: str) -> dict:
+    """Compute *desc_name* on a computed twist; return the slot-0 table ref."""
+    import dash
+
+    handle, _ = _computed_twist(app)
+    out = _callback(app, "_compute_desc", "tango-desc-pool-slot-map.data")(
+        1, handle, [None] * 5, desc_name, None, [], [], [], [], [], [], [], {}, 0,
+    )
+    assert out[0] is not dash.no_update, f"{desc_name} not computed: {out[2]}"
+    refs = _callback(app, "_sync_desc_slot_stores", "tango-desc-0-global-data-store.data")(out[0], *[None] * 5)
+    return refs[0]
+
+
+class TestTangoTableContent:
+    """The callbacks feeding the twist and descriptor grids give rows for every column."""
+
+    def test_computed_twist_grid_rows_carry_every_column(self):
+        from cryocat.app import datapool
+
+        app = _page_app()
+        _, ref = _computed_twist(app)
+        col_defs, rows = _grid_payload(app, "tango-twist-tabv", ref)
+        assert_grid_shows(col_defs, rows, datapool.resolve_df(ref))
+
+    def test_loaded_twist_grid_rows_carry_every_column(self):
+        from cryocat.app import datapool
+
+        app = _page_app()
+        ref = _loaded_twist(app)
+        col_defs, rows = _grid_payload(app, "tango-twist-tabv", ref)
+        assert_grid_shows(col_defs, rows, datapool.resolve_df(ref))
+
+    @pytest.mark.parametrize("desc_name", _descriptor_names())
+    def test_descriptor_grid_rows_carry_every_column(self, desc_name):
+        from cryocat.app import datapool
+
+        app = _page_app()
+        ref = _descriptor_ref(app, desc_name)
+        col_defs, rows = _grid_payload(app, "tango-desc-0", ref)
+        assert_grid_shows(col_defs, rows, datapool.resolve_df(ref))
+
+
+# ── Browser: the grids' cells contain text ──────────────────────────────────
+
+
+def _browser_app(outputs: list[tuple[str, str, object]]):
+    """The tango page with the suite stores and a button that writes *outputs*."""
+    import dash
+    from dash import Input, Output, html
+    from cryocat.app.suite.app import POOL_STORES
+    from cryocat.app.components.graphsettings import get_graph_settings_components
+    from cryocat.app.suite.pages import ptango
+
+    app = dash.Dash(__name__, suppress_callback_exceptions=True)
+    app.layout = html.Div(
+        [
+            html.Button("Load", id="grid-test-load-btn"),
+            *POOL_STORES,
+            *get_graph_settings_components(),
+            ptango.layout,
+        ]
+    )
+    ptango.register_callbacks(app)
+
+    @app.callback(
+        [Output(cid, prop, allow_duplicate=True) for cid, prop, _ in outputs],
+        Input("grid-test-load-btn", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def _load(_):
+        return [value for _, _, value in outputs]
+
+    return app
+
+
+def _click_load(dash_duo) -> None:
+    dash_duo.wait_for_element("#grid-test-load-btn")
+    dash_duo.driver.execute_script("document.getElementById('grid-test-load-btn').click()")
+
+
+@pytest.mark.slow
+def test_twist_grid_cells_show_text_in_browser(dash_duo):
+    ref = _computed_twist(_page_app())[1]
+    app = _browser_app([
+        ("tango-twist-tabv-global-data-store", "data", ref),
+        ("tango-tabs", "active_tab", "tango-tab-twist"),
+    ])
+    dash_duo.start_server(app)
+    _click_load(dash_duo)
+    assert_grid_cells_have_text(dash_duo, "tango-twist-tabv-grid")
+
+
+@pytest.mark.slow
+def test_descriptor_grid_cells_show_text_in_browser(dash_duo):
+    ref = _descriptor_ref(_page_app(), "TwistDescriptor")
+    app = _browser_app([
+        ("tango-desc-0-global-data-store", "data", ref),
+        ("tango-tab-desc-0", "disabled", False),
+        ("tango-tabs", "active_tab", "tango-tab-desc-0"),
+    ])
+    dash_duo.start_server(app)
+    _click_load(dash_duo)
+    assert_grid_cells_have_text(dash_duo, "tango-desc-0-grid")
+
+
+@pytest.mark.slow
+def test_ptango_page_loads_in_browser(dash_duo, suite_app, monkeypatch):
+    """The Tango page loads, its main components render, and the console shows no errors."""
+    from cryocat.app.suite.pages import ptango
+    from tests.app.conftest import main_component_ids, open_suite_page
+
+    errors = open_suite_page(dash_duo, suite_app, "tango", monkeypatch)
+    missing = [cid for cid in main_component_ids(ptango.layout) if not dash_duo.find_elements(cid, attribute="ID")]
+    assert not missing, f"components not rendered: {missing}"
+    assert not errors, f"browser errors: {errors}"

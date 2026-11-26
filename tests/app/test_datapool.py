@@ -436,3 +436,55 @@ class TestFormatParameter:
         state2, data_id = insert_entry(state, d, label="t2d", reader="r", source_path="/p")
         result = get_payload(data_id, state2)
         assert result == d
+
+
+# ── Cross-pool consistency ────────────────────────────────────────────────────
+# Motl-derived tables (NN, tango) are stored twice: once in the table pool
+# (``table_id``) and once in the data pool (``data_id``), and the page keeps one
+# ref carrying both ids.  The two copies must stay in step.
+
+def _derived_table(n: int = 4) -> tuple[DataPoolState, dict, pd.DataFrame]:
+    """Register a table the way the NN page does after a compute."""
+    links = {"query": ["motl_1"], "neighbour": ["motl_1"]}
+    df = pd.DataFrame({"qp_subtomo_id": list(range(1, n + 1)), "nn_dist": [1.0] * n})
+    ref = datapool.insert(df, label="nn_1", id_column="qp_subtomo_id", motl_links=links)
+    state, dp_id = insert_entry(
+        _empty_state(), df, label="nn_1", reader="nn", source_path="",
+        motl_links=links, entry_kind="nn",
+    )
+    return state, {**ref, "data_id": dp_id}, df
+
+
+class TestCrossPoolConsistency:
+    def test_add_keeps_registry_and_payloads_aligned(self):
+        state = _empty_state()
+        state, a = insert_entry(state, pd.DataFrame({"a": [1]}), label="a", reader="r", source_path="")
+        state, b = insert_entry(state, pd.DataFrame({"a": [1]}), label="b", reader="nn", source_path="",
+                                entry_kind="nn")
+        state, c = insert_entry(state, np.zeros((2, 2)), label="c", reader="r", source_path="")
+        assert len({a, b, c}) == 3
+        assert set(state.registry) == set(datapool._payloads)
+        assert state.next_id == 3
+        restored = DataPoolState.from_stores(*state.to_stores())
+        assert restored == state
+
+    def test_derived_table_agrees_across_table_and_data_pool(self):
+        state, ref, df = _derived_table()
+        entry = state.registry[ref["data_id"]]
+        pd.testing.assert_frame_equal(datapool.resolve_df(ref), get_payload(ref["data_id"]))
+        assert ref["n_rows"] == entry["n_rows"] == len(df)
+        assert ref["motl_links"] == entry["motl_links"]
+        assert ref["id_column"] == "qp_subtomo_id"
+
+    def test_replace_df_on_derived_table_keeps_data_pool_in_step(self):
+        # Cluster-column commits on the NN and tango pages use replace_df.
+        state, ref, df = _derived_table()
+        new_ref = datapool.replace_df(ref, df.iloc[:2])
+        assert len(datapool.resolve_df(new_ref)) == 2
+        assert len(get_payload(new_ref["data_id"])) == 2
+
+    def test_remove_derived_entry_drops_table_pool_copy(self):
+        state, ref, _ = _derived_table()
+        state = remove_entry(state, ref["data_id"])
+        assert ref["data_id"] not in state.registry
+        assert datapool.resolve_df(ref) is None, "table pool still holds the removed entry"

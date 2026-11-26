@@ -9,6 +9,8 @@ Covers:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import pytest
@@ -408,3 +410,234 @@ class TestReceiverResolution:
         run_operation_to_pool(_load, {"n": 5}, empty_state)
         ev = _call_events()[-1]
         assert ev.get("receiver") is None
+
+
+# ===========================================================================
+# Provenance per operation kind: record content and replay
+# ===========================================================================
+#
+# Each test runs one operation the way the page commit callback runs it,
+# reads the call events back from the session stream, renders them with the
+# script projection and executes that script in a fresh namespace.
+
+_TEST_DATA = Path(__file__).resolve().parents[1] / "test_data"
+
+
+def _replay_script() -> tuple[str, dict, object]:
+    """Render the session stream to a script and execute it.
+
+    Returns ``(script, namespace, last_value)`` where *last_value* is the value
+    of the final statement when it is a bare expression (a call whose result
+    the record does not bind to a name), else ``None``.
+    """
+    import ast
+    from cryocat.app.record.script import render_script
+
+    script = render_script(session.events())
+    tree = ast.parse(script)
+    ns: dict = {}
+    last_value = None
+    body = tree.body
+    if body and isinstance(body[-1], ast.Expr):
+        exec(compile(ast.Module(body=body[:-1], type_ignores=[]), "<replay>", "exec"), ns)
+        last_value = eval(compile(ast.Expression(body=body[-1].value), "<replay>", "eval"), ns)
+    else:
+        exec(compile(tree, "<replay>", "exec"), ns)
+    return script, ns, last_value
+
+
+def _load_motl_to_pool(path: Path, state):
+    """Load a motl file into the pool the way the motl sidebar load callback does."""
+    from cryocat.core.cryomotl import Motl
+    from cryocat.app.apputils import record_load_to_pool
+
+    motl_data = Motl.load(str(path), "emmotl").df.to_dict("records")
+    return record_load_to_pool(motl_data, "emmotl", str(path), None, state, label=path.name)
+
+
+class TestMotlOperationProvenance:
+    """In-place motl operation from the motl sidebar: load, then apply on the active slot."""
+
+    def _run(self, empty_state):
+        from cryocat.core.cryomotl import Motl
+        from cryocat.app.logger import invoke_operation
+        from cryocat.app.pool import get_rows, replace_motl_rows
+
+        state, mid, _ = _load_motl_to_pool(_TEST_DATA / "au_1.em", empty_state)
+        motl = Motl(get_rows(mid))
+        motl._pool_motl_id = mid
+        if prov.var_for(mid) is None:
+            prov.record(mid, session.last_seq())
+        result = invoke_operation(getattr(motl, "scale_coordinates"), {"scaling_factor": 2.0})
+        result_df = motl.df if result is None else result.df
+        state = replace_motl_rows(state, mid, result_df)
+        return state, mid
+
+    def test_load_record_names_function_inputs_and_output(self, empty_state):
+        path = _TEST_DATA / "au_1.em"
+        state, mid = self._run(empty_state)
+        load_ev = _call_events()[0]
+        assert load_ev["status"] == "ok"
+        assert load_ev["fn"] == "cryocat.core.cryomotl.Motl.load"
+        assert load_ev["kwargs_src"] == {"input_motl": repr(str(path)), "motl_type": repr("emmotl")}
+        assert load_ev["assign_to"] == prov.bind(mid)
+        assert load_ev["result"]["pool_id"] == mid
+        assert load_ev["result"]["n_rows"] == state.registry[mid]["n_rows"]
+        assert prov.producer(mid) == load_ev["seq"]
+
+    def test_operation_record_names_function_receiver_and_arguments(self, empty_state):
+        _, mid = self._run(empty_state)
+        op_ev = _call_events()[-1]
+        assert op_ev["status"] == "ok"
+        assert op_ev["fn"] == "cryocat.core.cryomotl.Motl.scale_coordinates"
+        assert op_ev["receiver"] == prov.bind(mid)
+        assert op_ev["kwargs_src"] == {"scaling_factor": "2.0"}
+
+    def test_replay_reproduces_pool_rows(self, empty_state):
+        from cryocat.app.pool import get_rows
+
+        _, mid = self._run(empty_state)
+        _, ns, _ = _replay_script()
+        replayed = ns[prov.bind(mid)]
+        pd.testing.assert_frame_equal(
+            replayed.df.reset_index(drop=True),
+            get_rows(mid).reset_index(drop=True),
+            check_dtype=False,
+        )
+
+
+class TestMapOperationProvenance:
+    """Create-mask commit on the volume page: build a sphere layer, write it as a map."""
+
+    _SHAPE = (16, 16, 16)
+
+    def _run(self, out_path: Path) -> None:
+        from cryocat.core import cryomap, cryomask
+        from cryocat.app.apputils import run_operation
+
+        mask = cryomask.spherical_mask(
+            mask_size=self._SHAPE, radius=5, gaussian=0.0, gaussian_outwards=True,
+        )
+        run_operation(cryomap.write, {
+            "data_to_write": mask.astype(np.float32),
+            "output_path": str(out_path),
+            "pixel_size": 1.0,
+        })
+
+    def test_record_names_function_arguments_and_output(self, tmp_path):
+        out = tmp_path / "mask.em"
+        self._run(out)
+        ev = _call_events()[-1]
+        assert ev["status"] == "ok"
+        assert ev["fn"] == "cryocat.core.cryomap.write"
+        assert ev["kwargs_src"]["output_path"] == repr(str(out))
+        assert ev["kwargs_src"]["pixel_size"] == "1.0"
+
+    def test_record_names_the_map_input(self, tmp_path):
+        self._run(tmp_path / "mask.em")
+        ev = _call_events()[-1]
+        src = ev["kwargs_src"]["data_to_write"]
+        assert src is not None and not src.startswith("..."), (
+            f"data_to_write is recorded as {src!r}, not as a replayable expression"
+        )
+
+    def test_replay_reproduces_written_map(self, tmp_path):
+        from cryocat.core import cryomap
+
+        out = tmp_path / "mask.em"
+        self._run(out)
+        gui_map = np.array(cryomap.read(str(out)))
+        out.unlink()
+        _replay_script()
+        assert out.exists()
+        np.testing.assert_array_equal(np.array(cryomap.read(str(out))), gui_map)
+
+
+def _ellipsoid_motl_file(path: Path) -> None:
+    """Write a small motl with particles on one ellipsoid (one object, one tomogram)."""
+    from cryocat.core.cryomotl import Motl
+
+    rng = np.random.default_rng(0)
+    n = 60
+    u = rng.uniform(0, np.pi, n)
+    v = rng.uniform(0, 2 * np.pi, n)
+    data = {c: np.zeros(n) for c in Motl.motl_columns}
+    data["subtomo_id"] = np.arange(1, n + 1, dtype=float)
+    data["tomo_id"] = np.ones(n)
+    data["object_id"] = np.ones(n)
+    data["class"] = np.ones(n)
+    data["x"] = 50 + 30.0 * np.sin(u) * np.cos(v)
+    data["y"] = 50 + 20.0 * np.sin(u) * np.sin(v)
+    data["z"] = 50 + 15.0 * np.cos(u)
+    Motl(pd.DataFrame(data)).write_out(str(path))
+
+
+class TestAssemblyOperationProvenance:
+    """Parametric assembly on the assembly page: fit from a pool motl, then distance to surface."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_fit(self):
+        from cryocat.app.components import parametric_registry as pr
+
+        yield
+        pr.registry.clear()
+
+    def _run(self, empty_state, tmp_path: Path):
+        from cryocat.analysis.assembly import ParametricAssembly
+        from cryocat.core.cryomotl import Motl
+        from cryocat.app.apputils import run_operation
+        from cryocat.app.logger import invoke_operation
+        from cryocat.app.pool import get_rows
+        from cryocat.app.components import parametric_registry as pr
+        from cryocat.app.components import surface_registry as sr
+
+        path = tmp_path / "ellipsoid.em"
+        _ellipsoid_motl_file(path)
+        _, mid, _ = _load_motl_to_pool(path, empty_state)
+
+        # Loader: the pool motl is injected under the loader's motl kwarg.
+        motl = Motl(get_rows(mid))
+        motl._pool_motl_id = mid
+        load_var = "_" + prov.bind(sr.registry.peek_next_key())
+        fit = invoke_operation(ParametricAssembly.from_motl, {"input_motl": motl}, assign_to=load_var)
+        pr.registry.add(fit)
+        pr.make_handle(fit, source=f"motl:{mid}")
+
+        # Operation on the active fit with an input motl picked from the pool.
+        in_motl = Motl(get_rows(mid))
+        in_motl._pool_motl_id = mid
+        psurf = pr.registry.get(pr.registry.keys()[0])
+        result = run_operation(
+            getattr(psurf, "compute_point_surface_distance"), {"input_motl": in_motl},
+        )
+        return mid, load_var, result
+
+    def test_fit_record_names_function_input_and_output(self, empty_state, tmp_path):
+        mid, load_var, _ = self._run(empty_state, tmp_path)
+        fit_ev = _call_events()[-2]
+        assert fit_ev["status"] == "ok"
+        assert fit_ev["fn"] == "cryocat.analysis.assembly.ParametricAssembly.from_motl"
+        assert fit_ev["kwargs_src"] == {"input_motl": prov.bind(mid)}
+        assert fit_ev["assign_to"] == load_var
+        assert fit_ev["result"]["type"] == "ParametricAssembly"
+
+    def test_operation_record_names_function_receiver_input_and_output(self, empty_state, tmp_path):
+        mid, load_var, result = self._run(empty_state, tmp_path)
+        op_ev = _call_events()[-1]
+        assert op_ev["status"] == "ok"
+        assert op_ev["fn"] == (
+            "cryocat.analysis.assembly.ParametricAssembly.compute_point_surface_distance"
+        )
+        assert op_ev["receiver"] == load_var
+        assert op_ev["kwargs_src"] == {"input_motl": prov.bind(mid)}
+        assert op_ev["result"]["n_rows"] == len(result.df)
+
+    def test_replay_reproduces_operation_result(self, empty_state, tmp_path):
+        _, _, result = self._run(empty_state, tmp_path)
+        _, _, replayed = _replay_script()
+        assert replayed is not None, "the operation result is not bound in the replayed script"
+        pd.testing.assert_frame_equal(
+            replayed.df.reset_index(drop=True),
+            result.df.reset_index(drop=True),
+            check_dtype=False,
+        )

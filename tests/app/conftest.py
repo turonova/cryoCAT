@@ -150,3 +150,62 @@ def suite_app():
     import cryocat.app.suite.app as m
 
     return m.app
+
+
+# ---------------------------------------------------------------------------
+# Browser helper: open one suite page and collect what went wrong
+# ---------------------------------------------------------------------------
+
+# Firefox's webdriver gives no access to the browser console, so the page records
+# console.error calls and uncaught errors itself before Dash loads.
+_CONSOLE_CAPTURE = (
+    "<script>window.__consoleErrors=[];"
+    "(function(){var e=console.error;console.error=function(){"
+    "window.__consoleErrors.push(Array.from(arguments).map(String).join(' '));"
+    "e.apply(console,arguments);};"
+    "window.addEventListener('error',function(ev){window.__consoleErrors.push(String(ev.message));});"
+    "})();</script>"
+)
+
+# Components whose children are not in the DOM until opened or selected.
+_NOT_RENDERED = {"Modal", "Offcanvas", "Tabs", "Tooltip", "Popover", "Store", "Download", "Interval", "Location"}
+
+
+def main_component_ids(layout) -> list[str]:
+    """String ids of a page's components that are rendered when the page shows."""
+    found: list[str] = []
+
+    def _walk(node):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, (list, tuple)):
+            for child in node:
+                _walk(child)
+            return
+        if type(node).__name__ in _NOT_RENDERED:
+            return
+        if isinstance(getattr(node, "id", None), str):
+            found.append(node.id)
+        _walk(getattr(node, "children", None))
+
+    _walk(layout)
+    return found
+
+
+def open_suite_page(dash_duo, app, tool_id: str, monkeypatch) -> list[str]:
+    """Serve the suite app, open the page of *tool_id*, wait until it shows.
+
+    Returns the console errors the page recorded and the Dash dev-tools error count text.
+    """
+    from cryocat.app import ids
+    from cryocat.app.suite.tools import TOOLS
+
+    path = next(t["path"] for t in TOOLS if t["id"] == tool_id)
+    monkeypatch.setattr(app, "index_string", app.index_string.replace("<head>", "<head>" + _CONSOLE_CAPTURE, 1))
+    dash_duo.start_server(app, debug=True, use_reloader=False, dev_tools_hot_reload=False)
+    dash_duo.wait_for_page(url=f"{dash_duo.server_url}{path}")
+    dash_duo.wait_for_style_to_equal(f"#{ids.page_wrap_id(tool_id)}", "display", "block")
+    dash_duo.wait_for_style_to_equal("#app-spinner", "display", "none")
+    errors = list(dash_duo.driver.execute_script("return window.__consoleErrors || []"))
+    errors += [f"Dash error count: {e.text}" for e in dash_duo.find_elements(".test-devtools-error-count")]
+    return errors

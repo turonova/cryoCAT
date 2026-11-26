@@ -14502,8 +14502,7 @@ class PleomorphicAssembly(ContactGraph):
         dict
             Dictionary containing:
             - 'mask': boolean array indicating points within threshold
-            - 'distances': unsigned distances for all points, scaled by
-              :attr:`pixel_size`
+            - 'distances': unsigned distances for all points, scaled by :attr:`pixel_size`
             - 'indices': indices of points within threshold
             - 'within_points': coordinates of points within threshold
             - 'n_within': number of points within threshold
@@ -14826,13 +14825,12 @@ class PleomorphicAssembly(ContactGraph):
             Distances and the distance statistics are scaled by :attr:`pixel_size`;
             ``closest_points`` stay in voxels.
             If return_details=True, returns dictionary with:
-                'distances': np.ndarray (N,) - distance for each source point
-                'closest_points': np.ndarray (N, 3) - coordinates of closest/hit points
-                'closest_indices': np.ndarray (N,) - indices in target point cloud (-1 if no hit)
-                'hit_mask': np.ndarray (N,) - boolean mask of successful matches
-                'closest_normals': np.ndarray (N, 3) - normals at closest points (if available)
-                'stats': dict with min, max, mean, median, std distance statistics
-
+            'distances': np.ndarray (N,) - distance for each source point
+            'closest_points': np.ndarray (N, 3) - coordinates of closest/hit points
+            'closest_indices': np.ndarray (N,) - indices in target point cloud (-1 if no hit)
+            'hit_mask': np.ndarray (N,) - boolean mask of successful matches
+            'closest_normals': np.ndarray (N, 3) - normals at closest points (if available)
+            'stats': dict with min, max, mean, median, std distance statistics
             If return_stats=False, returns only distances array (N,)
         """
         target_surface = self._unwrap_surface(target)

@@ -471,3 +471,15 @@ def test_round_trip_form_state_to_python_script():
     assert "smooth_sigma_intensity_profiles=0.8" in py
     assert "minima_search_nm=(2.5, 4.0)" in py
     assert "analyzer=analyzer" in py
+
+
+@pytest.mark.slow
+def test_pmemthick_page_loads_in_browser(dash_duo, suite_app, monkeypatch):
+    """The Membrane thickness page loads, its main components render, and the console shows no errors."""
+    from cryocat.app.suite.pages import pmemthick
+    from tests.app.conftest import main_component_ids, open_suite_page
+
+    errors = open_suite_page(dash_duo, suite_app, "memthick", monkeypatch)
+    missing = [cid for cid in main_component_ids(pmemthick.layout) if not dash_duo.find_elements(cid, attribute="ID")]
+    assert not missing, f"components not rendered: {missing}"
+    assert not errors, f"browser errors: {errors}"

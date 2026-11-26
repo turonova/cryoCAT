@@ -105,3 +105,65 @@ def assert_runs(source: str, namespace: dict | None = None) -> dict:
     except Exception as exc:
         raise AssertionError(f"Script raised {type(exc).__name__}: {exc}\n\n{source}") from exc
     return ns
+
+
+# ── AG Grid content ───────────────────────────────────────────────────────────
+
+def _is_blank(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and value != value:  # NaN
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
+def assert_grid_shows(col_defs: list[dict], rows: list[dict], source) -> None:
+    """Assert an AG Grid given *col_defs* and *rows* displays the *source* data.
+
+    *rows* are the records the grid receives (first block, source order).
+    *source* is the DataFrame (or list of records) the callback read.
+
+    Checks:
+    - columnDefs and rows are not empty
+    - every ``field`` in columnDefs is a key in every row
+    - every source column that has a value in the served rows is a columnDefs
+      field, and at least one row carries a non-empty value for it
+    """
+    import pandas as pd
+
+    src = source if isinstance(source, pd.DataFrame) else pd.DataFrame(source)
+    assert col_defs, "columnDefs is empty — the grid shows no columns"
+    assert rows, "rowData is empty — the grid shows no rows"
+    fields = [c["field"] for c in col_defs if "field" in c]
+    for i, row in enumerate(rows):
+        missing = [f for f in fields if f not in row]
+        assert not missing, (
+            f"row {i} lacks keys for columnDefs fields {missing} — those cells render blank "
+            f"(row keys: {sorted(row)})"
+        )
+    src = src.iloc[: len(rows)]
+    for col in src.columns:
+        if all(_is_blank(v) for v in src[col].tolist()):
+            continue
+        assert col in fields, f"source column {col!r} has values but no columnDefs field shows it"
+        assert any(not _is_blank(row.get(col)) for row in rows), (
+            f"column {col!r} has values in the source but every grid row is blank for it"
+        )
+
+
+def assert_grid_cells_have_text(dash_duo, grid_id: str, *, timeout: float = 15) -> None:
+    """Browser oracle: the grid *grid_id* renders cells, and every rendered
+    column has at least one cell with text."""
+    from dash.testing.wait import until
+
+    selector = f"#{grid_id} .ag-cell"
+    until(
+        lambda: any(c.text.strip() for c in dash_duo.find_elements(selector)),
+        timeout,
+        msg=f"no .ag-cell with text appeared in #{grid_id}",
+    )
+    by_col: dict[str, list[str]] = {}
+    for cell in dash_duo.find_elements(selector):
+        by_col.setdefault(cell.get_attribute("col-id"), []).append(cell.text.strip())
+    blank = sorted(col for col, texts in by_col.items() if not any(texts))
+    assert not blank, f"#{grid_id}: rendered columns with no text in any cell: {blank}"

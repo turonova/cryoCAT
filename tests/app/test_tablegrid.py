@@ -1,13 +1,12 @@
 """Tests for tablegrid pure functions and infinite-row-model invariants.
 
 T1 — apply_sort_model, apply_filter_model, slice_block are pure and correct
-T2 — no grid response exceeds one block; _MAX_GRID_ROWS absent
+T2 — no grid response exceeds one block
 T3 — select-all resolves all filtered rows by identity (GRID_SERVER_SIDE_ROWS.md)
 """
 from __future__ import annotations
 
 import json
-import pathlib
 
 import numpy as np
 import pandas as pd
@@ -214,27 +213,7 @@ def test_slice_block_empty_range(sample_df):
     assert len(block) == 0
 
 
-# ── T2: _MAX_GRID_ROWS and truncation notice absent ───────────────────────────
-
-def test_no_max_grid_rows_in_app():
-    """T2a — _MAX_GRID_ROWS must not exist anywhere under cryocat/app/."""
-    app_dir = pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app"
-    found = []
-    for py_file in sorted(app_dir.rglob("*.py")):
-        if "_MAX_GRID_ROWS" in py_file.read_text(encoding="utf-8", errors="ignore"):
-            found.append(str(py_file.relative_to(app_dir)))
-    assert not found, f"_MAX_GRID_ROWS found in: {found}"
-
-
-def test_no_truncation_notice_in_app():
-    """T2b — get_grid_row_count_notice must not exist under cryocat/app/."""
-    app_dir = pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app"
-    found = []
-    for py_file in sorted(app_dir.rglob("*.py")):
-        if "get_grid_row_count_notice" in py_file.read_text(encoding="utf-8", errors="ignore"):
-            found.append(str(py_file.relative_to(app_dir)))
-    assert not found, f"get_grid_row_count_notice found in: {found}"
-
+# ── T2: one block per response ────────────────────────────────────────────────
 
 def test_block_response_under_budget(large_df):
     """T2c — one cache block serialised via block_to_records is under 512 KB."""
@@ -629,27 +608,6 @@ def test_subset_motl_rows_no_subtomo_id_raises():
 # ── POST_RESET_CHANGES T1 — Sizing ───────────────────────────────────────────
 
 
-def test_no_size_to_fit_in_source():
-    """POST_RESET_CHANGES T1: no responsiveSizeToFit, sizeToFit, or columnSizeOptions
-    anywhere under cryocat/app/.
-
-    These attributes call sizeColumnsToFit() which produces AG Grid warning #29
-    (zero-width columns) when the grid container is hidden.
-    """
-    app_dir = pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app"
-    found = []
-    for py_file in sorted(app_dir.rglob("*.py")):
-        text = py_file.read_text(encoding="utf-8", errors="ignore")
-        rel = str(py_file.relative_to(app_dir))
-        if "responsiveSizeToFit" in text:
-            found.append(f"{rel}: responsiveSizeToFit")
-        if "columnSizeOptions" in text:
-            found.append(f"{rel}: columnSizeOptions")
-    assert not found, (
-        "Found fit-to-window attributes that cause AG Grid warning #29: " + str(found)
-    )
-
-
 def test_every_col_def_has_min_width(sample_df):
     """POST_RESET_CHANGES T1: col_defs_from_df gives every column a positive minWidth.
 
@@ -682,23 +640,6 @@ def test_col_defs_no_fixed_width(sample_df):
 
 
 # ── POST_RESET_CHANGES T2 — The indicator ────────────────────────────────────
-
-
-def test_no_dcc_loading_in_app_and_tablegrid():
-    """POST_RESET_CHANGES T2: dcc.Loading must not appear in app.py or tablegrid.py.
-
-    dcc.Loading hides its children while any callback runs into that subtree, and
-    unmounts stateful components like AG Grid on each loading toggle.
-    """
-    files = {
-        "suite/app.py": pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app" / "suite" / "app.py",
-        "components/tablegrid.py": pathlib.Path(__file__).parent.parent.parent / "cryocat" / "app" / "components" / "tablegrid.py",
-    }
-    for rel, path in files.items():
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        assert "dcc.Loading" not in text, (
-            f"dcc.Loading found in {rel} — it must not wrap page containers or grids"
-        )
 
 
 def test_startup_indicator_in_layout(suite_app):

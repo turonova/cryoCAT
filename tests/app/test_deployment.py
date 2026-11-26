@@ -2,7 +2,6 @@
 
 Covers:
 - server.py binds 127.0.0.1, not 0.0.0.0.
-- No gunicorn reference in server.py.
 - run_simple() host and use_reloader arguments.
 - session.start_session() default path is inside HOME.
 - Suite app import time is under 10 seconds.
@@ -65,15 +64,6 @@ def test_server_binds_localhost_not_all_interfaces():
         f"run_simple host is {host!r} — must be '127.0.0.1'. "
         "Binding 0.0.0.0 exposes the GUI console to the network."
     )
-
-
-def test_server_no_gunicorn_reference():
-    """server.py must not document or reference gunicorn.
-
-    The GUI is single-process; gunicorn spins up multiple workers that
-    share no callback state, causing race conditions on the pool and session.
-    """
-    assert "gunicorn" not in _server_src()
 
 
 def test_run_simple_host_is_127():

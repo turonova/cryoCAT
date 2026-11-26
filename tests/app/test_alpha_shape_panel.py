@@ -208,3 +208,15 @@ class TestSave:
 
         assert out in status or "Saved" in status
         assert f"{alpha:.6g}" in status or str(alpha) in status
+
+
+@pytest.mark.slow
+def test_putilities_page_loads_in_browser(dash_duo, suite_app, monkeypatch):
+    """The Utilities page loads, its main components render, and the console shows no errors."""
+    from cryocat.app.suite.pages import putilities
+    from tests.app.conftest import main_component_ids, open_suite_page
+
+    errors = open_suite_page(dash_duo, suite_app, "utilities", monkeypatch)
+    missing = [cid for cid in main_component_ids(putilities.layout) if not dash_duo.find_elements(cid, attribute="ID")]
+    assert not missing, f"components not rendered: {missing}"
+    assert not errors, f"browser errors: {errors}"

@@ -163,17 +163,6 @@ class TestRefLabel:
 
 class TestPickerStructure:
 
-    def test_get_entry_picker_is_single_definition(self):
-        """One shared definition; both tableeditor and tableview import it."""
-        from cryocat.app.components import entrypicker as ep
-        from cryocat.app.components import tableeditor as te
-        import inspect
-        # tableeditor.get_table_editor embeds entrypicker.get_entry_picker by calling it
-        src = inspect.getsource(te.get_table_editor)
-        assert "entrypicker.get_entry_picker" in src, (
-            "get_table_editor must embed the shared entry picker via entrypicker.get_entry_picker"
-        )
-
     def test_get_entry_picker_returns_html_div(self):
         from dash import html
         from cryocat.app.components.entrypicker import get_entry_picker

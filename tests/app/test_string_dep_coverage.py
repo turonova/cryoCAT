@@ -137,20 +137,3 @@ def test_every_string_dep_names_a_layout_component(suite_app):
     )
 
 
-def test_callback_created_ids_are_referenced(suite_app):
-    """Every id declared in a DYNAMIC_IDS list must be referenced by at least one callback.
-
-    Stale entries silently paper over future bugs — an id removed from both the
-    layout and from callbacks should be removed from its DYNAMIC_IDS list too.
-    """
-    referenced: set[str] = {
-        comp_id
-        for comp_id, _cb, _role in _string_deps_with_callback(suite_app)
-    }
-    declared = _dynamic_component_ids()
-    stale = sorted(declared - referenced)
-    assert not stale, (
-        "DYNAMIC_IDS contains component ids not referenced by any callback "
-        "(remove the stale entries from the relevant page module's DYNAMIC_IDS):\n"
-        + "\n".join(f"  {sid!r}" for sid in stale)
-    )

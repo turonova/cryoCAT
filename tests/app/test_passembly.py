@@ -499,3 +499,15 @@ def test_static_ops_do_not_need_active_fit():
 def test_intersection_op_is_dataframe_kind():
     """compute_intersection's result is rendered as a table, not pushed to pool."""
     assert ps.OPERATIONS["param_intersection"]["result_kind"] == "dataframe"
+
+
+@pytest.mark.slow
+def test_passembly_page_loads_in_browser(dash_duo, suite_app, monkeypatch):
+    """The Surfaces page loads, its main components render, and the console shows no errors."""
+    from cryocat.app.suite.pages import passembly
+    from tests.app.conftest import main_component_ids, open_suite_page
+
+    errors = open_suite_page(dash_duo, suite_app, "surfaces", monkeypatch)
+    missing = [cid for cid in main_component_ids(passembly.layout) if not dash_duo.find_elements(cid, attribute="ID")]
+    assert not missing, f"components not rendered: {missing}"
+    assert not errors, f"browser errors: {errors}"
