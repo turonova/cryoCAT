@@ -14,6 +14,7 @@
    Masks basics <masks_basics>
    Symmetries basics <symmetries_basics>
    Wedge list basics <wedgelist_basics>
+   Inputs preparation and output evaluation for template matching <input_output_tm.ipynb>
 
 ==========
 User guide
